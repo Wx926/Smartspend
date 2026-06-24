@@ -3,95 +3,422 @@ import 'package:provider/provider.dart';
 import '../../../features/auth/providers/auth_provider.dart';
 import '../../../shared/theme/app_colors.dart';
 
-class ProfileScreen extends StatelessWidget {
+class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
+
+  @override
+  State<ProfileScreen> createState() => _ProfileScreenState();
+}
+
+class _ProfileScreenState extends State<ProfileScreen> {
+  bool _locationAlerts = true;
+  bool _pushNotifications = true;
 
   @override
   Widget build(BuildContext context) {
     final auth = context.watch<AuthProvider>();
+    final name = auth.isLoggedIn
+        ? (auth.displayName.isEmpty ? 'User' : auth.displayName)
+        : 'Guest User';
+    final initials = name
+        .trim()
+        .split(' ')
+        .where((e) => e.isNotEmpty)
+        .map((e) => e[0])
+        .take(2)
+        .join()
+        .toUpperCase();
+    final isGoogle =
+        auth.currentUser?.appMetadata['provider'] == 'google';
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Account')),
+      backgroundColor: AppColors.background,
       body: ListView(
-        padding: const EdgeInsets.all(24),
+        padding: EdgeInsets.zero,
         children: [
-          const SizedBox(height: 16),
-          CircleAvatar(
-            radius: 44,
-            backgroundColor: AppColors.primary.withValues(alpha: 0.12),
-            child: Icon(
-              auth.isLoggedIn ? Icons.person : Icons.person_outline,
-              size: 48,
-              color: AppColors.primary,
-            ),
-          ),
-          const SizedBox(height: 16),
-          Text(
-            auth.isLoggedIn
-                ? (auth.displayName.isEmpty ? auth.email : auth.displayName)
-                : 'Guest User',
-            textAlign: TextAlign.center,
-            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-          ),
-          if (!auth.isLoggedIn)
-            const Padding(
-              padding: EdgeInsets.only(top: 6),
-              child: Text(
-                'Sign in to sync data across devices\nand access advanced features.',
-                textAlign: TextAlign.center,
-                style: TextStyle(color: AppColors.textSecondary, fontSize: 13),
+          // ── Green header ──────────────────────────────────────────
+          Container(
+            color: AppColors.primaryDark,
+            child: SafeArea(
+              bottom: false,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(24, 24, 24, 32),
+                child: Column(
+                  children: [
+                    Container(
+                      width: 88,
+                      height: 88,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        border: Border.all(
+                            color: const Color(0xFFD4AF37), width: 3),
+                        color: AppColors.primary,
+                      ),
+                      child: Center(
+                        child: Text(
+                          initials.isEmpty ? '?' : initials,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 32,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      name,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 20,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    if (auth.isLoggedIn) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        auth.email,
+                        style: const TextStyle(
+                            color: Colors.white70, fontSize: 13),
+                      ),
+                      if (isGoogle) ...[
+                        const SizedBox(height: 10),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 12, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withValues(alpha: 0.15),
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          child: const Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text('G',
+                                  style: TextStyle(
+                                      color: Colors.white,
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 14)),
+                              SizedBox(width: 6),
+                              Text('Signed in with Google',
+                                  style: TextStyle(
+                                      color: Colors.white, fontSize: 12)),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ],
+                  ],
+                ),
               ),
             ),
-          if (auth.isLoggedIn)
-            Padding(
-              padding: const EdgeInsets.only(top: 4),
-              child: Text(
-                auth.email,
-                textAlign: TextAlign.center,
-                style: const TextStyle(
-                    color: AppColors.textSecondary, fontSize: 13),
-              ),
+          ),
+
+          const SizedBox(height: 20),
+
+          // ── Budget & Goals ────────────────────────────────────────
+          _sectionLabel('BUDGET & GOALS'),
+          _card([
+            _tile(
+              icon: Icons.list_alt_outlined,
+              iconColor: const Color(0xFFFF8C42),
+              iconBg: const Color(0xFFFFF0E6),
+              title: 'Manage categories',
+              subtitle: 'Food, Shopping, Transport, Electronics',
+              onTap: () => Navigator.pushNamed(context, '/manage-categories'),
             ),
-          const SizedBox(height: 32),
+            _divider(),
+            _tile(
+              icon: Icons.account_balance_wallet_outlined,
+              iconColor: const Color(0xFF27AE60),
+              iconBg: const Color(0xFFE8F8EF),
+              title: 'Set monthly budgets',
+              subtitle: 'Adjust limits for each category',
+              onTap: () => Navigator.pushNamed(context, '/budget'),
+            ),
+            _divider(),
+            _tile(
+              icon: Icons.track_changes_outlined,
+              iconColor: const Color(0xFFE74C3C),
+              iconBg: const Color(0xFFFDECEA),
+              title: 'Savings goals',
+              subtitle: 'Tap to manage your goals',
+              onTap: () => Navigator.pushNamed(context, '/savings-goals'),
+            ),
+            _divider(),
+            _tile(
+              icon: Icons.verified_user_outlined,
+              iconColor: const Color(0xFF3B82F6),
+              iconBg: const Color(0xFFEFF6FF),
+              title: 'Warranty records',
+              subtitle: '4 items · 1 expiring soon',
+              onTap: () {},
+            ),
+          ]),
+
+          const SizedBox(height: 20),
+
+          // ── Location & Alerts ─────────────────────────────────────
+          _sectionLabel('LOCATION & ALERTS'),
+          _card([
+            _toggleTile(
+              icon: Icons.location_on_outlined,
+              iconColor: const Color(0xFFE74C3C),
+              iconBg: const Color(0xFFFDECEA),
+              title: 'Location alerts',
+              subtitle: 'Detect nearby spending areas',
+              value: _locationAlerts,
+              onChanged: (v) => setState(() => _locationAlerts = v),
+            ),
+            _divider(),
+            _toggleTile(
+              icon: Icons.notifications_outlined,
+              iconColor: const Color(0xFFF59E0B),
+              iconBg: const Color(0xFFFFFBEB),
+              title: 'Push notifications',
+              subtitle: 'Budget warnings and AI insights',
+              value: _pushNotifications,
+              onChanged: (v) => setState(() => _pushNotifications = v),
+            ),
+            _divider(),
+            _tile(
+              icon: Icons.timer_outlined,
+              iconColor: const Color(0xFF8B5CF6),
+              iconBg: const Color(0xFFF5F3FF),
+              title: 'Alert cooldown',
+              subtitle: '2 hours between alerts per venue',
+              onTap: () {},
+            ),
+          ]),
+
+          const SizedBox(height: 20),
+
+          // ── Account ───────────────────────────────────────────────
+          _sectionLabel('ACCOUNT'),
+          _card([
+            _tile(
+              icon: Icons.edit_outlined,
+              iconColor: const Color(0xFF27AE60),
+              iconBg: const Color(0xFFE8F8EF),
+              title: 'Edit username',
+              subtitle: name,
+              onTap: () => _showEditNameDialog(context, name),
+            ),
+            _divider(),
+            _tile(
+              icon: Icons.lock_outlined,
+              iconColor: const Color(0xFF8B5CF6),
+              iconBg: const Color(0xFFF5F3FF),
+              title: 'Data & privacy',
+              subtitle: 'How we handle your location data',
+              onTap: () {},
+            ),
+            if (auth.isLoggedIn) ...[
+              _divider(),
+              _tile(
+                icon: Icons.logout,
+                iconColor: const Color(0xFFE74C3C),
+                iconBg: const Color(0xFFFDECEA),
+                title: 'Sign out',
+                titleColor: const Color(0xFFE74C3C),
+                subtitle: auth.email,
+                onTap: () async {
+                  await context.read<AuthProvider>().signOut();
+                },
+              ),
+            ],
+          ]),
+
+          // ── Guest Mode ────────────────────────────────────────────
           if (!auth.isLoggedIn) ...[
-            ElevatedButton.icon(
-              icon: const Icon(Icons.login),
-              label: const Text('Sign In'),
-              onPressed: () => Navigator.pushNamed(context, '/login'),
-            ),
-            const SizedBox(height: 12),
-            OutlinedButton.icon(
-              icon: const Icon(Icons.person_add_outlined),
-              label: const Text('Create Account'),
-              onPressed: () => Navigator.pushNamed(context, '/register'),
+            const SizedBox(height: 20),
+            _sectionLabel('GUEST MODE'),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Using SmartSpend without an account?',
+                      style: TextStyle(
+                          fontWeight: FontWeight.bold, fontSize: 15),
+                    ),
+                    const SizedBox(height: 6),
+                    const Text(
+                      'Sign in to sync your data across devices and enable cloud backup. Signing in is optional.',
+                      style: TextStyle(
+                          color: AppColors.textSecondary, fontSize: 13),
+                    ),
+                    const SizedBox(height: 14),
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton.icon(
+                        icon: const Text('G',
+                            style: TextStyle(
+                                fontWeight: FontWeight.bold, fontSize: 16)),
+                        label: const Text('Sign in with Google'),
+                        onPressed: () =>
+                            Navigator.pushNamed(context, '/login'),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: AppColors.primaryDark,
+                          foregroundColor: Colors.white,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             ),
           ],
-          if (auth.isLoggedIn) ...[
-            ListTile(
-              leading: const Icon(Icons.email_outlined),
-              title: const Text('Email'),
-              subtitle: Text(auth.email),
-              dense: true,
-            ),
-            const Divider(),
-            ListTile(
-              leading: const Icon(Icons.logout, color: AppColors.budgetRed),
-              title: const Text('Sign Out',
-                  style: TextStyle(color: AppColors.budgetRed)),
-              onTap: () async {
-                await context.read<AuthProvider>().signOut();
-                if (context.mounted) Navigator.pop(context);
-              },
-            ),
-          ],
-          const SizedBox(height: 40),
+
+          const SizedBox(height: 24),
           const Center(
-            child: Text('SmartSpend v1.0.0',
-                style: TextStyle(
-                    color: AppColors.textSecondary, fontSize: 12)),
+            child: Text(
+              'SmartSpend v1.0.0 · TAR UMT 2025/26',
+              style:
+                  TextStyle(color: AppColors.textSecondary, fontSize: 12),
+            ),
+          ),
+          const SizedBox(height: 32),
+        ],
+      ),
+    );
+  }
+
+  void _showEditNameDialog(BuildContext context, String currentName) {
+    final ctrl = TextEditingController(text: currentName);
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Edit Username'),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          decoration: const InputDecoration(labelText: 'Display name'),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () async {
+              final name = ctrl.text.trim();
+              if (name.isEmpty) return;
+              final ok =
+                  await context.read<AuthProvider>().updateName(name);
+              if (context.mounted) {
+                Navigator.pop(context);
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                  content: Text(ok ? 'Name updated!' : 'Update failed'),
+                  backgroundColor:
+                      ok ? AppColors.budgetGreen : AppColors.budgetRed,
+                ));
+              }
+            },
+            child: const Text('Save'),
           ),
         ],
       ),
     );
   }
+
+  Widget _sectionLabel(String label) => Padding(
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+        child: Text(
+          label,
+          style: const TextStyle(
+            color: AppColors.textSecondary,
+            fontSize: 11,
+            fontWeight: FontWeight.w600,
+            letterSpacing: 0.8,
+          ),
+        ),
+      );
+
+  Widget _card(List<Widget> children) => Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        child: Container(
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Column(children: children),
+        ),
+      );
+
+  Widget _divider() => const Divider(height: 1, indent: 56);
+
+  Widget _tile({
+    required IconData icon,
+    required Color iconColor,
+    required Color iconBg,
+    required String title,
+    String? subtitle,
+    Color? titleColor,
+    VoidCallback? onTap,
+  }) =>
+      ListTile(
+        leading: Container(
+          width: 36,
+          height: 36,
+          decoration: BoxDecoration(
+              color: iconBg, borderRadius: BorderRadius.circular(8)),
+          child: Icon(icon, color: iconColor, size: 20),
+        ),
+        title: Text(title,
+            style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w500,
+                color: titleColor)),
+        subtitle: subtitle != null
+            ? Text(subtitle,
+                style: const TextStyle(
+                    fontSize: 12, color: AppColors.textSecondary))
+            : null,
+        trailing: const Icon(Icons.chevron_right,
+            color: AppColors.textSecondary, size: 18),
+        onTap: onTap,
+        contentPadding:
+            const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
+      );
+
+  Widget _toggleTile({
+    required IconData icon,
+    required Color iconColor,
+    required Color iconBg,
+    required String title,
+    String? subtitle,
+    required bool value,
+    required ValueChanged<bool> onChanged,
+  }) =>
+      ListTile(
+        leading: Container(
+          width: 36,
+          height: 36,
+          decoration: BoxDecoration(
+              color: iconBg, borderRadius: BorderRadius.circular(8)),
+          child: Icon(icon, color: iconColor, size: 20),
+        ),
+        title: Text(title,
+            style: const TextStyle(
+                fontSize: 14, fontWeight: FontWeight.w500)),
+        subtitle: subtitle != null
+            ? Text(subtitle,
+                style: const TextStyle(
+                    fontSize: 12, color: AppColors.textSecondary))
+            : null,
+        trailing: Switch(
+          value: value,
+          onChanged: onChanged,
+          activeThumbColor: AppColors.primary,
+        ),
+        contentPadding:
+            const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
+      );
 }

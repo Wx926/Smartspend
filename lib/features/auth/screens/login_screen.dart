@@ -30,7 +30,11 @@ class _LoginScreenState extends State<LoginScreen> {
       email: _emailCtrl.text.trim(),
       password: _passwordCtrl.text,
     );
-    if (!ok && mounted) {
+    if (!mounted) return;
+    if (ok) {
+      Navigator.pushNamedAndRemoveUntil(
+          context, '/home-profile', (_) => false);
+    } else {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(auth.errorMessage ?? 'Login failed'),
@@ -46,6 +50,11 @@ class _LoginScreenState extends State<LoginScreen> {
 
     return Scaffold(
       backgroundColor: AppColors.background,
+      appBar: AppBar(
+        backgroundColor: AppColors.background,
+        elevation: 0,
+        leading: const BackButton(color: AppColors.textPrimary),
+      ),
       body: SafeArea(
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(24),
@@ -54,7 +63,7 @@ class _LoginScreenState extends State<LoginScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                const SizedBox(height: 48),
+                const SizedBox(height: 16),
                 // Logo and title
                 Container(
                   width: 80,
@@ -154,7 +163,7 @@ class _LoginScreenState extends State<LoginScreen> {
                         style: TextStyle(color: AppColors.textSecondary)),
                     GestureDetector(
                       onTap: () =>
-                          Navigator.pushReplacementNamed(context, '/register'),
+                          Navigator.pushNamed(context, '/register'),
                       child: const Text(
                         'Sign Up',
                         style: TextStyle(

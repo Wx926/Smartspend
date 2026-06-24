@@ -79,6 +79,16 @@ class AuthProvider extends ChangeNotifier {
     }
   }
 
+  Future<bool> updateName(String name) async {
+    try {
+      await _auth.updateName(name);
+      notifyListeners();
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
   Future<void> signOut() async {
     await _auth.signOut();
     notifyListeners();

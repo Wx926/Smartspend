@@ -5,6 +5,7 @@ import '../models/expense_model.dart';
 import '../models/location_model.dart';
 import '../models/alert_log_model.dart';
 import '../models/ai_insight_model.dart';
+import '../models/savings_goal_model.dart';
 
 /// Data Access Object — single entry point for all Supabase queries.
 class SupabaseService {
@@ -194,5 +195,39 @@ class SupabaseService {
         .select()
         .single();
     return AiInsightModel.fromJson(data);
+  }
+
+  // ── Savings Goals ─────────────────────────────────────────────
+  Future<List<SavingsGoalModel>> getSavingsGoals() async {
+    final data = await _client
+        .from('savings_goals')
+        .select()
+        .eq('user_id', _uid)
+        .order('created_at', ascending: false);
+    return (data as List).map((e) => SavingsGoalModel.fromJson(e)).toList();
+  }
+
+  Future<SavingsGoalModel> insertSavingsGoal(SavingsGoalModel goal) async {
+    final json = goal.toJson()..remove('id');
+    final data = await _client
+        .from('savings_goals')
+        .insert(json)
+        .select()
+        .single();
+    return SavingsGoalModel.fromJson(data);
+  }
+
+  Future<SavingsGoalModel> updateSavingsGoal(SavingsGoalModel goal) async {
+    final data = await _client
+        .from('savings_goals')
+        .update(goal.toJson())
+        .eq('id', goal.id)
+        .select()
+        .single();
+    return SavingsGoalModel.fromJson(data);
+  }
+
+  Future<void> deleteSavingsGoal(String goalId) async {
+    await _client.from('savings_goals').delete().eq('id', goalId);
   }
 }

@@ -14,6 +14,9 @@ import 'features/expenses/screens/expense_list_screen.dart';
 import 'features/expenses/screens/add_expense_screen.dart';
 import 'features/profile/screens/profile_screen.dart';
 import 'features/ai_advice/screens/ai_advice_screen.dart';
+import 'features/savings_goals/providers/savings_goal_provider.dart';
+import 'features/savings_goals/screens/savings_goals_screen.dart';
+import 'features/profile/screens/manage_categories_screen.dart';
 import 'shared/theme/app_theme.dart';
 
 class SmartSpendApp extends StatelessWidget {
@@ -27,6 +30,7 @@ class SmartSpendApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => ExpenseProvider()),
         ChangeNotifierProvider(create: (_) => BudgetProvider()),
         ChangeNotifierProvider(create: (_) => LocationProvider()),
+        ChangeNotifierProvider(create: (_) => SavingsGoalProvider()),
       ],
       child: MaterialApp(
         title: 'SmartSpend',
@@ -38,12 +42,15 @@ class SmartSpendApp extends StatelessWidget {
           '/login': (_) => const LoginScreen(),
           '/register': (_) => const RegisterScreen(),
           '/home': (_) => const MainShell(),
+          '/home-profile': (_) => const MainShell(initialIndex: 3),
           '/alerts': (_) => const AlertsScreen(),
           '/budget': (_) => const BudgetScreen(),
           '/expenses': (_) => const ExpenseListScreen(),
           '/add-expense': (_) => const AddExpenseScreen(),
           '/profile': (_) => const ProfileScreen(),
           '/ai-advice': (_) => const AiAdviceScreen(),
+          '/savings-goals': (_) => const SavingsGoalsScreen(),
+          '/manage-categories': (_) => const ManageCategoriesScreen(),
         },
       ),
     );

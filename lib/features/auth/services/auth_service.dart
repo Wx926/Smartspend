@@ -39,6 +39,10 @@ class AuthService {
     await _client.auth.resetPasswordForEmail(email);
   }
 
+  Future<void> updateName(String name) async {
+    await _client.auth.updateUser(UserAttributes(data: {'name': name}));
+  }
+
   String get userDisplayName {
     final user = currentUser;
     if (user == null) return '';
