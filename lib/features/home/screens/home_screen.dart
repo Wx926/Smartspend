@@ -17,6 +17,11 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
+  // Transaction filter state
+  DateTime _txStart = DateTime(DateTime.now().year, DateTime.now().month, 1);
+  DateTime _txEnd = DateTime.now();
+  String _filterLabel = 'This Month';
+
   @override
   void initState() {
     super.initState();
@@ -28,7 +33,106 @@ class _HomeScreenState extends State<HomeScreen> {
     final bp = context.read<BudgetProvider>();
     await ep.load();
     final now = DateTime.now();
-    await bp.load(ep.forMonth(now.month, now.year));
+    await bp.load(ep.expensesForMonth(now.month, now.year));
+  }
+
+  void _prevMonth() {
+    setState(() {
+      _txStart = DateTime(_txStart.year, _txStart.month - 1, 1);
+      _txEnd = DateTime(_txStart.year, _txStart.month + 1, 0);
+      _filterLabel = DateFormat('MMM yyyy').format(_txStart);
+    });
+  }
+
+  void _nextMonth() {
+    final now = DateTime.now();
+    final nextStart = DateTime(_txStart.year, _txStart.month + 1, 1);
+    if (nextStart.isAfter(DateTime(now.year, now.month, 1))) return;
+    setState(() {
+      _txStart = nextStart;
+      _txEnd = nextStart.month == now.month && nextStart.year == now.year
+          ? now
+          : DateTime(nextStart.year, nextStart.month + 1, 0);
+      _filterLabel = nextStart.month == now.month && nextStart.year == now.year
+          ? 'This Month'
+          : DateFormat('MMM yyyy').format(nextStart);
+    });
+  }
+
+  void _showFilterSheet() {
+    final now = DateTime.now();
+    final presets = [
+      {'label': 'Last 7 days', 'start': now.subtract(const Duration(days: 6)), 'end': now},
+      {'label': 'This Month', 'start': DateTime(now.year, now.month, 1), 'end': now},
+      {'label': 'Last Month', 'start': DateTime(now.year, now.month - 1, 1), 'end': DateTime(now.year, now.month, 0)},
+      {'label': 'Last 3 Months', 'start': DateTime(now.year, now.month - 2, 1), 'end': now},
+      {'label': 'Last 6 Months', 'start': DateTime(now.year, now.month - 5, 1), 'end': now},
+      {'label': 'Last Year', 'start': DateTime(now.year - 1, now.month, 1), 'end': now},
+    ];
+
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (ctx) => Padding(
+        padding: const EdgeInsets.fromLTRB(24, 20, 24, 32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Filter Period',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 16),
+            ...presets.map((p) => ListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  title: Text(p['label'] as String),
+                  trailing: _filterLabel == p['label']
+                      ? const Icon(Icons.check, color: AppColors.primary)
+                      : null,
+                  onTap: () {
+                    setState(() {
+                      _txStart = p['start'] as DateTime;
+                      _txEnd = p['end'] as DateTime;
+                      _filterLabel = p['label'] as String;
+                    });
+                    Navigator.pop(ctx);
+                  },
+                )),
+            ListTile(
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Custom Range'),
+              trailing: const Icon(Icons.calendar_month_outlined,
+                  color: AppColors.primary, size: 20),
+              onTap: () async {
+                Navigator.pop(ctx);
+                final range = await showDateRangePicker(
+                  context: context,
+                  firstDate: DateTime(2020),
+                  lastDate: now,
+                  initialDateRange: DateTimeRange(start: _txStart, end: _txEnd),
+                  builder: (context, child) => Theme(
+                    data: Theme.of(context).copyWith(
+                        colorScheme: const ColorScheme.light(
+                            primary: AppColors.primary)),
+                    child: child!,
+                  ),
+                );
+                if (range != null) {
+                  setState(() {
+                    _txStart = range.start;
+                    _txEnd = range.end;
+                    _filterLabel =
+                        '${DateFormat('d MMM').format(range.start)} – ${DateFormat('d MMM yyyy').format(range.end)}';
+                  });
+                }
+              },
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   String _initials(String name) {
@@ -56,8 +160,8 @@ class _HomeScreenState extends State<HomeScreen> {
     final now = DateTime.now();
     final fmt = NumberFormat('#,##0.00', 'en_MY');
 
-    final monthExpenses = ep.forMonth(now.month, now.year);
-    final totalSpent = monthExpenses.fold(0.0, (s, e) => s + e.amount);
+    final totalSpent = ep.expensesForMonth(now.month, now.year).fold(0.0, (s, e) => s + e.amount);
+    final totalIncome = ep.incomeForMonth(now.month, now.year).fold(0.0, (s, e) => s + e.amount);
     final totalBudget = bp.totalBudget;
     final remaining = (totalBudget - totalSpent).clamp(0.0, double.infinity);
     final daysLeft = DateTime(now.year, now.month + 1, 0).day - now.day;
@@ -155,8 +259,8 @@ class _HomeScreenState extends State<HomeScreen> {
                                     value: 'RM ${fmt.format(totalSpent)}'),
                                 const SizedBox(width: 10),
                                 _StatChip(
-                                    label: 'Budget',
-                                    value: 'RM ${fmt.format(totalBudget)}'),
+                                    label: 'Income',
+                                    value: 'RM ${fmt.format(totalIncome)}'),
                                 const SizedBox(width: 10),
                                 _StatChip(
                                     label: 'Days left', value: '$daysLeft'),
@@ -227,7 +331,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   Expanded(
                       child: _QuickAction(
                           icon: Icons.add,
-                          label: 'Add Expense',
+                          label: 'Add Record',
                           filled: true,
                           onTap: () =>
                               Navigator.pushNamed(context, '/add-expense'))),
@@ -307,89 +411,221 @@ class _HomeScreenState extends State<HomeScreen> {
                         (_, i) => _BudgetCard(status: bp.statuses[i]),
                         childCount: bp.statuses.length)),
 
-            // ── Recent transactions ────────────────────────────────────────
+            // ── Transactions header with month nav + filter ───────────────
             SliverToBoxAdapter(
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(16, 20, 16, 8),
-                child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      const Text('Recent Transactions',
-                          style: TextStyle(
-                              fontSize: 16, fontWeight: FontWeight.bold)),
-                      TextButton(
-                          onPressed: () =>
-                              Navigator.pushNamed(context, '/expenses'),
-                          child: const Text('See All')),
-                    ]),
+                child: Row(children: [
+                  const Text('Transactions',
+                      style: TextStyle(
+                          fontSize: 16, fontWeight: FontWeight.bold)),
+                  const Spacer(),
+                  IconButton(
+                    icon: const Icon(Icons.chevron_left,
+                        color: AppColors.textSecondary, size: 22),
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(),
+                    onPressed: _prevMonth,
+                  ),
+                  GestureDetector(
+                    onTap: _showFilterSheet,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 4),
+                      child: Text(_filterLabel,
+                          style: const TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                              color: AppColors.primary)),
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.chevron_right,
+                        color: AppColors.textSecondary, size: 22),
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(),
+                    onPressed: _nextMonth,
+                  ),
+                  const SizedBox(width: 4),
+                  GestureDetector(
+                    onTap: _showFilterSheet,
+                    child: const Icon(Icons.tune,
+                        color: AppColors.primary, size: 20),
+                  ),
+                ]),
               ),
             ),
 
-            monthExpenses.isEmpty
-                ? const SliverToBoxAdapter(
-                    child: Padding(
-                        padding: EdgeInsets.symmetric(vertical: 20),
-                        child: Center(
-                            child: Text('No transactions this month',
-                                style: TextStyle(
-                                    color: AppColors.textSecondary,
-                                    fontSize: 14)))))
-                : SliverList(
-                    delegate: SliverChildBuilderDelegate(
-                      (_, i) {
-                        final e = monthExpenses[i];
-                        final cat = bp.categories
-                            .where((c) => c.id == e.categoryId)
-                            .firstOrNull;
-                        final col =
-                            AppColors.fromHex(cat?.colorHex ?? '6B7280');
-                        return Container(
-                          margin: const EdgeInsets.fromLTRB(16, 0, 16, 6),
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 14, vertical: 12),
-                          decoration: BoxDecoration(
-                              color: Colors.white,
-                              borderRadius: BorderRadius.circular(12)),
-                          child: Row(children: [
-                            CircleAvatar(
-                                radius: 20,
-                                backgroundColor:
-                                    col.withValues(alpha: 0.15),
-                                child: Text(cat?.icon ?? '📦',
-                                    style:
-                                        const TextStyle(fontSize: 16))),
-                            const SizedBox(width: 12),
-                            Expanded(
-                                child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                  Text(
-                                      e.description.isEmpty
-                                          ? (cat?.name ?? 'Expense')
-                                          : e.description,
-                                      style: const TextStyle(
-                                          fontWeight: FontWeight.w600,
-                                          fontSize: 14)),
-                                  Text(
-                                      '${cat?.name ?? ''} · ${DateFormat('d MMM').format(e.date)}',
-                                      style: const TextStyle(
-                                          color: AppColors.textSecondary,
-                                          fontSize: 12)),
-                                ])),
-                            Text('-RM ${e.amount.toStringAsFixed(2)}',
-                                style: const TextStyle(
-                                    color: AppColors.budgetRed,
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: 14)),
-                          ]),
-                        );
-                      },
-                      childCount: monthExpenses.take(5).length,
-                    ),
-                  ),
+            // ── Period income/expense summary ─────────────────────────────
+            SliverToBoxAdapter(
+              child: Builder(builder: (context) {
+                final periodTx = ep.expenses.where((e) =>
+                    !e.date.isBefore(_txStart) &&
+                    !e.date.isAfter(_txEnd)).toList();
+                final periodIncome = periodTx
+                    .where((e) => e.type == 'income')
+                    .fold(0.0, (s, e) => s + e.amount);
+                final periodExpense = periodTx
+                    .where((e) => e.type == 'expense')
+                    .fold(0.0, (s, e) => s + e.amount);
+                return Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                  child: Row(children: [
+                    _PeriodStat(
+                        label: 'Income',
+                        value: '+RM ${fmt.format(periodIncome)}',
+                        color: AppColors.budgetGreen),
+                    const SizedBox(width: 10),
+                    _PeriodStat(
+                        label: 'Expenses',
+                        value: '-RM ${fmt.format(periodExpense)}',
+                        color: AppColors.budgetRed),
+                  ]),
+                );
+              }),
+            ),
 
-            const SliverToBoxAdapter(child: SizedBox(height: 100)),
+            // ── Transaction list for selected period ──────────────────────
+            SliverPadding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 100),
+              sliver: Builder(builder: (context) {
+                final allCats = [...bp.categories, ...bp.incomeCategories];
+                final periodTx = ep.expenses
+                    .where((e) =>
+                        !e.date.isBefore(_txStart) &&
+                        !e.date.isAfter(_txEnd))
+                    .toList();
+
+                if (periodTx.isEmpty) {
+                  return const SliverToBoxAdapter(
+                    child: Padding(
+                      padding: EdgeInsets.symmetric(vertical: 24),
+                      child: Center(
+                        child: Text('No transactions in this period',
+                            style: TextStyle(
+                                color: AppColors.textSecondary,
+                                fontSize: 14)),
+                      ),
+                    ),
+                  );
+                }
+
+                // Group by date
+                final byDate = <String, List<dynamic>>{};
+                for (final e in periodTx) {
+                  final key = DateFormat('d MMM yyyy').format(e.date);
+                  byDate.putIfAbsent(key, () => []).add(e);
+                }
+
+                final days = byDate.keys.toList();
+                return SliverList(
+                  delegate: SliverChildBuilderDelegate(
+                    (_, di) {
+                      final dayKey = days[di];
+                      final dayTx = byDate[dayKey]!;
+                      final dayIncome = dayTx
+                          .where((e) => e.type == 'income')
+                          .fold(0.0, (s, e) => s + e.amount);
+                      final dayExpense = dayTx
+                          .where((e) => e.type == 'expense')
+                          .fold(0.0, (s, e) => s + e.amount);
+
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          // Day header
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(0, 8, 0, 6),
+                            child: Row(children: [
+                              Text(dayKey,
+                                  style: const TextStyle(
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.bold,
+                                      color: AppColors.textSecondary)),
+                              const Spacer(),
+                              if (dayIncome > 0)
+                                Text('+RM ${fmt.format(dayIncome)}',
+                                    style: const TextStyle(
+                                        fontSize: 11,
+                                        color: AppColors.budgetGreen,
+                                        fontWeight: FontWeight.w500)),
+                              if (dayIncome > 0 && dayExpense > 0)
+                                const SizedBox(width: 8),
+                              if (dayExpense > 0)
+                                Text('-RM ${fmt.format(dayExpense)}',
+                                    style: const TextStyle(
+                                        fontSize: 11,
+                                        color: AppColors.budgetRed,
+                                        fontWeight: FontWeight.w500)),
+                            ]),
+                          ),
+                          // Transactions for this day
+                          ...dayTx.map((e) {
+                            final cat = allCats
+                                .where((c) => c.id == e.categoryId)
+                                .firstOrNull;
+                            final col = AppColors.fromHex(
+                                cat?.colorHex ?? '6B7280');
+                            final isIncome = e.type == 'income';
+                            return Container(
+                              margin: const EdgeInsets.only(bottom: 6),
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 14, vertical: 12),
+                              decoration: BoxDecoration(
+                                  color: Colors.white,
+                                  borderRadius: BorderRadius.circular(12)),
+                              child: Row(children: [
+                                CircleAvatar(
+                                    radius: 20,
+                                    backgroundColor:
+                                        col.withValues(alpha: 0.15),
+                                    child: Text(
+                                        cat?.icon ??
+                                            (isIncome ? '💰' : '📦'),
+                                        style: const TextStyle(
+                                            fontSize: 16))),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                    child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                      Text(
+                                          e.description.isEmpty
+                                              ? (cat?.name ??
+                                                  (isIncome
+                                                      ? 'Income'
+                                                      : 'Expense'))
+                                              : e.description,
+                                          style: const TextStyle(
+                                              fontWeight: FontWeight.w600,
+                                              fontSize: 14)),
+                                      Text(cat?.name ?? '',
+                                          style: const TextStyle(
+                                              color:
+                                                  AppColors.textSecondary,
+                                              fontSize: 12)),
+                                    ])),
+                                Text(
+                                    isIncome
+                                        ? '+RM ${e.amount.toStringAsFixed(2)}'
+                                        : '-RM ${e.amount.toStringAsFixed(2)}',
+                                    style: TextStyle(
+                                        color: isIncome
+                                            ? AppColors.budgetGreen
+                                            : AppColors.budgetRed,
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 14)),
+                              ]),
+                            );
+                          }),
+                        ],
+                      );
+                    },
+                    childCount: days.length,
+                  ),
+                );
+              }),
+            ),
           ],
         ),
       ),
@@ -398,6 +634,36 @@ class _HomeScreenState extends State<HomeScreen> {
 }
 
 // ── Helper widgets ────────────────────────────────────────────────────────────
+
+class _PeriodStat extends StatelessWidget {
+  final String label;
+  final String value;
+  final Color color;
+  const _PeriodStat(
+      {required this.label, required this.value, required this.color});
+
+  @override
+  Widget build(BuildContext context) => Expanded(
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          decoration: BoxDecoration(
+            color: color.withValues(alpha: 0.08),
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: color.withValues(alpha: 0.2)),
+          ),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(label,
+                style: TextStyle(color: color, fontSize: 11)),
+            const SizedBox(height: 2),
+            Text(value,
+                style: TextStyle(
+                    color: color,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 13)),
+          ]),
+        ),
+      );
+}
 
 class _StatChip extends StatelessWidget {
   final String label;

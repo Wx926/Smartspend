@@ -7,8 +7,15 @@ import '../../../shared/models/budget_model.dart';
 import '../../../shared/services/gemini_service.dart';
 import '../../../shared/theme/app_colors.dart';
 
+class _ChatMessage {
+  final String text;
+  final bool isUser;
+  _ChatMessage({required this.text, required this.isUser});
+}
+
 class AiAdviceScreen extends StatefulWidget {
-  const AiAdviceScreen({super.key});
+  final VoidCallback? onBack;
+  const AiAdviceScreen({super.key, this.onBack});
 
   @override
   State<AiAdviceScreen> createState() => _AiAdviceScreenState();
@@ -18,11 +25,22 @@ class _AiAdviceScreenState extends State<AiAdviceScreen> {
   String? _greeting;
   bool _loadingGreeting = false;
   bool _loaded = false;
+  final List<_ChatMessage> _messages = [];
+  bool _sendingMessage = false;
+  final TextEditingController _chatController = TextEditingController();
+  final ScrollController _scrollController = ScrollController();
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) => _loadGreeting());
+  }
+
+  @override
+  void dispose() {
+    _chatController.dispose();
+    _scrollController.dispose();
+    super.dispose();
   }
 
   Future<void> _loadGreeting() async {
@@ -54,6 +72,57 @@ class _AiAdviceScreenState extends State<AiAdviceScreen> {
     if (mounted) setState(() { _loadingGreeting = false; _loaded = true; });
   }
 
+  Future<void> _sendMessage() async {
+    final text = _chatController.text.trim();
+    if (text.isEmpty || _sendingMessage) return;
+
+    final bp = context.read<BudgetProvider>();
+    final ep = context.read<ExpenseProvider>();
+    final now = DateTime.now();
+    final totalSpent =
+        ep.forMonth(now.month, now.year).fold(0.0, (s, e) => s + e.amount);
+
+    setState(() {
+      _messages.add(_ChatMessage(text: text, isUser: true));
+      _sendingMessage = true;
+    });
+    _chatController.clear();
+    _scrollToBottom();
+
+    final categoryBreakdown = bp.statuses
+        .map((s) =>
+            '- ${s.categoryName}: spent RM ${s.spent.toStringAsFixed(2)} of RM ${s.budget.amount.toStringAsFixed(2)} budget (${(s.percentUsed * 100).toStringAsFixed(0)}% used)')
+        .toList();
+
+    final reply = await GeminiService.instance.askFinancialQuestion(
+      question: text,
+      totalSpent: totalSpent,
+      totalBudget: bp.totalBudget,
+      categoryBreakdown: categoryBreakdown,
+      month: DateFormat('MMMM yyyy').format(now),
+    );
+
+    if (mounted) {
+      setState(() {
+        _messages.add(_ChatMessage(text: reply, isUser: false));
+        _sendingMessage = false;
+      });
+      _scrollToBottom();
+    }
+  }
+
+  void _scrollToBottom() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_scrollController.hasClients) {
+        _scrollController.animateTo(
+          _scrollController.position.maxScrollExtent,
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeOut,
+        );
+      }
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final bp = context.watch<BudgetProvider>();
@@ -65,50 +134,71 @@ class _AiAdviceScreenState extends State<AiAdviceScreen> {
 
     return Scaffold(
       backgroundColor: AppColors.background,
-      body: CustomScrollView(
-        slivers: [
-          _buildHeader(),
-          SliverPadding(
-            padding: const EdgeInsets.all(16),
-            sliver: SliverList(
-              delegate: SliverChildListDelegate([
-                _buildGreetingBubble(),
-                const SizedBox(height: 24),
-                const Text('This week\'s insights',
-                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                const SizedBox(height: 12),
-                ...criticals.map((s) => _InsightCard(
-                      badge: 'Critical',
-                      badgeColor: AppColors.budgetRed,
-                      title: '${s.categoryName} nearly exhausted',
-                      body:
-                          'Only RM ${s.remaining.toStringAsFixed(0)} left with ${_daysLeft()} days to go. Consider cutting back.',
-                    )),
-                ...warnings.map((s) => _InsightCard(
-                      badge: 'Warning',
-                      badgeColor: AppColors.budgetYellow,
-                      title: '${s.categoryName} spending rising',
-                      body:
-                          'You\'ve used ${(s.percentUsed * 100).toStringAsFixed(0)}% of your RM ${s.budget.amount.toStringAsFixed(0)} ${s.categoryName} budget.',
-                    )),
-                ...onTrack.map((s) => _InsightCard(
-                      badge: 'Good job',
-                      badgeColor: AppColors.budgetGreen,
-                      title: '${s.categoryName} spending on track',
-                      body:
-                          '${(s.percentUsed * 100).toStringAsFixed(0)}% used at the midpoint. Keep this pace!',
-                    )),
-                if (statuses.isEmpty)
-                  _InsightCard(
-                    badge: 'Tip',
-                    badgeColor: AppColors.primary,
-                    title: 'Set your first budget',
-                    body: 'Go to the Home screen → Budget Overview to set monthly category budgets.',
+      body: Column(
+        children: [
+          Expanded(
+            child: CustomScrollView(
+              controller: _scrollController,
+              slivers: [
+                _buildHeader(),
+                SliverPadding(
+                  padding: const EdgeInsets.all(16),
+                  sliver: SliverList(
+                    delegate: SliverChildListDelegate([
+                      _buildGreetingBubble(),
+                      const SizedBox(height: 24),
+                      const Text('This week\'s insights',
+                          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                      const SizedBox(height: 12),
+                      ...criticals.map((s) => _InsightCard(
+                            badge: 'Critical',
+                            badgeColor: AppColors.budgetRed,
+                            title: '${s.categoryName} nearly exhausted',
+                            body:
+                                'Only RM ${s.remaining.toStringAsFixed(0)} left with ${_daysLeft()} days to go. Consider cutting back.',
+                          )),
+                      ...warnings.map((s) => _InsightCard(
+                            badge: 'Warning',
+                            badgeColor: AppColors.budgetYellow,
+                            title: '${s.categoryName} spending rising',
+                            body:
+                                'You\'ve used ${(s.percentUsed * 100).toStringAsFixed(0)}% of your RM ${s.budget.amount.toStringAsFixed(0)} ${s.categoryName} budget.',
+                          )),
+                      ...onTrack.map((s) => _InsightCard(
+                            badge: 'Good job',
+                            badgeColor: AppColors.budgetGreen,
+                            title: '${s.categoryName} spending on track',
+                            body:
+                                '${(s.percentUsed * 100).toStringAsFixed(0)}% used at the midpoint. Keep this pace!',
+                          )),
+                      if (statuses.isEmpty)
+                        _InsightCard(
+                          badge: 'Tip',
+                          badgeColor: AppColors.primary,
+                          title: 'Set your first budget',
+                          body:
+                              'Go to the Home screen → Budget Overview to set monthly category budgets.',
+                        ),
+                      if (_messages.isNotEmpty) ...[
+                        const SizedBox(height: 24),
+                        const Text('Chat with AI',
+                            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                        const SizedBox(height: 12),
+                        ..._messages.map((m) => _ChatBubble(message: m)),
+                      ],
+                      if (_sendingMessage)
+                        const Padding(
+                          padding: EdgeInsets.only(top: 8),
+                          child: _TypingIndicator(),
+                        ),
+                      const SizedBox(height: 16),
+                    ]),
                   ),
-                const SizedBox(height: 80),
-              ]),
+                ),
+              ],
             ),
           ),
+          _buildChatInput(),
         ],
       ),
     );
@@ -116,64 +206,59 @@ class _AiAdviceScreenState extends State<AiAdviceScreen> {
 
   Widget _buildHeader() {
     return SliverAppBar(
-      expandedHeight: 110,
       pinned: true,
       backgroundColor: AppColors.primaryDark,
       automaticallyImplyLeading: false,
-      flexibleSpace: FlexibleSpaceBar(
-        background: Container(
-          decoration: const BoxDecoration(
-            gradient: LinearGradient(
-              colors: [AppColors.primaryDark, AppColors.primary],
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-            ),
-          ),
-          padding: const EdgeInsets.fromLTRB(20, 52, 20, 16),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              const Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisAlignment: MainAxisAlignment.end,
-                  children: [
-                    Text('AI Financial Advisor',
-                        style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 20,
-                            fontWeight: FontWeight.bold)),
-                    SizedBox(height: 2),
-                    Text('Powered by Gemini AI',
-                        style: TextStyle(color: Colors.white70, fontSize: 12)),
-                  ],
-                ),
-              ),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.2),
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(color: Colors.white38),
-                ),
-                child: const Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(Icons.circle, color: Color(0xFF4ADE80), size: 8),
-                    SizedBox(width: 4),
-                    Text('LIVE',
-                        style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 11,
-                            fontWeight: FontWeight.bold,
-                            letterSpacing: 1)),
-                  ],
-                ),
-              ),
-            ],
+      flexibleSpace: Container(
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            colors: [AppColors.primaryDark, AppColors.primary],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
           ),
         ),
       ),
+      leading: IconButton(
+        icon: const Icon(Icons.arrow_back, color: Colors.white),
+        onPressed: widget.onBack ?? () => Navigator.pop(context),
+      ),
+      title: const Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text('AI Financial Advisor',
+              style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold)),
+          Text('Powered by Gemini AI',
+              style: TextStyle(color: Colors.white70, fontSize: 11)),
+        ],
+      ),
+      actions: [
+        Container(
+          margin: const EdgeInsets.only(right: 16),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.2),
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: Colors.white38),
+          ),
+          child: const Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.circle, color: Color(0xFF4ADE80), size: 8),
+              SizedBox(width: 4),
+              Text('LIVE',
+                  style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 11,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: 1)),
+            ],
+          ),
+        ),
+      ],
     );
   }
 
@@ -215,9 +300,159 @@ class _AiAdviceScreenState extends State<AiAdviceScreen> {
     );
   }
 
+  Widget _buildChatInput() {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.06),
+            blurRadius: 8,
+            offset: const Offset(0, -2),
+          ),
+        ],
+      ),
+      padding: EdgeInsets.fromLTRB(
+          16, 10, 12, MediaQuery.of(context).padding.bottom + 10),
+      child: Row(
+        children: [
+          Expanded(
+            child: TextField(
+              controller: _chatController,
+              enabled: !_sendingMessage,
+              decoration: InputDecoration(
+                hintText: 'Ask about your spending...',
+                hintStyle:
+                    const TextStyle(color: AppColors.textSecondary, fontSize: 14),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(24),
+                  borderSide: BorderSide.none,
+                ),
+                filled: true,
+                fillColor: AppColors.background,
+                contentPadding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              ),
+              onSubmitted: (_) => _sendMessage(),
+              textInputAction: TextInputAction.send,
+            ),
+          ),
+          const SizedBox(width: 8),
+          Material(
+            color: AppColors.primary,
+            shape: const CircleBorder(),
+            child: InkWell(
+              customBorder: const CircleBorder(),
+              onTap: _sendMessage,
+              child: const Padding(
+                padding: EdgeInsets.all(10),
+                child: Icon(Icons.send_rounded, color: Colors.white, size: 20),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   int _daysLeft() {
     final now = DateTime.now();
     return DateTime(now.year, now.month + 1, 0).day - now.day;
+  }
+}
+
+class _ChatBubble extends StatelessWidget {
+  final _ChatMessage message;
+  const _ChatBubble({required this.message});
+
+  @override
+  Widget build(BuildContext context) {
+    return Align(
+      alignment: message.isUser ? Alignment.centerRight : Alignment.centerLeft,
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 10),
+        constraints: BoxConstraints(
+            maxWidth: MediaQuery.of(context).size.width * 0.78),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        decoration: BoxDecoration(
+          color: message.isUser ? AppColors.primary : Colors.white,
+          borderRadius: BorderRadius.only(
+            topLeft: const Radius.circular(16),
+            topRight: const Radius.circular(16),
+            bottomLeft: Radius.circular(message.isUser ? 16 : 4),
+            bottomRight: Radius.circular(message.isUser ? 4 : 16),
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.05),
+              blurRadius: 4,
+              offset: const Offset(0, 2),
+            ),
+          ],
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (!message.isUser) ...[
+              const Icon(Icons.auto_awesome,
+                  color: AppColors.primary, size: 14),
+              const SizedBox(width: 6),
+            ],
+            Flexible(
+              child: Text(
+                message.text,
+                style: TextStyle(
+                  color: message.isUser ? Colors.white : AppColors.textPrimary,
+                  fontSize: 14,
+                  height: 1.4,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _TypingIndicator extends StatelessWidget {
+  const _TypingIndicator();
+
+  @override
+  Widget build(BuildContext context) {
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.05),
+              blurRadius: 4,
+              offset: const Offset(0, 2),
+            ),
+          ],
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.auto_awesome, color: AppColors.primary, size: 14),
+            const SizedBox(width: 8),
+            SizedBox(
+              width: 40,
+              child: LinearProgressIndicator(
+                color: AppColors.primary,
+                backgroundColor: AppColors.primary.withValues(alpha: 0.2),
+                borderRadius: BorderRadius.circular(4),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
 
@@ -256,7 +491,8 @@ class _InsightCard extends StatelessWidget {
           Row(
             children: [
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                 decoration: BoxDecoration(
                   color: badgeColor.withValues(alpha: 0.12),
                   borderRadius: BorderRadius.circular(8),
@@ -288,7 +524,8 @@ class _InsightCard extends StatelessWidget {
           ),
           const SizedBox(height: 8),
           Text(title,
-              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+              style:
+                  const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
           const SizedBox(height: 4),
           Text(body,
               style: const TextStyle(

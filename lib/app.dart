@@ -17,6 +17,7 @@ import 'features/ai_advice/screens/ai_advice_screen.dart';
 import 'features/savings_goals/providers/savings_goal_provider.dart';
 import 'features/savings_goals/screens/savings_goals_screen.dart';
 import 'features/profile/screens/manage_categories_screen.dart';
+import 'features/wallet/providers/wallet_provider.dart';
 import 'shared/theme/app_theme.dart';
 
 class SmartSpendApp extends StatelessWidget {
@@ -31,6 +32,7 @@ class SmartSpendApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => BudgetProvider()),
         ChangeNotifierProvider(create: (_) => LocationProvider()),
         ChangeNotifierProvider(create: (_) => SavingsGoalProvider()),
+        ChangeNotifierProvider(create: (_) => WalletProvider()..init()),
       ],
       child: MaterialApp(
         title: 'SmartSpend',

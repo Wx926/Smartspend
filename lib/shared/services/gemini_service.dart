@@ -6,7 +6,12 @@ class GeminiService {
   GeminiService._();
   static final GeminiService instance = GeminiService._();
 
-  Future<String> _generate(String prompt) async {
+  Future<String> _generate(String prompt,
+      {int maxTokens = 250, String? errorMessage}) async {
+    if (AppConstants.geminiApiKey.isEmpty ||
+        AppConstants.geminiApiKey == 'your-gemini-api-key') {
+      return errorMessage ?? _fallbackAdvice();
+    }
     try {
       final uri = Uri.parse(
           '${AppConstants.geminiEndpoint}?key=${AppConstants.geminiApiKey}');
@@ -23,7 +28,7 @@ class GeminiService {
                 }
               ],
               'generationConfig': {
-                'maxOutputTokens': 250,
+                'maxOutputTokens': maxTokens,
                 'temperature': 0.7,
               },
             }),
@@ -34,9 +39,9 @@ class GeminiService {
         final data = jsonDecode(response.body);
         return data['candidates'][0]['content']['parts'][0]['text'] as String;
       }
-      return _fallbackAdvice();
+      return errorMessage ?? _fallbackAdvice();
     } catch (_) {
-      return _fallbackAdvice();
+      return errorMessage ?? _fallbackAdvice();
     }
   }
 
@@ -119,6 +124,38 @@ Give one specific, actionable savings tip for a Malaysian user in 2 sentences.
 Use Malaysian Ringgit (RM). No headers.
 ''';
     return _generate(prompt);
+  }
+
+  Future<String> askFinancialQuestion({
+    required String question,
+    required double totalSpent,
+    required double totalBudget,
+    required List<String> categoryBreakdown,
+    required String month,
+  }) async {
+    final breakdown = categoryBreakdown.isNotEmpty
+        ? categoryBreakdown.join('\n')
+        : 'No budget categories set yet.';
+    final prompt = '''
+You are a friendly personal finance advisor for SmartSpend, a Malaysian budgeting app.
+
+The user's financial data for $month:
+- Total budget: RM ${totalBudget.toStringAsFixed(2)}
+- Total spent: RM ${totalSpent.toStringAsFixed(2)}
+- Remaining: RM ${(totalBudget - totalSpent).toStringAsFixed(2)}
+Category breakdown:
+$breakdown
+
+User question: "$question"
+
+Answer clearly and helpfully in 2-4 sentences based on their actual data. Use Malaysian Ringgit (RM). Be friendly, practical, and specific. No markdown formatting or bullet points.
+''';
+    return _generate(
+      prompt,
+      maxTokens: 350,
+      errorMessage:
+          'AI is not configured yet. Please add a Gemini API key in the app settings.',
+    );
   }
 
   String _fallbackAdvice() =>

@@ -8,6 +8,8 @@ class ExpenseModel {
   final String? locationId;
   final DateTime createdAt;
   final DateTime updatedAt;
+  final String type; // 'expense' or 'income'
+  final String walletId;
 
   const ExpenseModel({
     required this.id,
@@ -19,6 +21,8 @@ class ExpenseModel {
     this.locationId,
     required this.createdAt,
     required this.updatedAt,
+    this.type = 'expense',
+    this.walletId = 'default_account',
   });
 
   factory ExpenseModel.fromJson(Map<String, dynamic> json) {
@@ -32,6 +36,8 @@ class ExpenseModel {
       locationId: json['location_id'] as String?,
       createdAt: DateTime.parse(json['created_at'] as String),
       updatedAt: DateTime.parse(json['updated_at'] as String),
+      type: json['type'] as String? ?? 'expense',
+      walletId: json['wallet_id'] as String? ?? 'default_account',
     );
   }
 
@@ -46,6 +52,8 @@ class ExpenseModel {
       if (locationId != null) 'location_id': locationId,
       'created_at': createdAt.toIso8601String(),
       'updated_at': updatedAt.toIso8601String(),
+      'type': type,
+      'wallet_id': walletId,
     };
   }
 
@@ -55,6 +63,8 @@ class ExpenseModel {
     String? description,
     DateTime? date,
     String? locationId,
+    String? type,
+    String? walletId,
   }) {
     return ExpenseModel(
       id: id,
@@ -66,6 +76,8 @@ class ExpenseModel {
       locationId: locationId ?? this.locationId,
       createdAt: createdAt,
       updatedAt: DateTime.now(),
+      type: type ?? this.type,
+      walletId: walletId ?? this.walletId,
     );
   }
 }

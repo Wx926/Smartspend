@@ -17,15 +17,18 @@ class BudgetProvider extends ChangeNotifier {
   String? _error;
   late DateTime _selectedMonth;
 
+  List<CategoryModel> _incomeCategories = [];
+
   BudgetProvider() {
     final now = DateTime.now();
     _selectedMonth = DateTime(now.year, now.month);
-    // Categories come from local constants, always available immediately
     _categories = LocalStorageService.instance.getCategories();
+    _incomeCategories = LocalStorageService.instance.getCategories(type: 'income');
   }
 
   List<BudgetModel> get budgets => _budgets;
   List<CategoryModel> get categories => _categories;
+  List<CategoryModel> get incomeCategories => _incomeCategories;
   List<BudgetStatus> get statuses => _statuses;
   bool get isLoading => _isLoading;
   String? get error => _error;
@@ -109,6 +112,36 @@ class BudgetProvider extends ChangeNotifier {
   Future<void> deleteBudget(String budgetId) async {
     await _service.deleteBudget(budgetId);
     _budgets.removeWhere((b) => b.id == budgetId);
+    notifyListeners();
+  }
+
+  // ── Category management ────────────────────────────────────────────────────
+  void _reloadCategories() {
+    _categories = LocalStorageService.instance.getCategories();
+    _incomeCategories = LocalStorageService.instance.getCategories(type: 'income');
+  }
+
+  Future<void> addCategory(CategoryModel cat) async {
+    await LocalStorageService.instance.saveCategory(cat);
+    _reloadCategories();
+    notifyListeners();
+  }
+
+  Future<void> removeCategory(CategoryModel cat) async {
+    // Delete any budget entry set for this category
+    final budgetsToDelete = _budgets.where((b) => b.categoryId == cat.id).toList();
+    for (final b in budgetsToDelete) {
+      await _service.deleteBudget(b.id);
+    }
+    _budgets.removeWhere((b) => b.categoryId == cat.id);
+
+    // Reassign existing records to the fallback category for that type.
+    // expense → "others", income → "bonus"
+    final fallbackId = cat.type == 'income' ? 'bonus' : 'others';
+    await LocalStorageService.instance.reassignCategory(cat.id, fallbackId);
+
+    await LocalStorageService.instance.deleteCategory(cat.id);
+    _reloadCategories();
     notifyListeners();
   }
 }

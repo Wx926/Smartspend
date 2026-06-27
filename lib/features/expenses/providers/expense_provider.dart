@@ -15,8 +15,25 @@ class ExpenseProvider extends ChangeNotifier {
   bool get isLoading => _isLoading;
   String? get error => _error;
 
+  /// All records (income + expense) for the given month — used for history display.
   List<ExpenseModel> forMonth(int month, int year) => _expenses
       .where((e) => e.date.month == month && e.date.year == year)
+      .toList();
+
+  /// Only expense records — used for budget calculations.
+  List<ExpenseModel> expensesForMonth(int month, int year) => _expenses
+      .where((e) =>
+          e.date.month == month &&
+          e.date.year == year &&
+          e.type == 'expense')
+      .toList();
+
+  /// Only income records — used for income display.
+  List<ExpenseModel> incomeForMonth(int month, int year) => _expenses
+      .where((e) =>
+          e.date.month == month &&
+          e.date.year == year &&
+          e.type == 'income')
       .toList();
 
   Future<void> load() async {
@@ -40,6 +57,8 @@ class ExpenseProvider extends ChangeNotifier {
     required String description,
     required DateTime date,
     String? locationId,
+    String type = 'expense',
+    String walletId = 'default_account',
   }) async {
     final expense = ExpenseModel(
       id: _uuid.v4(),
@@ -51,6 +70,8 @@ class ExpenseProvider extends ChangeNotifier {
       locationId: locationId,
       createdAt: DateTime.now(),
       updatedAt: DateTime.now(),
+      type: type,
+      walletId: walletId,
     );
     final saved = await _service.addExpense(expense);
     _expenses.insert(0, saved);

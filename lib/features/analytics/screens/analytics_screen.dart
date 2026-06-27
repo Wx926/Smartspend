@@ -36,7 +36,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
     final bp = context.read<BudgetProvider>();
     await ep.load();
     bp.setMonth(_month);
-    await bp.load(ep.forMonth(_month.month, _month.year));
+    await bp.load(ep.expensesForMonth(_month.month, _month.year));
   }
 
   void _prevMonth() {
@@ -56,7 +56,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
     final bp = context.watch<BudgetProvider>();
     final ep = context.watch<ExpenseProvider>();
     final totalSpent =
-        ep.forMonth(_month.month, _month.year).fold(0.0, (s, e) => s + e.amount);
+        ep.expensesForMonth(_month.month, _month.year).fold(0.0, (s, e) => s + e.amount);
     final fmt = NumberFormat('#,##0', 'en_MY');
     final isCurrent = _month.year == DateTime.now().year &&
         _month.month == DateTime.now().month;
@@ -66,7 +66,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
       body: NestedScrollView(
         headerSliverBuilder: (_, __) => [
           SliverAppBar(
-            expandedHeight: 175,
+            expandedHeight: 215,
             pinned: true,
             backgroundColor: AppColors.primaryDark,
             leading: IconButton(
@@ -135,7 +135,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
           controller: _tabs,
           children: [
             _buildExpenses(bp, ep, fmt),
-            _buildIncome(),
+            _buildIncome(ep, fmt),
             _buildForecast(bp),
           ],
         ),
@@ -144,8 +144,9 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
   }
 
   Widget _buildExpenses(BudgetProvider bp, ExpenseProvider ep, NumberFormat fmt) {
-    final statuses = bp.statuses.where((s) => s.spent > 0).toList();
-    if (statuses.isEmpty) {
+    final records = ep.expensesForMonth(_month.month, _month.year);
+
+    if (records.isEmpty) {
       return const Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
         Icon(Icons.bar_chart, size: 56, color: AppColors.textSecondary),
         SizedBox(height: 12),
@@ -153,7 +154,25 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
       ]));
     }
 
-    final total = statuses.fold(0.0, (s, e) => s + e.spent);
+    final total = records.fold(0.0, (s, e) => s + e.amount);
+
+    // Group all expense records by categoryId regardless of budget
+    final byCategory = <String, double>{};
+    for (final r in records) {
+      byCategory[r.categoryId] = (byCategory[r.categoryId] ?? 0) + r.amount;
+    }
+    final sorted = byCategory.entries.toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+
+    final catMap = {for (final c in bp.categories) c.id: c};
+
+    const fallbackHexes = ['6C757D', 'ADB5BD', '868E96', '495057', 'CED4DA'];
+    Color colorFor(String catId, int i) {
+      final cat = catMap[catId];
+      return cat != null
+          ? AppColors.fromHex(cat.colorHex)
+          : AppColors.fromHex(fallbackHexes[i % fallbackHexes.length]);
+    }
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 80),
@@ -167,22 +186,23 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
                     _touchedIndex =
                         response?.touchedSection?.touchedSectionIndex ?? -1),
               ),
-              sections: statuses.asMap().entries.map((entry) {
+              sections: sorted.asMap().entries.map((entry) {
                 final i = entry.key;
-                final s = entry.value;
+                final e = entry.value;
                 final touched = i == _touchedIndex;
+                final color = colorFor(e.key, i);
                 return PieChartSectionData(
-                  value: s.spent,
-                  color: AppColors.fromHex(s.categoryColorHex),
+                  value: e.value,
+                  color: color,
                   radius: touched ? 72 : 58,
                   title: '',
                   badgeWidget: touched
                       ? Container(
                           padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
                           decoration: BoxDecoration(
-                              color: AppColors.fromHex(s.categoryColorHex),
+                              color: color,
                               borderRadius: BorderRadius.circular(6)),
-                          child: Text('RM ${fmt.format(s.spent)}',
+                          child: Text('RM ${fmt.format(e.value)}',
                               style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold)),
                         )
                       : null,
@@ -199,18 +219,21 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
           ]),
         ),
         const SizedBox(height: 20),
-        ...statuses.map((s) {
-          final pct = total > 0 ? s.spent / total * 100 : 0.0;
-          final color = AppColors.fromHex(s.categoryColorHex);
+        ...sorted.asMap().entries.map((entry) {
+          final i = entry.key;
+          final e = entry.value;
+          final cat = catMap[e.key];
+          final color = colorFor(e.key, i);
+          final pct = total > 0 ? e.value / total * 100 : 0.0;
           return Padding(
             padding: const EdgeInsets.only(bottom: 14),
             child: Row(children: [
               Container(width: 12, height: 12, decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
               const SizedBox(width: 10),
-              Expanded(child: Text(s.categoryName, style: const TextStyle(fontSize: 14))),
+              Expanded(child: Text(cat?.name ?? e.key, style: const TextStyle(fontSize: 14))),
               Text('${pct.toStringAsFixed(0)}%', style: const TextStyle(color: AppColors.textSecondary, fontSize: 13)),
               const SizedBox(width: 16),
-              Text('RM ${fmt.format(s.spent)}', style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+              Text('RM ${fmt.format(e.value)}', style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
             ]),
           );
         }),
@@ -218,13 +241,86 @@ class _AnalyticsScreenState extends State<AnalyticsScreen>
     );
   }
 
-  Widget _buildIncome() => const Center(
-    child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-      Icon(Icons.account_balance_wallet_outlined, size: 56, color: AppColors.textSecondary),
-      SizedBox(height: 12),
-      Text('Income tracking coming soon', style: TextStyle(color: AppColors.textSecondary, fontSize: 15)),
-    ]),
-  );
+  Widget _buildIncome(ExpenseProvider ep, NumberFormat fmt) {
+    final records = ep.incomeForMonth(_month.month, _month.year);
+
+    if (records.isEmpty) {
+      return const Center(
+        child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+          Icon(Icons.account_balance_wallet_outlined,
+              size: 56, color: AppColors.textSecondary),
+          SizedBox(height: 12),
+          Text('No income recorded this month',
+              style: TextStyle(color: AppColors.textSecondary, fontSize: 15)),
+          SizedBox(height: 6),
+          Text('Tap + Add Record and choose Income',
+              style: TextStyle(color: AppColors.textSecondary, fontSize: 13)),
+        ]),
+      );
+    }
+
+    final total = records.fold(0.0, (s, e) => s + e.amount);
+
+    // Group by category
+    final byCategory = <String, double>{};
+    for (final r in records) {
+      byCategory[r.categoryId] = (byCategory[r.categoryId] ?? 0) + r.amount;
+    }
+
+    // Income category lookup
+    final incomeCats = context.read<BudgetProvider>().incomeCategories;
+    final catMap = {for (final c in incomeCats) c.id: c};
+
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 80),
+      children: [
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: AppColors.budgetGreen.withValues(alpha: 0.08),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(
+                color: AppColors.budgetGreen.withValues(alpha: 0.3)),
+          ),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Text('Total Income',
+                style: TextStyle(color: AppColors.textSecondary, fontSize: 12)),
+            const SizedBox(height: 4),
+            Text('RM ${fmt.format(total)}',
+                style: const TextStyle(
+                    color: AppColors.budgetGreen,
+                    fontSize: 28,
+                    fontWeight: FontWeight.bold)),
+          ]),
+        ),
+        const SizedBox(height: 20),
+        ...byCategory.entries.map((entry) {
+          final cat = catMap[entry.key];
+          final pct = total > 0 ? entry.value / total * 100 : 0.0;
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 14),
+            child: Row(children: [
+              Text(cat?.icon ?? '💰',
+                  style: const TextStyle(fontSize: 20)),
+              const SizedBox(width: 10),
+              Expanded(
+                  child: Text(cat?.name ?? entry.key,
+                      style: const TextStyle(fontSize: 14))),
+              Text('${pct.toStringAsFixed(0)}%',
+                  style: const TextStyle(
+                      color: AppColors.textSecondary, fontSize: 13)),
+              const SizedBox(width: 16),
+              Text('+RM ${fmt.format(entry.value)}',
+                  style: const TextStyle(
+                      color: AppColors.budgetGreen,
+                      fontWeight: FontWeight.w600,
+                      fontSize: 13)),
+            ]),
+          );
+        }),
+      ],
+    );
+  }
 
   Widget _buildForecast(BudgetProvider bp) {
     if (bp.statuses.isEmpty) {

@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../home/screens/home_screen.dart';
-import '../../expenses/screens/expense_list_screen.dart';
+import '../../wallet/screens/wallet_screen.dart';
 import '../../ai_advice/screens/ai_advice_screen.dart';
 import '../../profile/screens/profile_screen.dart';
 import '../../expenses/screens/add_expense_screen.dart';
@@ -17,18 +17,19 @@ class MainShell extends StatefulWidget {
 class _MainShellState extends State<MainShell> {
   late int _currentIndex;
 
+  late final List<Widget> _screens;
+
   @override
   void initState() {
     super.initState();
     _currentIndex = widget.initialIndex;
+    _screens = [
+      const HomeScreen(),
+      const WalletScreen(),
+      AiAdviceScreen(onBack: () => setState(() => _currentIndex = 0)),
+      const ProfileScreen(),
+    ];
   }
-
-  final _screens = const [
-    HomeScreen(),
-    ExpenseListScreen(),
-    AiAdviceScreen(),
-    ProfileScreen(),
-  ];
 
   @override
   Widget build(BuildContext context) {
@@ -60,9 +61,9 @@ class _MainShellState extends State<MainShell> {
               onTap: () => setState(() => _currentIndex = 0),
             ),
             _NavItem(
-              icon: Icons.history_outlined,
-              activeIcon: Icons.history,
-              label: 'History',
+              icon: Icons.account_balance_wallet_outlined,
+              activeIcon: Icons.account_balance_wallet,
+              label: 'Wallet',
               index: 1,
               current: _currentIndex,
               onTap: () => setState(() => _currentIndex = 1),

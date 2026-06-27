@@ -36,8 +36,8 @@ class AppConstants {
 
   static const List<Map<String, String>> defaultIncomeCategories = [
     {'name': 'Salary', 'icon': '💼', 'color': '27AE60'},
-    {'name': 'Freelance', 'icon': '💻', 'color': '2980B9'},
+    {'name': 'Part-time Job', 'icon': '💻', 'color': '2980B9'},
     {'name': 'Investment', 'icon': '📈', 'color': 'F39C12'},
-    {'name': 'Others', 'icon': '💰', 'color': '8E44AD'},
+    {'name': 'Bonus', 'icon': '🎁', 'color': '8E44AD'},
   ];
 }

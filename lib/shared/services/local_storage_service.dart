@@ -7,6 +7,7 @@ import '../models/category_model.dart';
 import '../models/expense_model.dart';
 import '../models/location_model.dart';
 import '../models/alert_log_model.dart';
+import '../models/wallet_model.dart';
 
 /// Local on-device storage. No internet or login required.
 /// Data persists across app restarts via SharedPreferences.
@@ -19,6 +20,16 @@ class LocalStorageService {
   static const _keyLocations = 'ss_locations';
   static const _keyAlerts = 'ss_alerts';
   static const _keyDeviceId = 'ss_device_id';
+  static const _keyCustomCategories = 'ss_custom_categories';
+  static const _keyWallets = 'ss_wallets';
+
+  static final WalletModel _defaultWallet = WalletModel(
+    id: 'default_account',
+    name: 'Default Account',
+    icon: '💳',
+    colorHex: '3B82F6',
+    isDefault: true,
+  );
 
   SharedPreferences? _prefs;
   final _uuid = const Uuid();
@@ -33,8 +44,20 @@ class LocalStorageService {
 
   String get localUserId => _prefs?.getString(_keyDeviceId) ?? 'local_user';
 
-  // ── Categories (always from constants, no storage needed) ──────────────────
-  List<CategoryModel> getCategories({String type = 'expense'}) {
+  // ── Categories ─────────────────────────────────────────────────────────────
+  List<CategoryModel> _defaultCategories(String type) {
+    if (type == 'income') {
+      return AppConstants.defaultIncomeCategories
+          .map((c) => CategoryModel(
+                id: c['name']!.toLowerCase().replaceAll(' ', '_').replaceAll('-', '_'),
+                name: c['name']!,
+                icon: c['icon']!,
+                colorHex: c['color']!,
+                type: 'income',
+                isDefault: true,
+              ))
+          .toList();
+    }
     return AppConstants.defaultCategories
         .where((c) => c['type'] == type)
         .map((c) => CategoryModel(
@@ -45,6 +68,90 @@ class LocalStorageService {
               type: c['type']!,
             ))
         .toList();
+  }
+
+  List<CategoryModel> _loadCustomCategories() {
+    final raw = _prefs?.getString(_keyCustomCategories);
+    if (raw == null) return [];
+    final list = jsonDecode(raw) as List;
+    return list.map((e) => CategoryModel.fromJson(e as Map<String, dynamic>)).toList();
+  }
+
+  Future<void> _saveCustomCategories(List<CategoryModel> cats) async {
+    await _prefs?.setString(
+        _keyCustomCategories, jsonEncode(cats.map((c) => c.toJson()).toList()));
+  }
+
+  /// Returns defaults + any user-added custom categories for the given type.
+  List<CategoryModel> getCategories({String type = 'expense'}) {
+    final customs = _loadCustomCategories().where((c) => c.type == type).toList();
+    return [..._defaultCategories(type), ...customs];
+  }
+
+  Future<void> saveCategory(CategoryModel cat) async {
+    final all = _loadCustomCategories();
+    all.removeWhere((c) => c.id == cat.id);
+    all.add(cat);
+    await _saveCustomCategories(all);
+  }
+
+  Future<void> deleteCategory(String id) async {
+    final all = _loadCustomCategories()..removeWhere((c) => c.id == id);
+    await _saveCustomCategories(all);
+  }
+
+  /// Bulk-updates every saved record whose categoryId matches [fromId] to [toId].
+  Future<void> reassignCategory(String fromId, String toId) async {
+    final all = _loadExpenses();
+    bool changed = false;
+    for (int i = 0; i < all.length; i++) {
+      if (all[i].categoryId == fromId) {
+        all[i] = all[i].copyWith(categoryId: toId);
+        changed = true;
+      }
+    }
+    if (changed) await _saveExpenses(all);
+  }
+
+  // ── Wallets ────────────────────────────────────────────────────────────────
+  List<WalletModel> _loadCustomWallets() {
+    final raw = _prefs?.getString(_keyWallets);
+    if (raw == null) return [];
+    final list = jsonDecode(raw) as List;
+    return list.map((e) => WalletModel.fromJson(e as Map<String, dynamic>)).toList();
+  }
+
+  Future<void> _saveCustomWallets(List<WalletModel> wallets) async {
+    await _prefs?.setString(
+        _keyWallets, jsonEncode(wallets.map((w) => w.toJson()).toList()));
+  }
+
+  /// Returns [Default Account] + any user-added wallets.
+  List<WalletModel> getWallets() => [_defaultWallet, ..._loadCustomWallets()];
+
+  Future<void> saveWallet(WalletModel wallet) async {
+    final all = _loadCustomWallets();
+    all.removeWhere((w) => w.id == wallet.id);
+    all.add(wallet);
+    await _saveCustomWallets(all);
+  }
+
+  Future<void> deleteWallet(String id) async {
+    final all = _loadCustomWallets()..removeWhere((w) => w.id == id);
+    await _saveCustomWallets(all);
+  }
+
+  /// Moves all records from [fromId] wallet to [toId] wallet.
+  Future<void> reassignWallet(String fromId, String toId) async {
+    final all = _loadExpenses();
+    bool changed = false;
+    for (int i = 0; i < all.length; i++) {
+      if (all[i].walletId == fromId) {
+        all[i] = all[i].copyWith(walletId: toId);
+        changed = true;
+      }
+    }
+    if (changed) await _saveExpenses(all);
   }
 
   // ── Budgets ────────────────────────────────────────────────────────────────

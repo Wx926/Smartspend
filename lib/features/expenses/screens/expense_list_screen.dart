@@ -38,7 +38,8 @@ class _ExpenseListScreenState extends State<ExpenseListScreen> {
     final ep = context.watch<ExpenseProvider>();
     final bp = context.watch<BudgetProvider>();
     final cats = bp.categories;
-    final catMap = {for (final c in cats) c.id: c};
+    final allCats = [...bp.categories, ...bp.incomeCategories];
+    final catMap = {for (final c in allCats) c.id: c};
 
     // Filter
     var expenses = ep.expenses;
@@ -241,9 +242,13 @@ class _ExpenseListScreenState extends State<ExpenseListScreen> {
                                                 fontSize: 12),
                                           ),
                                           trailing: Text(
-                                            '-RM ${e.amount.toStringAsFixed(2)}',
-                                            style: const TextStyle(
-                                                color: AppColors.budgetRed,
+                                            e.type == 'income'
+                                                ? '+RM ${e.amount.toStringAsFixed(2)}'
+                                                : '-RM ${e.amount.toStringAsFixed(2)}',
+                                            style: TextStyle(
+                                                color: e.type == 'income'
+                                                    ? AppColors.budgetGreen
+                                                    : AppColors.budgetRed,
                                                 fontWeight: FontWeight.bold,
                                                 fontSize: 14),
                                           ),
