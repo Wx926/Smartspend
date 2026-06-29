@@ -123,6 +123,18 @@ CREATE TABLE savings_goals (
   created_at     TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- ─── Warranties (FR 4.11 – 4.15) ────────────────────────────────────────────
+CREATE TABLE warranties (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id         UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  expense_id      UUID REFERENCES expenses(id) ON DELETE SET NULL,
+  vendor_name     TEXT,
+  duration_months INTEGER,
+  expiry_date     DATE,
+  status          TEXT CHECK (status IN ('green', 'yellow', 'red', 'unknown')),
+  created_at      TIMESTAMPTZ DEFAULT NOW()
+);
+
 -- ─── Helper RPC: increment visit count ───────────────────────────────────────
 CREATE OR REPLACE FUNCTION increment_visit_count(loc_id UUID)
 RETURNS VOID AS $$
@@ -162,3 +174,7 @@ CREATE POLICY "ai_insights_own" ON ai_insights FOR ALL USING (auth.uid() = user_
 
 -- Savings goals: users own their data
 CREATE POLICY "savings_goals_own" ON savings_goals FOR ALL USING (auth.uid() = user_id);
+
+-- Warranties: users own their data
+ALTER TABLE warranties ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "warranties_own" ON warranties FOR ALL USING (auth.uid() = user_id);
