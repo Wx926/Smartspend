@@ -48,6 +48,17 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
     _selectedCategoryId = widget.result.suggestedCategoryId;
     _selectedCategoryName = widget.result.suggestedCategoryName ?? 'Others';
 
+    // If backend couldn't resolve category ID, match by name once categories load
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_selectedCategoryId == null && mounted) {
+        final cats = context.read<BudgetProvider>().categories;
+        final match = cats
+            .where((c) => c.name.toLowerCase() == _selectedCategoryName.toLowerCase())
+            .firstOrNull;
+        if (match != null) setState(() => _selectedCategoryId = match.id);
+      }
+    });
+
     if (widget.result.lineItems.isNotEmpty) {
       _items = widget.result.lineItems
           .map((li) => _EditableItem(
