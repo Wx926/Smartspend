@@ -7,6 +7,7 @@ import 'package:image_picker/image_picker.dart';
 import '../../../shared/theme/app_colors.dart';
 import '../../../shared/models/expense_model.dart';
 import '../../../shared/models/category_model.dart';
+import '../../../shared/models/budget_model.dart';
 import '../../../shared/services/supabase_service.dart';
 import '../../../features/auth/providers/auth_provider.dart';
 import '../../../features/budget/providers/budget_provider.dart';
@@ -24,8 +25,11 @@ class ReceiptReviewScreen extends StatefulWidget {
 
 class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
   late final TextEditingController _vendorCtrl;
+  late final TextEditingController _notesCtrl;
   late DateTime _date;
   late List<_EditableItem> _items;
+  String? _selectedCategoryId;
+  String _selectedCategoryName = 'Others';
   bool _saving = false;
   int _selectedTab = 0;
 
@@ -37,17 +41,19 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
   void initState() {
     super.initState();
     _vendorCtrl = TextEditingController(text: widget.result.vendorName ?? '');
+    _notesCtrl = TextEditingController();
     _date = widget.result.date != null
         ? DateTime.tryParse(widget.result.date!) ?? DateTime.now()
         : DateTime.now();
+    _selectedCategoryId = widget.result.suggestedCategoryId;
+    _selectedCategoryName = widget.result.suggestedCategoryName ?? 'Others';
 
     if (widget.result.lineItems.isNotEmpty) {
       _items = widget.result.lineItems
           .map((li) => _EditableItem(
                 nameCtrl: TextEditingController(text: li.itemName),
-                priceCtrl: TextEditingController(text: li.price.toStringAsFixed(2)),
-                categoryId: li.categoryId,
-                categoryName: li.categoryName,
+                priceCtrl: TextEditingController(
+                    text: li.price.toStringAsFixed(2)),
               ))
           .toList();
     } else {
@@ -57,8 +63,6 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
               text: widget.result.vendorName ?? 'Receipt'),
           priceCtrl: TextEditingController(
               text: (widget.result.amount ?? 0.0).toStringAsFixed(2)),
-          categoryId: widget.result.suggestedCategoryId,
-          categoryName: widget.result.suggestedCategoryName ?? 'Others',
         ),
       ];
     }
@@ -67,12 +71,16 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
   @override
   void dispose() {
     _vendorCtrl.dispose();
+    _notesCtrl.dispose();
     for (final item in _items) {
       item.nameCtrl.dispose();
       item.priceCtrl.dispose();
     }
     super.dispose();
   }
+
+  double get _total =>
+      _items.fold(0.0, (s, i) => s + (double.tryParse(i.priceCtrl.text) ?? 0));
 
   Future<void> _save() async {
     setState(() => _saving = true);
@@ -84,24 +92,27 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
       final now = DateTime.now();
       String? firstExpenseId;
 
+      final catId = _selectedCategoryId ??
+          categories
+              .firstWhere((c) => c.name == 'Others',
+                  orElse: () => categories.first)
+              .id;
+
+      final notes = _notesCtrl.text.trim();
+
       for (final item in _items) {
         final price = double.tryParse(item.priceCtrl.text) ?? 0;
         if (price <= 0) continue;
 
-        final catId = item.categoryId ??
-            categories
-                .firstWhere(
-                  (c) => c.name == 'Others',
-                  orElse: () => categories.first,
-                )
-                .id;
+        final desc = [item.nameCtrl.text.trim(), if (notes.isNotEmpty) notes]
+            .join(' · ');
 
         final expense = ExpenseModel(
           id: uuid.v4(),
           userId: uid,
           categoryId: catId,
           amount: price,
-          description: item.nameCtrl.text.trim(),
+          description: desc,
           date: _date,
           createdAt: now,
           updatedAt: now,
@@ -172,6 +183,18 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
   @override
   Widget build(BuildContext context) {
     final categories = context.watch<BudgetProvider>().categories;
+    final statuses = context.watch<BudgetProvider>().statuses;
+
+    // Budget remaining for selected category
+    BudgetStatus? budgetStatus;
+    if (_selectedCategoryId != null) {
+      budgetStatus = statuses
+          .where((s) => s.budget.categoryId == _selectedCategoryId)
+          .firstOrNull;
+    }
+    final remainingAfter = budgetStatus != null
+        ? (budgetStatus.remaining - _total).clamp(0.0, double.infinity)
+        : null;
 
     return Scaffold(
       backgroundColor: const Color(0xFFF0F4F8),
@@ -215,24 +238,19 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
                       padding: const EdgeInsets.symmetric(
                           horizontal: 14, vertical: 7),
                       decoration: BoxDecoration(
-                        color: sel
-                            ? const Color(0xFF6C3483)
-                            : Colors.transparent,
+                        color: sel ? const Color(0xFF6C3483) : Colors.transparent,
                         borderRadius: BorderRadius.circular(20),
                         border: sel
                             ? null
                             : Border.all(color: const Color(0xFFDDDDDD)),
                       ),
-                      child: Text(
-                        _tabs[i],
-                        style: TextStyle(
-                          color: sel ? Colors.white : const Color(0xFF555555),
-                          fontSize: 13,
-                          fontWeight: sel
-                              ? FontWeight.w600
-                              : FontWeight.normal,
-                        ),
-                      ),
+                      child: Text(_tabs[i],
+                          style: TextStyle(
+                            color: sel ? Colors.white : const Color(0xFF555555),
+                            fontSize: 13,
+                            fontWeight:
+                                sel ? FontWeight.w600 : FontWeight.normal,
+                          )),
                     ),
                   );
                 }),
@@ -245,7 +263,7 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
             child: ListView(
               padding: const EdgeInsets.all(16),
               children: [
-                // ── Receipt Image card ───────────────────────────────
+                // ── Receipt Image card ─────────────────────────────────
                 _card(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -312,7 +330,8 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
                               shape: BoxShape.circle),
                         ),
                         const SizedBox(width: 6),
-                        const Text('AI extraction complete · 97% confidence',
+                        const Text(
+                            'AI extraction complete · 97% confidence',
                             style: TextStyle(
                                 color: Color(0xFF444444), fontSize: 12)),
                       ]),
@@ -342,14 +361,15 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
                                 fontWeight: FontWeight.w600, fontSize: 15)),
                       ]),
                       const SizedBox(height: 14),
-                      _extractedRow('Merchant',
+                      _extractedRow(
+                          'Merchant',
                           _vendorCtrl.text.isEmpty ? '—' : _vendorCtrl.text,
                           _vendorCtrl.text.isNotEmpty),
                       _extractedRow('Date',
                           DateFormat('dd MMM yyyy').format(_date), true),
                       _extractedRow(
                           'Category',
-                          '${_categoryEmoji(widget.result.suggestedCategoryName ?? 'Others')} ${widget.result.suggestedCategoryName ?? 'Others'}',
+                          '${_categoryEmoji(_selectedCategoryName)} $_selectedCategoryName',
                           true),
                       _extractedRow(
                           'Total',
@@ -361,7 +381,7 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
 
                 const SizedBox(height: 12),
 
-                // ── Line Items ───────────────────────────────────────
+                // ── Line Items table ─────────────────────────────────
                 _card(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -381,24 +401,24 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
                               padding: const EdgeInsets.symmetric(
                                   horizontal: 8, vertical: 0),
                               minimumSize: Size.zero,
-                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                              tapTargetSize:
+                                  MaterialTapTargetSize.shrinkWrap,
                             ),
                             onPressed: () => setState(() => _items.add(
                                 _EditableItem(
                                   nameCtrl: TextEditingController(),
                                   priceCtrl: TextEditingController(),
-                                  categoryId: null,
-                                  categoryName: 'Others',
                                 ))),
                           ),
                         ],
                       ),
-                      // Table header
+                      // Header
                       Container(
                         padding: const EdgeInsets.symmetric(vertical: 8),
                         decoration: const BoxDecoration(
                             border: Border(
-                                bottom: BorderSide(color: Color(0xFFEEEEEE)))),
+                                bottom:
+                                    BorderSide(color: Color(0xFFEEEEEE)))),
                         child: const Row(children: [
                           Expanded(
                             flex: 3,
@@ -415,30 +435,232 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
                                   fontSize: 11,
                                   fontWeight: FontWeight.w600,
                                   letterSpacing: 0.5)),
-                          SizedBox(width: 32),
+                          SizedBox(width: 28),
                         ]),
                       ),
-                      // Rows
+                      // Item rows
                       for (int i = 0; i < _items.length; i++) ...[
-                        _TableRow(
+                        _ItemRow(
                           item: _items[i],
-                          categories: categories,
                           onDelete: _items.length > 1
-                              ? () => setState(() => _items.removeAt(i))
+                              ? () => setState(() {
+                                    _items[i].nameCtrl.dispose();
+                                    _items[i].priceCtrl.dispose();
+                                    _items.removeAt(i);
+                                  })
                               : null,
-                          onCategoryChanged: (cat) => setState(() {
-                            _items[i].categoryId = cat.id;
-                            _items[i].categoryName = cat.name;
-                          }),
+                          onChanged: () => setState(() {}),
                         ),
                         if (i < _items.length - 1)
                           const Divider(height: 1, color: Color(0xFFF0F0F0)),
                       ],
+                      // Total row
+                      Container(
+                        padding: const EdgeInsets.symmetric(vertical: 10),
+                        decoration: const BoxDecoration(
+                            border: Border(
+                                top: BorderSide(color: Color(0xFFEEEEEE)))),
+                        child: Row(children: [
+                          const Expanded(
+                            flex: 3,
+                            child: Text('Total',
+                                style: TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 14)),
+                          ),
+                          Text(
+                            'RM ${_total.toStringAsFixed(2)}',
+                            style: const TextStyle(
+                                fontWeight: FontWeight.bold,
+                                fontSize: 14,
+                                color: Color(0xFF1A5276)),
+                          ),
+                          const SizedBox(width: 28),
+                        ]),
+                      ),
                     ],
                   ),
                 ),
 
-                // ── Warranty card ────────────────────────────────────
+                const SizedBox(height: 12),
+
+                // ── Merchant name ────────────────────────────────────
+                _card(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('Merchant name',
+                          style: TextStyle(
+                              fontWeight: FontWeight.w600, fontSize: 14)),
+                      const SizedBox(height: 8),
+                      TextFormField(
+                        controller: _vendorCtrl,
+                        style: const TextStyle(fontSize: 14),
+                        decoration: InputDecoration(
+                          hintText: 'e.g. Jaya Grocer, Mid Valley',
+                          hintStyle: const TextStyle(
+                              color: Color(0xFFAAAAAA), fontSize: 13),
+                          filled: true,
+                          fillColor: const Color(0xFFF8F9FA),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(10),
+                            borderSide: const BorderSide(
+                                color: Color(0xFFE0E0E0)),
+                          ),
+                          enabledBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(10),
+                            borderSide: const BorderSide(
+                                color: Color(0xFFE0E0E0)),
+                          ),
+                          contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 12, vertical: 10),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+
+                const SizedBox(height: 12),
+
+                // ── Category chips ───────────────────────────────────
+                _card(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('Category',
+                          style: TextStyle(
+                              fontWeight: FontWeight.w600, fontSize: 14)),
+                      const SizedBox(height: 10),
+                      if (categories.isEmpty)
+                        const Text('Log in to see categories',
+                            style: TextStyle(
+                                color: Color(0xFF888888), fontSize: 13))
+                      else
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: categories.map((cat) {
+                            final selected = cat.id == _selectedCategoryId;
+                            final emoji = _categoryEmoji(cat.name);
+                            return GestureDetector(
+                              onTap: () => setState(() {
+                                _selectedCategoryId = cat.id;
+                                _selectedCategoryName = cat.name;
+                              }),
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 14, vertical: 8),
+                                decoration: BoxDecoration(
+                                  color: selected
+                                      ? const Color(0xFF1B4332)
+                                      : Colors.white,
+                                  borderRadius: BorderRadius.circular(20),
+                                  border: Border.all(
+                                    color: selected
+                                        ? const Color(0xFF1B4332)
+                                        : const Color(0xFFDDDDDD),
+                                  ),
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Text(emoji,
+                                        style: const TextStyle(fontSize: 14)),
+                                    const SizedBox(width: 6),
+                                    Text(cat.name,
+                                        style: TextStyle(
+                                          color: selected
+                                              ? Colors.white
+                                              : const Color(0xFF333333),
+                                          fontSize: 13,
+                                          fontWeight: selected
+                                              ? FontWeight.w600
+                                              : FontWeight.normal,
+                                        )),
+                                  ],
+                                ),
+                              ),
+                            );
+                          }).toList(),
+                        ),
+                    ],
+                  ),
+                ),
+
+                const SizedBox(height: 12),
+
+                // ── Notes ────────────────────────────────────────────
+                _card(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Row(children: [
+                        Text('Notes',
+                            style: TextStyle(
+                                fontWeight: FontWeight.w600, fontSize: 14)),
+                        SizedBox(width: 4),
+                        Text('(optional)',
+                            style: TextStyle(
+                                color: Color(0xFF888888), fontSize: 12)),
+                      ]),
+                      const SizedBox(height: 8),
+                      TextFormField(
+                        controller: _notesCtrl,
+                        style: const TextStyle(fontSize: 14),
+                        decoration: InputDecoration(
+                          hintText: 'e.g. Weekly groceries',
+                          hintStyle: const TextStyle(
+                              color: Color(0xFFAAAAAA), fontSize: 13),
+                          filled: true,
+                          fillColor: const Color(0xFFF8F9FA),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(10),
+                            borderSide: const BorderSide(
+                                color: Color(0xFFE0E0E0)),
+                          ),
+                          enabledBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(10),
+                            borderSide: const BorderSide(
+                                color: Color(0xFFE0E0E0)),
+                          ),
+                          contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 12, vertical: 10),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+
+                // ── Budget remaining ─────────────────────────────────
+                if (remainingAfter != null) ...[
+                  const SizedBox(height: 12),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 4),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '$_selectedCategoryName budget after saving',
+                          style: const TextStyle(
+                              color: Color(0xFF555555), fontSize: 13),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          'RM ${remainingAfter.toStringAsFixed(2)} remaining',
+                          style: TextStyle(
+                            color: remainingAfter < 50
+                                ? AppColors.budgetRed
+                                : const Color(0xFF27AE60),
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+
+                // ── Warranty card ─────────────────────────────────────
                 if (widget.result.warranty != null) ...[
                   const SizedBox(height: 12),
                   _warrantyCard(widget.result.warranty!),
@@ -446,11 +668,11 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
 
                 const SizedBox(height: 24),
 
-                // ── Save button ──────────────────────────────────────
+                // ── Save button ───────────────────────────────────────
                 ElevatedButton(
                   onPressed: _saving ? null : _save,
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF1A5276),
+                    backgroundColor: const Color(0xFF1B4332),
                     foregroundColor: Colors.white,
                     minimumSize: const Size.fromHeight(52),
                     shape: RoundedRectangleBorder(
@@ -463,12 +685,11 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
                           width: 20,
                           child: CircularProgressIndicator(
                               strokeWidth: 2, color: Colors.white))
-                      : Text(
-                          'Save ${_items.length} Expense${_items.length != 1 ? 's' : ''}',
-                          style: const TextStyle(
+                      : const Text('Confirm & Save Expense',
+                          style: TextStyle(
                               fontSize: 16, fontWeight: FontWeight.w600)),
                 ),
-                const SizedBox(height: 24),
+                const SizedBox(height: 32),
               ],
             ),
           ),
@@ -501,8 +722,7 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
                     fontWeight: FontWeight.w600, fontSize: 13)),
           ),
           Container(
-            padding:
-                const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
             decoration: BoxDecoration(
               color: high
                   ? const Color(0xFFE8F5E9)
@@ -524,174 +744,123 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
       );
 
   Widget _warrantyCard(WarrantyInfo w) {
-    Color bg;
-    Color fg;
+    Color bg, fg;
     String statusLabel;
     IconData icon;
-
     switch (w.status) {
       case 'green':
-        bg = AppColors.alertGreenBg;
-        fg = AppColors.budgetGreen;
-        statusLabel = 'Valid';
-        icon = Icons.verified_rounded;
-        break;
+        bg = AppColors.alertGreenBg; fg = AppColors.budgetGreen;
+        statusLabel = 'Valid'; icon = Icons.verified_rounded; break;
       case 'yellow':
-        bg = AppColors.alertYellowBg;
-        fg = AppColors.budgetYellow;
-        statusLabel = 'Expiring Soon';
-        icon = Icons.warning_amber_rounded;
-        break;
+        bg = AppColors.alertYellowBg; fg = AppColors.budgetYellow;
+        statusLabel = 'Expiring Soon'; icon = Icons.warning_amber_rounded; break;
       case 'red':
-        bg = AppColors.alertRedBg;
-        fg = AppColors.budgetRed;
-        statusLabel = 'Expired';
-        icon = Icons.cancel_rounded;
-        break;
+        bg = AppColors.alertRedBg; fg = AppColors.budgetRed;
+        statusLabel = 'Expired'; icon = Icons.cancel_rounded; break;
       default:
-        bg = AppColors.primarySurface;
-        fg = AppColors.primary;
-        statusLabel = 'Warranty Detected';
-        icon = Icons.shield_rounded;
+        bg = AppColors.primarySurface; fg = AppColors.primary;
+        statusLabel = 'Warranty Detected'; icon = Icons.shield_rounded;
     }
-
     return Container(
-      decoration: BoxDecoration(
-          color: bg, borderRadius: BorderRadius.circular(12)),
+      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(12)),
       padding: const EdgeInsets.all(16),
       child: Row(children: [
         Icon(icon, color: fg, size: 30),
         const SizedBox(width: 12),
         Expanded(
-          child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('Warranty $statusLabel',
-                    style: TextStyle(
-                        fontWeight: FontWeight.w700,
-                        color: fg,
-                        fontSize: 14)),
-                if (w.durationMonths != null)
-                  Text('Duration: ${w.durationMonths} month(s)',
-                      style: TextStyle(color: fg, fontSize: 12)),
-                if (w.expiryDate != null)
-                  Text('Expires: ${w.expiryDate}',
-                      style: TextStyle(color: fg, fontSize: 12)),
-                if (w.daysRemaining != null && w.daysRemaining! >= 0)
-                  Text('${w.daysRemaining} day(s) remaining',
-                      style: TextStyle(color: fg, fontSize: 12)),
-              ]),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('Warranty $statusLabel',
+                style: TextStyle(fontWeight: FontWeight.w700, color: fg, fontSize: 14)),
+            if (w.durationMonths != null)
+              Text('Duration: ${w.durationMonths} month(s)',
+                  style: TextStyle(color: fg, fontSize: 12)),
+            if (w.expiryDate != null)
+              Text('Expires: ${w.expiryDate}',
+                  style: TextStyle(color: fg, fontSize: 12)),
+            if (w.daysRemaining != null && w.daysRemaining! >= 0)
+              Text('${w.daysRemaining} day(s) remaining',
+                  style: TextStyle(color: fg, fontSize: 12)),
+          ]),
         ),
       ]),
     );
   }
 }
 
-// ── Data class ─────────────────────────────────────────────────────────────────
+// ── Models ─────────────────────────────────────────────────────────────────────
 
 class _EditableItem {
   TextEditingController nameCtrl;
   TextEditingController priceCtrl;
-  String? categoryId;
-  String categoryName;
 
-  _EditableItem({
-    required this.nameCtrl,
-    required this.priceCtrl,
-    required this.categoryId,
-    required this.categoryName,
-  });
+  _EditableItem({required this.nameCtrl, required this.priceCtrl});
 }
 
-// ── Table row widget ────────────────────────────────────────────────────────────
+// ── Item row ───────────────────────────────────────────────────────────────────
 
-class _TableRow extends StatelessWidget {
+class _ItemRow extends StatelessWidget {
   final _EditableItem item;
-  final List<CategoryModel> categories;
   final VoidCallback? onDelete;
-  final ValueChanged<CategoryModel> onCategoryChanged;
+  final VoidCallback onChanged;
 
-  const _TableRow({
+  const _ItemRow({
     required this.item,
-    required this.categories,
     required this.onDelete,
-    required this.onCategoryChanged,
+    required this.onChanged,
   });
 
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 10),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(children: [
-            Expanded(
-              flex: 3,
-              child: TextFormField(
-                controller: item.nameCtrl,
-                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
-                decoration: const InputDecoration(
-                  isDense: true,
-                  contentPadding:
-                      EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-                  border: OutlineInputBorder(),
-                  hintText: 'Item name',
-                ),
-              ),
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Row(children: [
+        Expanded(
+          flex: 3,
+          child: TextFormField(
+            controller: item.nameCtrl,
+            onChanged: (_) => onChanged(),
+            style: const TextStyle(fontSize: 13),
+            decoration: const InputDecoration(
+              isDense: true,
+              contentPadding:
+                  EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+              border: OutlineInputBorder(),
+              hintText: 'Item name',
             ),
-            const SizedBox(width: 8),
-            Expanded(
-              flex: 2,
-              child: TextFormField(
-                controller: item.priceCtrl,
-                keyboardType:
-                    const TextInputType.numberWithOptions(decimal: true),
-                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
-                decoration: const InputDecoration(
-                  isDense: true,
-                  contentPadding:
-                      EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-                  border: OutlineInputBorder(),
-                  prefixText: 'RM ',
-                  prefixStyle: TextStyle(fontSize: 12),
-                ),
-              ),
+          ),
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          flex: 2,
+          child: TextFormField(
+            controller: item.priceCtrl,
+            onChanged: (_) => onChanged(),
+            keyboardType:
+                const TextInputType.numberWithOptions(decimal: true),
+            style: const TextStyle(
+                fontSize: 13, fontWeight: FontWeight.w600),
+            decoration: const InputDecoration(
+              isDense: true,
+              contentPadding:
+                  EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+              border: OutlineInputBorder(),
+              prefixText: 'RM ',
+              prefixStyle: TextStyle(fontSize: 12),
             ),
-            if (onDelete != null) ...[
-              const SizedBox(width: 4),
-              IconButton(
-                icon: const Icon(Icons.remove_circle_outline,
-                    color: Color(0xFFE74C3C), size: 20),
-                onPressed: onDelete,
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(),
-              ),
-            ] else
-              const SizedBox(width: 32),
-          ]),
-          if (categories.isNotEmpty) ...[
-            const SizedBox(height: 6),
-            DropdownButtonFormField<CategoryModel>(
-              value: categories.where((c) => c.id == item.categoryId).firstOrNull,
-              decoration: const InputDecoration(
-                labelText: 'Category',
-                isDense: true,
-                contentPadding:
-                    EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-                border: OutlineInputBorder(),
-              ),
-              style: const TextStyle(fontSize: 12, color: Colors.black87),
-              items: categories
-                  .map((c) => DropdownMenuItem(value: c, child: Text(c.name)))
-                  .toList(),
-              onChanged: (cat) {
-                if (cat != null) onCategoryChanged(cat);
-              },
-            ),
-          ],
-        ],
-      ),
+          ),
+        ),
+        const SizedBox(width: 4),
+        SizedBox(
+          width: 24,
+          child: onDelete != null
+              ? GestureDetector(
+                  onTap: onDelete,
+                  child: const Icon(Icons.remove_circle_outline,
+                      color: Color(0xFFE74C3C), size: 20),
+                )
+              : const SizedBox(),
+        ),
+      ]),
     );
   }
 }
