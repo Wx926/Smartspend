@@ -15,6 +15,9 @@ CATEGORY_KEYWORDS: dict[str, list[str]] = {
         "restaurant", "cafe", "kopitiam", "mamak", "nasi", "food",
         "mcdonald", "kfc", "starbucks", "pizza", "burger", "char",
         "kopi", "makan", "lunch", "dinner", "breakfast", "bakery",
+        "teh", "tarik", "roti", "canai", "lemak", "mee", "laksa",
+        "curry", "rice", "ayam", "ikan", "sup", "bihun", "kuey",
+        "dim sum", "wonton", "sushi", "tom yam", "satay", "rendang",
     ],
     "Transport": [
         "grab", "petrol", "shell", "petronas", "caltex", "parking",

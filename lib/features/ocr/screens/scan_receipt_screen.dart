@@ -25,7 +25,7 @@ class _ScanReceiptScreenState extends State<ScanReceiptScreen> {
       Navigator.push(
         context,
         MaterialPageRoute(
-          builder: (_) => ReceiptReviewScreen(result: result),
+          builder: (_) => ReceiptReviewScreen(result: result, imageFile: file),
         ),
       );
     } on OcrApiException catch (e) {

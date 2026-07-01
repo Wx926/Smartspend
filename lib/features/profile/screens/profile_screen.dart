@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../../features/auth/providers/auth_provider.dart';
+import '../../../shared/services/supabase_service.dart';
 import '../../../shared/theme/app_colors.dart';
+import '../../ocr/screens/warranty_records_screen.dart';
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
@@ -13,6 +15,26 @@ class ProfileScreen extends StatefulWidget {
 class _ProfileScreenState extends State<ProfileScreen> {
   bool _locationAlerts = true;
   bool _pushNotifications = true;
+  int _warrantyCount = 0;
+  int _expiringCount = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadWarranties();
+  }
+
+  Future<void> _loadWarranties() async {
+    try {
+      final data = await SupabaseService.instance.getWarranties();
+      if (mounted) {
+        setState(() {
+          _warrantyCount = data.length;
+          _expiringCount = data.where((w) => w['status'] == 'yellow').length;
+        });
+      }
+    } catch (_) {}
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -150,8 +172,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
               iconColor: const Color(0xFF3B82F6),
               iconBg: const Color(0xFFEFF6FF),
               title: 'Warranty records',
-              subtitle: '4 items · 1 expiring soon',
-              onTap: () {},
+              subtitle: _warrantyCount == 0
+                  ? 'No warranties recorded'
+                  : '$_warrantyCount item${_warrantyCount != 1 ? 's' : ''}'
+                    '${_expiringCount > 0 ? ' · $_expiringCount expiring soon' : ''}',
+              onTap: () => Navigator.push(context,
+                  MaterialPageRoute(
+                      builder: (_) => const WarrantyRecordsScreen())),
             ),
           ]),
 

@@ -32,10 +32,11 @@ DATE_PATTERNS = [
     r"(\d{4}[\/\-]\d{1,2}[\/\-]\d{1,2})",     # 2026-06-27
 ]
 
-# FR 4.6: matches "Item Name    5.00" or "Item Name  RM5.00" or "Item  $5.00" (2+ spaces before price)
+# FR 4.6: matches "Item Name  5.00" or "Item Name RM5.00" etc.
+# Uses \s+ (1+ spaces) because Tesseract collapses multiple spaces into one
 _CURRENCY = r"(?:RM|MYR|USD|SGD|GBP|\$|£|€|¥)?\s*"
 LINE_ITEM_PATTERN = re.compile(
-    rf"^([\w][\w\s\-&'\/\(\)]*?)\s{{2,}}{_CURRENCY}(\d+[.,]\d{{2}})\s*$",
+    rf"^([\w][\w\s\-&'\/\(\)]*?)\s+{_CURRENCY}(\d+[.,]\d{{2}})\s*$",
     re.IGNORECASE,
 )
 

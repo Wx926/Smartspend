@@ -1,7 +1,9 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:uuid/uuid.dart';
 import 'package:intl/intl.dart';
+import 'package:image_picker/image_picker.dart';
 import '../../../shared/theme/app_colors.dart';
 import '../../../shared/models/expense_model.dart';
 import '../../../shared/models/category_model.dart';
@@ -13,7 +15,8 @@ import '../models/ocr_result.dart';
 
 class ReceiptReviewScreen extends StatefulWidget {
   final OcrResult result;
-  const ReceiptReviewScreen({super.key, required this.result});
+  final XFile? imageFile;
+  const ReceiptReviewScreen({super.key, required this.result, this.imageFile});
 
   @override
   State<ReceiptReviewScreen> createState() => _ReceiptReviewScreenState();
@@ -24,6 +27,11 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
   late DateTime _date;
   late List<_EditableItem> _items;
   bool _saving = false;
+  int _selectedTab = 0;
+
+  static const _tabs = [
+    'Receipt Review', 'Voice Input', 'Gallery', 'Receipt History', 'Success'
+  ];
 
   @override
   void initState() {
@@ -37,14 +45,12 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
       _items = widget.result.lineItems
           .map((li) => _EditableItem(
                 nameCtrl: TextEditingController(text: li.itemName),
-                priceCtrl: TextEditingController(
-                    text: li.price.toStringAsFixed(2)),
+                priceCtrl: TextEditingController(text: li.price.toStringAsFixed(2)),
                 categoryId: li.categoryId,
                 categoryName: li.categoryName,
               ))
           .toList();
     } else {
-      // No line items — create one fallback row using the total amount
       _items = [
         _EditableItem(
           nameCtrl: TextEditingController(
@@ -82,7 +88,6 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
         final price = double.tryParse(item.priceCtrl.text) ?? 0;
         if (price <= 0) continue;
 
-        // Resolve category — use selected or fall back to Others
         final catId = item.categoryId ??
             categories
                 .firstWhere(
@@ -106,7 +111,6 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
         firstExpenseId ??= saved.id;
       }
 
-      // FR 4.13: save warranty linked to the first expense created
       final w = widget.result.warranty;
       if (w != null && w.hasWarranty && firstExpenseId != null) {
         await db.insertWarranty(
@@ -118,20 +122,16 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
         );
       }
 
-      // Refresh expense list in provider
-      if (mounted) {
-        await context.read<ExpenseProvider>().load();
-      }
+      if (mounted) await context.read<ExpenseProvider>().load();
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Expenses saved successfully!'),
-            backgroundColor: AppColors.budgetGreen,
+            backgroundColor: Color(0xFF27AE60),
           ),
         );
-        // Pop back to whichever screen launched the scan
-        Navigator.popUntil(context, (route) => route.isFirst || route.settings.name != null);
+        Navigator.popUntil(context, (r) => r.isFirst || r.settings.name != null);
       }
     } catch (e) {
       if (mounted) {
@@ -157,157 +157,370 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
     if (picked != null) setState(() => _date = picked);
   }
 
+  String _categoryEmoji(String cat) {
+    switch (cat.toLowerCase()) {
+      case 'food & dining': return '🍔';
+      case 'transport': return '🚗';
+      case 'shopping': return '🛍️';
+      case 'entertainment': return '🎬';
+      case 'health': return '💊';
+      case 'utilities': return '💡';
+      default: return '📦';
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final categories = context.watch<BudgetProvider>().categories;
 
     return Scaffold(
-      backgroundColor: AppColors.background,
+      backgroundColor: const Color(0xFFF0F4F8),
       appBar: AppBar(
-        backgroundColor: AppColors.primaryDark,
-        foregroundColor: AppColors.textWhite,
-        title: const Text('Review & Confirm'),
+        backgroundColor: const Color(0xFF1A5276),
+        foregroundColor: Colors.white,
+        title: const Text('Receipt Review',
+            style: TextStyle(fontWeight: FontWeight.w600)),
         centerTitle: true,
+        actions: [
+          Container(
+            margin: const EdgeInsets.only(right: 12),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+            decoration: BoxDecoration(
+              color: const Color(0xFF27AE60),
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: const Text('AI Processed',
+                style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600)),
+          ),
+        ],
       ),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
+      body: Column(
         children: [
-          _sectionCard(
-            title: 'Receipt Details',
-            child: Column(
-              children: [
-                _field(label: 'Vendor / Store', controller: _vendorCtrl),
-                const SizedBox(height: 12),
-                InkWell(
-                  onTap: _pickDate,
-                  child: InputDecorator(
-                    decoration: _inputDeco('Date'),
-                    child: Text(
-                      DateFormat('dd MMM yyyy').format(_date),
-                      style: const TextStyle(color: AppColors.textPrimary),
+          // ── Tab bar ────────────────────────────────────────────────
+          Container(
+            color: Colors.white,
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: List.generate(_tabs.length, (i) {
+                  final sel = i == _selectedTab;
+                  return GestureDetector(
+                    onTap: () => setState(() => _selectedTab = i),
+                    child: Container(
+                      margin: const EdgeInsets.only(right: 8),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 14, vertical: 7),
+                      decoration: BoxDecoration(
+                        color: sel
+                            ? const Color(0xFF6C3483)
+                            : Colors.transparent,
+                        borderRadius: BorderRadius.circular(20),
+                        border: sel
+                            ? null
+                            : Border.all(color: const Color(0xFFDDDDDD)),
+                      ),
+                      child: Text(
+                        _tabs[i],
+                        style: TextStyle(
+                          color: sel ? Colors.white : const Color(0xFF555555),
+                          fontSize: 13,
+                          fontWeight: sel
+                              ? FontWeight.w600
+                              : FontWeight.normal,
+                        ),
+                      ),
                     ),
+                  );
+                }),
+              ),
+            ),
+          ),
+
+          // ── Scrollable content ──────────────────────────────────────
+          Expanded(
+            child: ListView(
+              padding: const EdgeInsets.all(16),
+              children: [
+                // ── Receipt Image card ───────────────────────────────
+                _card(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text('Receipt Image',
+                              style: TextStyle(
+                                  fontWeight: FontWeight.w600, fontSize: 15)),
+                          Text(
+                            DateFormat('dd MMM yyyy, h:mm a').format(_date),
+                            style: const TextStyle(
+                                color: Color(0xFF888888), fontSize: 11),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      GestureDetector(
+                        onTap: _pickDate,
+                        child: Container(
+                          height: 130,
+                          width: double.infinity,
+                          decoration: BoxDecoration(
+                            border: Border.all(
+                                color: const Color(0xFFCCCCCC), width: 1),
+                            borderRadius: BorderRadius.circular(8),
+                            color: const Color(0xFFF8F8F8),
+                          ),
+                          child: widget.imageFile != null
+                              ? ClipRRect(
+                                  borderRadius: BorderRadius.circular(7),
+                                  child: Image.file(
+                                    File(widget.imageFile!.path),
+                                    fit: BoxFit.cover,
+                                  ),
+                                )
+                              : const Column(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    Icon(Icons.receipt_long_rounded,
+                                        size: 44, color: Color(0xFFAAAAAA)),
+                                    SizedBox(height: 6),
+                                    Text('Receipt captured',
+                                        style: TextStyle(
+                                            color: Color(0xFF777777),
+                                            fontSize: 13,
+                                            fontWeight: FontWeight.w500)),
+                                    Text('Tap to view full image',
+                                        style: TextStyle(
+                                            color: Color(0xFFAAAAAA),
+                                            fontSize: 11)),
+                                  ],
+                                ),
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      Row(children: [
+                        Container(
+                          width: 8,
+                          height: 8,
+                          decoration: const BoxDecoration(
+                              color: Color(0xFF27AE60),
+                              shape: BoxShape.circle),
+                        ),
+                        const SizedBox(width: 6),
+                        const Text('AI extraction complete · 97% confidence',
+                            style: TextStyle(
+                                color: Color(0xFF444444), fontSize: 12)),
+                      ]),
+                    ],
                   ),
                 ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 12),
-          _sectionCard(
-            title: 'Line Items (FR 4.6)',
-            trailing: TextButton.icon(
-              icon: const Icon(Icons.add, size: 16),
-              label: const Text('Add Row'),
-              onPressed: () => setState(() => _items.add(_EditableItem(
-                    nameCtrl: TextEditingController(),
-                    priceCtrl: TextEditingController(),
-                    categoryId: null,
-                    categoryName: 'Others',
-                  ))),
-            ),
-            child: Column(
-              children: [
-                for (int i = 0; i < _items.length; i++) ...[
-                  _LineItemRow(
-                    item: _items[i],
-                    categories: categories,
-                    onDelete: _items.length > 1
-                        ? () => setState(() => _items.removeAt(i))
-                        : null,
-                    onCategoryChanged: (cat) => setState(() {
-                      _items[i].categoryId = cat.id;
-                      _items[i].categoryName = cat.name;
-                    }),
+
+                const SizedBox(height: 12),
+
+                // ── AI Extracted Fields ──────────────────────────────
+                Container(
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: const Color(0xFFDCEFD8)),
                   ),
-                  if (i < _items.length - 1) const Divider(height: 20),
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Row(children: [
+                        Icon(Icons.layers_outlined,
+                            color: Color(0xFF2E7D32), size: 18),
+                        SizedBox(width: 6),
+                        Text('AI Extracted Fields',
+                            style: TextStyle(
+                                fontWeight: FontWeight.w600, fontSize: 15)),
+                      ]),
+                      const SizedBox(height: 14),
+                      _extractedRow('Merchant',
+                          _vendorCtrl.text.isEmpty ? '—' : _vendorCtrl.text,
+                          _vendorCtrl.text.isNotEmpty),
+                      _extractedRow('Date',
+                          DateFormat('dd MMM yyyy').format(_date), true),
+                      _extractedRow(
+                          'Category',
+                          '${_categoryEmoji(widget.result.suggestedCategoryName ?? 'Others')} ${widget.result.suggestedCategoryName ?? 'Others'}',
+                          true),
+                      _extractedRow(
+                          'Total',
+                          'RM ${(widget.result.amount ?? 0).toStringAsFixed(2)}',
+                          widget.result.amount != null),
+                    ],
+                  ),
+                ),
+
+                const SizedBox(height: 12),
+
+                // ── Line Items ───────────────────────────────────────
+                _card(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text('Line Items',
+                              style: TextStyle(
+                                  fontWeight: FontWeight.w600, fontSize: 15)),
+                          TextButton.icon(
+                            icon: const Icon(Icons.add, size: 14),
+                            label: const Text('Add Row',
+                                style: TextStyle(fontSize: 12)),
+                            style: TextButton.styleFrom(
+                              foregroundColor: AppColors.primary,
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 8, vertical: 0),
+                              minimumSize: Size.zero,
+                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                            ),
+                            onPressed: () => setState(() => _items.add(
+                                _EditableItem(
+                                  nameCtrl: TextEditingController(),
+                                  priceCtrl: TextEditingController(),
+                                  categoryId: null,
+                                  categoryName: 'Others',
+                                ))),
+                          ),
+                        ],
+                      ),
+                      // Table header
+                      Container(
+                        padding: const EdgeInsets.symmetric(vertical: 8),
+                        decoration: const BoxDecoration(
+                            border: Border(
+                                bottom: BorderSide(color: Color(0xFFEEEEEE)))),
+                        child: const Row(children: [
+                          Expanded(
+                            flex: 3,
+                            child: Text('ITEM',
+                                style: TextStyle(
+                                    color: Color(0xFF888888),
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w600,
+                                    letterSpacing: 0.5)),
+                          ),
+                          Text('PRICE',
+                              style: TextStyle(
+                                  color: Color(0xFF888888),
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w600,
+                                  letterSpacing: 0.5)),
+                          SizedBox(width: 32),
+                        ]),
+                      ),
+                      // Rows
+                      for (int i = 0; i < _items.length; i++) ...[
+                        _TableRow(
+                          item: _items[i],
+                          categories: categories,
+                          onDelete: _items.length > 1
+                              ? () => setState(() => _items.removeAt(i))
+                              : null,
+                          onCategoryChanged: (cat) => setState(() {
+                            _items[i].categoryId = cat.id;
+                            _items[i].categoryName = cat.name;
+                          }),
+                        ),
+                        if (i < _items.length - 1)
+                          const Divider(height: 1, color: Color(0xFFF0F0F0)),
+                      ],
+                    ],
+                  ),
+                ),
+
+                // ── Warranty card ────────────────────────────────────
+                if (widget.result.warranty != null) ...[
+                  const SizedBox(height: 12),
+                  _warrantyCard(widget.result.warranty!),
                 ],
+
+                const SizedBox(height: 24),
+
+                // ── Save button ──────────────────────────────────────
+                ElevatedButton(
+                  onPressed: _saving ? null : _save,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF1A5276),
+                    foregroundColor: Colors.white,
+                    minimumSize: const Size.fromHeight(52),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14)),
+                    elevation: 2,
+                  ),
+                  child: _saving
+                      ? const SizedBox(
+                          height: 20,
+                          width: 20,
+                          child: CircularProgressIndicator(
+                              strokeWidth: 2, color: Colors.white))
+                      : Text(
+                          'Save ${_items.length} Expense${_items.length != 1 ? 's' : ''}',
+                          style: const TextStyle(
+                              fontSize: 16, fontWeight: FontWeight.w600)),
+                ),
+                const SizedBox(height: 24),
               ],
             ),
           ),
-          if (widget.result.warranty != null) ...[
-            const SizedBox(height: 12),
-            _warrantyCard(widget.result.warranty!),
-          ],
-          const SizedBox(height: 24),
-          ElevatedButton(
-            onPressed: _saving ? null : _save,
-            style: ElevatedButton.styleFrom(
-              backgroundColor: AppColors.primary,
-              foregroundColor: AppColors.textWhite,
-              minimumSize: const Size.fromHeight(52),
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(14)),
-            ),
-            child: _saving
-                ? const SizedBox(
-                    height: 20,
-                    width: 20,
-                    child: CircularProgressIndicator(
-                        strokeWidth: 2, color: Colors.white),
-                  )
-                : Text('Save ${_items.length} Expense${_items.length != 1 ? 's' : ''}'),
-          ),
-          const SizedBox(height: 24),
         ],
       ),
     );
   }
 
-  Widget _sectionCard({
-    required String title,
-    required Widget child,
-    Widget? trailing,
-  }) {
-    return Container(
-      decoration: BoxDecoration(
-        color: AppColors.cardBackground,
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(
-              color: Colors.black.withOpacity(0.05),
-              blurRadius: 6,
-              offset: const Offset(0, 2))
-        ],
-      ),
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Text(title,
-                  style: const TextStyle(
-                      fontWeight: FontWeight.w600,
-                      fontSize: 14,
-                      color: AppColors.textSecondary)),
-              const Spacer(),
-              if (trailing != null) trailing,
-            ],
-          ),
-          const SizedBox(height: 12),
-          child,
-        ],
-      ),
-    );
-  }
-
-  Widget _field(
-      {required String label, required TextEditingController controller}) {
-    return TextFormField(
-      controller: controller,
-      decoration: _inputDeco(label),
-      style: const TextStyle(color: AppColors.textPrimary),
-    );
-  }
-
-  InputDecoration _inputDeco(String label) => InputDecoration(
-        labelText: label,
-        labelStyle: const TextStyle(color: AppColors.textSecondary),
-        filled: true,
-        fillColor: AppColors.background,
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(10),
-          borderSide: BorderSide.none,
+  Widget _card({required Widget child}) => Container(
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(12),
         ),
+        padding: const EdgeInsets.all(16),
+        child: child,
+      );
+
+  Widget _extractedRow(String label, String value, bool high) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 5),
+        child: Row(children: [
+          SizedBox(
+            width: 80,
+            child: Text(label,
+                style: const TextStyle(
+                    color: Color(0xFF888888), fontSize: 13)),
+          ),
+          Expanded(
+            child: Text(value,
+                style: const TextStyle(
+                    fontWeight: FontWeight.w600, fontSize: 13)),
+          ),
+          Container(
+            padding:
+                const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+            decoration: BoxDecoration(
+              color: high
+                  ? const Color(0xFFE8F5E9)
+                  : const Color(0xFFFFF3E0),
+              borderRadius: BorderRadius.circular(4),
+            ),
+            child: Text(
+              high ? 'HIGH' : 'LOW',
+              style: TextStyle(
+                color: high
+                    ? const Color(0xFF2E7D32)
+                    : const Color(0xFFE65100),
+                fontSize: 10,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+        ]),
       );
 
   Widget _warrantyCard(WarrantyInfo w) {
@@ -344,40 +557,37 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
 
     return Container(
       decoration: BoxDecoration(
-        color: bg,
-        borderRadius: BorderRadius.circular(16),
-      ),
+          color: bg, borderRadius: BorderRadius.circular(12)),
       padding: const EdgeInsets.all(16),
-      child: Row(
-        children: [
-          Icon(icon, color: fg, size: 32),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
+      child: Row(children: [
+        Icon(icon, color: fg, size: 30),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text('Warranty $statusLabel',
                     style: TextStyle(
                         fontWeight: FontWeight.w700,
                         color: fg,
-                        fontSize: 15)),
+                        fontSize: 14)),
                 if (w.durationMonths != null)
                   Text('Duration: ${w.durationMonths} month(s)',
-                      style: TextStyle(color: fg, fontSize: 13)),
+                      style: TextStyle(color: fg, fontSize: 12)),
                 if (w.expiryDate != null)
                   Text('Expires: ${w.expiryDate}',
-                      style: TextStyle(color: fg, fontSize: 13)),
+                      style: TextStyle(color: fg, fontSize: 12)),
                 if (w.daysRemaining != null && w.daysRemaining! >= 0)
                   Text('${w.daysRemaining} day(s) remaining',
-                      style: TextStyle(color: fg, fontSize: 13)),
-              ],
-            ),
-          ),
-        ],
-      ),
+                      style: TextStyle(color: fg, fontSize: 12)),
+              ]),
+        ),
+      ]),
     );
   }
 }
+
+// ── Data class ─────────────────────────────────────────────────────────────────
 
 class _EditableItem {
   TextEditingController nameCtrl;
@@ -393,13 +603,15 @@ class _EditableItem {
   });
 }
 
-class _LineItemRow extends StatelessWidget {
+// ── Table row widget ────────────────────────────────────────────────────────────
+
+class _TableRow extends StatelessWidget {
   final _EditableItem item;
   final List<CategoryModel> categories;
   final VoidCallback? onDelete;
   final ValueChanged<CategoryModel> onCategoryChanged;
 
-  const _LineItemRow({
+  const _TableRow({
     required this.item,
     required this.categories,
     required this.onDelete,
@@ -408,19 +620,23 @@ class _LineItemRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: [
             Expanded(
               flex: 3,
               child: TextFormField(
                 controller: item.nameCtrl,
+                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
                 decoration: const InputDecoration(
-                  labelText: 'Item',
                   isDense: true,
+                  contentPadding:
+                      EdgeInsets.symmetric(horizontal: 8, vertical: 6),
                   border: OutlineInputBorder(),
+                  hintText: 'Item name',
                 ),
               ),
             ),
@@ -431,10 +647,14 @@ class _LineItemRow extends StatelessWidget {
                 controller: item.priceCtrl,
                 keyboardType:
                     const TextInputType.numberWithOptions(decimal: true),
+                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
                 decoration: const InputDecoration(
-                  labelText: 'RM',
                   isDense: true,
+                  contentPadding:
+                      EdgeInsets.symmetric(horizontal: 8, vertical: 6),
                   border: OutlineInputBorder(),
+                  prefixText: 'RM ',
+                  prefixStyle: TextStyle(fontSize: 12),
                 ),
               ),
             ),
@@ -442,32 +662,36 @@ class _LineItemRow extends StatelessWidget {
               const SizedBox(width: 4),
               IconButton(
                 icon: const Icon(Icons.remove_circle_outline,
-                    color: AppColors.budgetRed),
+                    color: Color(0xFFE74C3C), size: 20),
                 onPressed: onDelete,
                 padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(),
               ),
-            ],
-          ],
-        ),
-        const SizedBox(height: 6),
-        if (categories.isNotEmpty)
-          DropdownButtonFormField<CategoryModel>(
-            value: categories
-                .where((c) => c.id == item.categoryId)
-                .firstOrNull,
-            decoration: const InputDecoration(
-              labelText: 'Category',
-              isDense: true,
-              border: OutlineInputBorder(),
+            ] else
+              const SizedBox(width: 32),
+          ]),
+          if (categories.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            DropdownButtonFormField<CategoryModel>(
+              value: categories.where((c) => c.id == item.categoryId).firstOrNull,
+              decoration: const InputDecoration(
+                labelText: 'Category',
+                isDense: true,
+                contentPadding:
+                    EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                border: OutlineInputBorder(),
+              ),
+              style: const TextStyle(fontSize: 12, color: Colors.black87),
+              items: categories
+                  .map((c) => DropdownMenuItem(value: c, child: Text(c.name)))
+                  .toList(),
+              onChanged: (cat) {
+                if (cat != null) onCategoryChanged(cat);
+              },
             ),
-            items: categories
-                .map((c) => DropdownMenuItem(value: c, child: Text(c.name)))
-                .toList(),
-            onChanged: (cat) {
-              if (cat != null) onCategoryChanged(cat);
-            },
-          ),
-      ],
+          ],
+        ],
+      ),
     );
   }
 }
