@@ -48,16 +48,6 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
     _selectedCategoryId = widget.result.suggestedCategoryId;
     _selectedCategoryName = widget.result.suggestedCategoryName ?? 'Others';
 
-    // If backend couldn't resolve category ID, match by name once categories load
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_selectedCategoryId == null && mounted) {
-        final cats = context.read<BudgetProvider>().categories;
-        final match = cats
-            .where((c) => c.name.toLowerCase() == _selectedCategoryName.toLowerCase())
-            .firstOrNull;
-        if (match != null) setState(() => _selectedCategoryId = match.id);
-      }
-    });
 
     if (widget.result.lineItems.isNotEmpty) {
       _items = widget.result.lineItems
@@ -169,6 +159,33 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
     }
   }
 
+  void _showFullImage() {
+    if (widget.imageFile == null) return;
+    showDialog(
+      context: context,
+      barrierColor: Colors.black87,
+      builder: (_) => Dialog(
+        backgroundColor: Colors.black,
+        insetPadding: EdgeInsets.zero,
+        child: Stack(
+          children: [
+            InteractiveViewer(
+              child: Image.file(File(widget.imageFile!.path)),
+            ),
+            Positioned(
+              top: 8,
+              right: 8,
+              child: IconButton(
+                icon: const Icon(Icons.close, color: Colors.white, size: 28),
+                onPressed: () => Navigator.pop(context),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Future<void> _pickDate() async {
     final picked = await showDatePicker(
       context: context,
@@ -195,6 +212,18 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
   Widget build(BuildContext context) {
     final categories = context.watch<BudgetProvider>().categories;
     final statuses = context.watch<BudgetProvider>().statuses;
+
+    // Auto-select category by name when categories load and ID is still null
+    if (categories.isNotEmpty && _selectedCategoryId == null) {
+      final match = categories
+          .where((c) => c.name.toLowerCase() == _selectedCategoryName.toLowerCase())
+          .firstOrNull;
+      if (match != null) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) setState(() => _selectedCategoryId = match.id);
+        });
+      }
+    }
 
     // Budget remaining for selected category
     BudgetStatus? budgetStatus;
@@ -285,16 +314,24 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
                           const Text('Receipt Image',
                               style: TextStyle(
                                   fontWeight: FontWeight.w600, fontSize: 15)),
-                          Text(
-                            DateFormat('dd MMM yyyy, h:mm a').format(_date),
-                            style: const TextStyle(
-                                color: Color(0xFF888888), fontSize: 11),
+                          GestureDetector(
+                            onTap: _pickDate,
+                            child: Row(children: [
+                              Text(
+                                DateFormat('dd MMM yyyy, h:mm a').format(_date),
+                                style: const TextStyle(
+                                    color: Color(0xFF888888), fontSize: 11),
+                              ),
+                              const SizedBox(width: 4),
+                              const Icon(Icons.edit_calendar_outlined,
+                                  size: 14, color: Color(0xFF888888)),
+                            ]),
                           ),
                         ],
                       ),
                       const SizedBox(height: 12),
                       GestureDetector(
-                        onTap: _pickDate,
+                        onTap: _showFullImage,
                         child: Container(
                           height: 130,
                           width: double.infinity,
