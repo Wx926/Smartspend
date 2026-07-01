@@ -71,7 +71,7 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
   Future<void> _save() async {
     setState(() => _saving = true);
     try {
-      final uid = context.read<AuthProvider>().user!.id;
+      final uid = context.read<AuthProvider>().userId;
       final categories = context.read<BudgetProvider>().categories;
       final db = SupabaseService.instance;
       const uuid = Uuid();
@@ -120,7 +120,7 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
 
       // Refresh expense list in provider
       if (mounted) {
-        await context.read<ExpenseProvider>().loadExpenses();
+        await context.read<ExpenseProvider>().load();
       }
 
       if (mounted) {
