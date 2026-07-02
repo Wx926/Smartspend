@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import '../providers/budget_provider.dart';
+import '../../../features/auth/providers/auth_provider.dart';
 import '../../../features/expenses/providers/expense_provider.dart';
 import '../../../shared/models/budget_model.dart';
 import '../../../shared/theme/app_colors.dart';
@@ -24,7 +25,18 @@ class _BudgetScreenState extends State<BudgetScreen> {
   Future<void> _load() async {
     final expProvider = context.read<ExpenseProvider>();
     final budgetProvider = context.read<BudgetProvider>();
+    final auth = context.read<AuthProvider>();
     final now = DateTime.now();
+
+    // Auto-copy previous month budgets if opening current month with no budgets
+    final copied = await budgetProvider.autoCopyFromPreviousMonth(auth.userId);
+    if (copied && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Budgets copied from last month — feel free to adjust!'),
+        duration: Duration(seconds: 3),
+      ));
+    }
+
     await budgetProvider.load(expProvider.forMonth(now.month, now.year));
   }
 

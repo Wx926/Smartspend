@@ -7,6 +7,12 @@ class SavingsGoalModel {
   final DateTime? deadline;
   final bool isCompleted;
   final DateTime createdAt;
+  final String? linkedWalletLabel;
+  final bool autoTransferEnabled;
+  final double? autoTransferAmount;
+  final String? autoTransferSourceWalletId;
+  final int? autoTransferDayOfMonth;
+  final DateTime? lastAutoTransferDate;
 
   const SavingsGoalModel({
     required this.id,
@@ -17,6 +23,12 @@ class SavingsGoalModel {
     this.deadline,
     this.isCompleted = false,
     required this.createdAt,
+    this.linkedWalletLabel,
+    this.autoTransferEnabled = false,
+    this.autoTransferAmount,
+    this.autoTransferSourceWalletId,
+    this.autoTransferDayOfMonth,
+    this.lastAutoTransferDate,
   });
 
   double get progress =>
@@ -34,6 +46,15 @@ class SavingsGoalModel {
           : null,
       isCompleted: json['is_completed'] as bool? ?? false,
       createdAt: DateTime.parse(json['created_at'] as String),
+      linkedWalletLabel: json['linked_wallet_label'] as String?,
+      autoTransferEnabled: json['auto_transfer_enabled'] as bool? ?? false,
+      autoTransferAmount: (json['auto_transfer_amount'] as num?)?.toDouble(),
+      autoTransferSourceWalletId:
+          json['auto_transfer_source_wallet_id'] as String?,
+      autoTransferDayOfMonth: json['auto_transfer_day_of_month'] as int?,
+      lastAutoTransferDate: json['last_auto_transfer_date'] != null
+          ? DateTime.parse(json['last_auto_transfer_date'] as String)
+          : null,
     );
   }
 
@@ -45,6 +66,16 @@ class SavingsGoalModel {
         'current_amount': currentAmount,
         'deadline': deadline?.toIso8601String().split('T').first,
         'is_completed': isCompleted,
+        if (linkedWalletLabel != null) 'linked_wallet_label': linkedWalletLabel,
+        'auto_transfer_enabled': autoTransferEnabled,
+        if (autoTransferAmount != null) 'auto_transfer_amount': autoTransferAmount,
+        if (autoTransferSourceWalletId != null)
+          'auto_transfer_source_wallet_id': autoTransferSourceWalletId,
+        if (autoTransferDayOfMonth != null)
+          'auto_transfer_day_of_month': autoTransferDayOfMonth,
+        if (lastAutoTransferDate != null)
+          'last_auto_transfer_date':
+              lastAutoTransferDate!.toIso8601String().split('T').first,
       };
 
   SavingsGoalModel copyWith({
@@ -54,6 +85,13 @@ class SavingsGoalModel {
     DateTime? deadline,
     bool? isCompleted,
     bool clearDeadline = false,
+    String? linkedWalletLabel,
+    bool? clearLinkedWalletLabel,
+    bool? autoTransferEnabled,
+    double? autoTransferAmount,
+    String? autoTransferSourceWalletId,
+    int? autoTransferDayOfMonth,
+    DateTime? lastAutoTransferDate,
   }) =>
       SavingsGoalModel(
         id: id,
@@ -64,5 +102,15 @@ class SavingsGoalModel {
         deadline: clearDeadline ? null : (deadline ?? this.deadline),
         isCompleted: isCompleted ?? this.isCompleted,
         createdAt: createdAt,
+        linkedWalletLabel: (clearLinkedWalletLabel == true)
+            ? null
+            : (linkedWalletLabel ?? this.linkedWalletLabel),
+        autoTransferEnabled: autoTransferEnabled ?? this.autoTransferEnabled,
+        autoTransferAmount: autoTransferAmount ?? this.autoTransferAmount,
+        autoTransferSourceWalletId:
+            autoTransferSourceWalletId ?? this.autoTransferSourceWalletId,
+        autoTransferDayOfMonth:
+            autoTransferDayOfMonth ?? this.autoTransferDayOfMonth,
+        lastAutoTransferDate: lastAutoTransferDate ?? this.lastAutoTransferDate,
       );
 }

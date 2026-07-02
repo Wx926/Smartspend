@@ -20,12 +20,13 @@ class ExpenseProvider extends ChangeNotifier {
       .where((e) => e.date.month == month && e.date.year == year)
       .toList();
 
-  /// Only expense records — used for budget calculations.
+  /// Only expense records excluding savings_transfer — used for budget calculations.
   List<ExpenseModel> expensesForMonth(int month, int year) => _expenses
       .where((e) =>
           e.date.month == month &&
           e.date.year == year &&
-          e.type == 'expense')
+          e.type == 'expense' &&
+          e.categoryId != 'savings_transfer')
       .toList();
 
   /// Only income records — used for income display.
@@ -35,6 +36,17 @@ class ExpenseProvider extends ChangeNotifier {
           e.date.year == year &&
           e.type == 'income')
       .toList();
+
+  /// Balance for a specific wallet (income - expense for that walletId).
+  /// Excludes records with walletId='savings_goal' (goal-funded purchases).
+  double walletBalance(String walletId) {
+    final relevant = _expenses.where((r) => r.walletId == walletId);
+    final income =
+        relevant.where((r) => r.type == 'income').fold(0.0, (s, r) => s + r.amount);
+    final expense =
+        relevant.where((r) => r.type == 'expense').fold(0.0, (s, r) => s + r.amount);
+    return income - expense;
+  }
 
   Future<void> load() async {
     _isLoading = true;
@@ -59,6 +71,7 @@ class ExpenseProvider extends ChangeNotifier {
     String? locationId,
     String type = 'expense',
     String walletId = 'default_account',
+    String? savingsGoalId,
   }) async {
     final expense = ExpenseModel(
       id: _uuid.v4(),
@@ -72,6 +85,7 @@ class ExpenseProvider extends ChangeNotifier {
       updatedAt: DateTime.now(),
       type: type,
       walletId: walletId,
+      savingsGoalId: savingsGoalId,
     );
     final saved = await _service.addExpense(expense);
     _expenses.insert(0, saved);

@@ -207,24 +207,84 @@ class SupabaseService {
     return (data as List).map((e) => SavingsGoalModel.fromJson(e)).toList();
   }
 
+  // Base-only fields that are guaranteed to exist in the original schema
+  Map<String, dynamic> _goalBaseJson(Map<String, dynamic> json,
+      {bool includeUserId = false}) {
+    return {
+      if (includeUserId) 'user_id': json['user_id'],
+      'name': json['name'],
+      'target_amount': json['target_amount'],
+      'current_amount': json['current_amount'],
+      'deadline': json['deadline'],
+      'is_completed': json['is_completed'],
+    };
+  }
+
+  // Extended fields — only exist after running the Supabase migration
+  Map<String, dynamic> _goalExtendedJson(Map<String, dynamic> json) {
+    return {
+      if (json['linked_wallet_label'] != null)
+        'linked_wallet_label': json['linked_wallet_label'],
+      'auto_transfer_enabled': json['auto_transfer_enabled'] ?? false,
+      if (json['auto_transfer_amount'] != null)
+        'auto_transfer_amount': json['auto_transfer_amount'],
+      if (json['auto_transfer_source_wallet_id'] != null)
+        'auto_transfer_source_wallet_id': json['auto_transfer_source_wallet_id'],
+      if (json['auto_transfer_day_of_month'] != null)
+        'auto_transfer_day_of_month': json['auto_transfer_day_of_month'],
+      if (json['last_auto_transfer_date'] != null)
+        'last_auto_transfer_date': json['last_auto_transfer_date'],
+    };
+  }
+
   Future<SavingsGoalModel> insertSavingsGoal(SavingsGoalModel goal) async {
     final json = goal.toJson()..remove('id');
-    final data = await _client
-        .from('savings_goals')
-        .insert(json)
-        .select()
-        .single();
-    return SavingsGoalModel.fromJson(data);
+    final fullJson = {
+      ..._goalBaseJson(json, includeUserId: true),
+      ..._goalExtendedJson(json),
+    };
+    try {
+      final data = await _client
+          .from('savings_goals')
+          .insert(fullJson)
+          .select()
+          .single();
+      return SavingsGoalModel.fromJson(data);
+    } catch (_) {
+      // Fallback: use base columns only (extended columns not yet in schema)
+      final data = await _client
+          .from('savings_goals')
+          .insert(_goalBaseJson(json, includeUserId: true))
+          .select()
+          .single();
+      return SavingsGoalModel.fromJson(data);
+    }
   }
 
   Future<SavingsGoalModel> updateSavingsGoal(SavingsGoalModel goal) async {
-    final data = await _client
-        .from('savings_goals')
-        .update(goal.toJson())
-        .eq('id', goal.id)
-        .select()
-        .single();
-    return SavingsGoalModel.fromJson(data);
+    final json = goal.toJson();
+    final fullJson = {
+      ..._goalBaseJson(json),
+      ..._goalExtendedJson(json),
+    };
+    try {
+      final data = await _client
+          .from('savings_goals')
+          .update(fullJson)
+          .eq('id', goal.id)
+          .select()
+          .single();
+      return SavingsGoalModel.fromJson(data);
+    } catch (_) {
+      // Fallback: update base columns only
+      final data = await _client
+          .from('savings_goals')
+          .update(_goalBaseJson(json))
+          .eq('id', goal.id)
+          .select()
+          .single();
+      return SavingsGoalModel.fromJson(data);
+    }
   }
 
   Future<void> deleteSavingsGoal(String goalId) async {

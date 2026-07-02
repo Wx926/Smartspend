@@ -5,6 +5,8 @@ import '../../../features/auth/providers/auth_provider.dart';
 import '../../../features/budget/providers/budget_provider.dart';
 import '../../../features/expenses/providers/expense_provider.dart';
 import '../../../features/location/providers/location_provider.dart';
+import '../../../features/savings_goals/providers/savings_goal_provider.dart';
+import '../../../features/wallet/providers/wallet_provider.dart';
 import '../../../shared/models/budget_model.dart';
 import '../../../shared/theme/app_colors.dart';
 import '../../analytics/screens/analytics_screen.dart';
@@ -31,16 +33,35 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _load() async {
     final ep = context.read<ExpenseProvider>();
     final bp = context.read<BudgetProvider>();
+    final sp = context.read<SavingsGoalProvider>();
+    final wp = context.read<WalletProvider>();
+    final auth = context.read<AuthProvider>();
     await ep.load();
     final now = DateTime.now();
     await bp.load(ep.expensesForMonth(now.month, now.year));
+    await sp.load();
+    final skipped = await sp.checkAutoTransfers(
+      walletProvider: wp,
+      expenseProvider: ep,
+      userId: auth.userId,
+    );
+    if (mounted && skipped.isNotEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(
+            'Auto-transfer skipped for: ${skipped.join(', ')} — insufficient funds'),
+        duration: const Duration(seconds: 4),
+      ));
+    }
   }
 
   void _prevMonth() {
+    final newStart = DateTime(_txStart.year, _txStart.month - 1, 1);
     setState(() {
-      _txStart = DateTime(_txStart.year, _txStart.month - 1, 1);
-      _txEnd = DateTime(_txStart.year, _txStart.month + 1, 0);
-      _filterLabel = DateFormat('MMM yyyy').format(_txStart);
+      _txStart = newStart;
+      // Use end of day on last day of month to include all transactions
+      _txEnd = DateTime(newStart.year, newStart.month + 1, 1)
+          .subtract(const Duration(seconds: 1));
+      _filterLabel = DateFormat('MMM yyyy').format(newStart);
     });
   }
 
@@ -48,14 +69,16 @@ class _HomeScreenState extends State<HomeScreen> {
     final now = DateTime.now();
     final nextStart = DateTime(_txStart.year, _txStart.month + 1, 1);
     if (nextStart.isAfter(DateTime(now.year, now.month, 1))) return;
+    final isCurrentMonth =
+        nextStart.month == now.month && nextStart.year == now.year;
     setState(() {
       _txStart = nextStart;
-      _txEnd = nextStart.month == now.month && nextStart.year == now.year
+      _txEnd = isCurrentMonth
           ? now
-          : DateTime(nextStart.year, nextStart.month + 1, 0);
-      _filterLabel = nextStart.month == now.month && nextStart.year == now.year
-          ? 'This Month'
-          : DateFormat('MMM yyyy').format(nextStart);
+          : DateTime(nextStart.year, nextStart.month + 1, 1)
+              .subtract(const Duration(seconds: 1));
+      _filterLabel =
+          isCurrentMonth ? 'This Month' : DateFormat('MMM yyyy').format(nextStart);
     });
   }
 
@@ -560,12 +583,26 @@ class _HomeScreenState extends State<HomeScreen> {
                           ),
                           // Transactions for this day
                           ...dayTx.map((e) {
-                            final cat = allCats
-                                .where((c) => c.id == e.categoryId)
-                                .firstOrNull;
-                            final col = AppColors.fromHex(
-                                cat?.colorHex ?? '6B7280');
+                            final isSavingsTransfer =
+                                e.categoryId == 'savings_transfer';
+                            final cat = isSavingsTransfer
+                                ? null
+                                : allCats
+                                    .where((c) => c.id == e.categoryId)
+                                    .firstOrNull;
+                            final col = isSavingsTransfer
+                                ? AppColors.primary
+                                : AppColors.fromHex(cat?.colorHex ?? '6B7280');
                             final isIncome = e.type == 'income';
+                            final displayTitle = e.description.isNotEmpty
+                                ? e.description
+                                : (isSavingsTransfer
+                                    ? 'Savings Transfer'
+                                    : (cat?.name ??
+                                        (isIncome ? 'Income' : 'Expense')));
+                            final displaySub = isSavingsTransfer
+                                ? 'Savings Transfer'
+                                : (cat?.name ?? '');
                             return Container(
                               margin: const EdgeInsets.only(bottom: 6),
                               padding: const EdgeInsets.symmetric(
@@ -579,8 +616,10 @@ class _HomeScreenState extends State<HomeScreen> {
                                     backgroundColor:
                                         col.withValues(alpha: 0.15),
                                     child: Text(
-                                        cat?.icon ??
-                                            (isIncome ? '💰' : '📦'),
+                                        isSavingsTransfer
+                                            ? '🎯'
+                                            : (cat?.icon ??
+                                                (isIncome ? '💰' : '📦')),
                                         style: const TextStyle(
                                             fontSize: 16))),
                                 const SizedBox(width: 12),
@@ -589,20 +628,13 @@ class _HomeScreenState extends State<HomeScreen> {
                                         crossAxisAlignment:
                                             CrossAxisAlignment.start,
                                         children: [
-                                      Text(
-                                          e.description.isEmpty
-                                              ? (cat?.name ??
-                                                  (isIncome
-                                                      ? 'Income'
-                                                      : 'Expense'))
-                                              : e.description,
+                                      Text(displayTitle,
                                           style: const TextStyle(
                                               fontWeight: FontWeight.w600,
                                               fontSize: 14)),
-                                      Text(cat?.name ?? '',
+                                      Text(displaySub,
                                           style: const TextStyle(
-                                              color:
-                                                  AppColors.textSecondary,
+                                              color: AppColors.textSecondary,
                                               fontSize: 12)),
                                     ])),
                                 Text(

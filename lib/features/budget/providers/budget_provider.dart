@@ -115,6 +115,35 @@ class BudgetProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Auto-copies previous month's budgets into the current month if none exist.
+  /// Returns true if budgets were copied, false otherwise.
+  Future<bool> autoCopyFromPreviousMonth(String userId) async {
+    final now = DateTime.now();
+    if (_selectedMonth.month != now.month || _selectedMonth.year != now.year) {
+      return false;
+    }
+    final existing = await _service.getBudgets(now.month, now.year);
+    if (existing.isNotEmpty) return false;
+
+    final prevMonth = DateTime(now.year, now.month - 1);
+    final prev = await _service.getBudgets(prevMonth.month, prevMonth.year);
+    if (prev.isEmpty) return false;
+
+    for (final b in prev) {
+      await _service.upsertBudget(BudgetModel(
+        id: _uuid.v4(),
+        userId: userId,
+        categoryId: b.categoryId,
+        amount: b.amount,
+        month: now.month,
+        year: now.year,
+        createdAt: DateTime.now(),
+        updatedAt: DateTime.now(),
+      ));
+    }
+    return true;
+  }
+
   // ── Category management ────────────────────────────────────────────────────
   void _reloadCategories() {
     _categories = LocalStorageService.instance.getCategories();

@@ -38,8 +38,11 @@ class WalletProvider extends ChangeNotifier {
       records.where((r) => r.type == 'income').fold(0.0, (s, r) => s + r.amount);
 
   /// Total expenses across ALL wallets.
+  /// Excludes savings_goal-sourced purchases (already counted when transferred to goal).
   double totalDebt(List<ExpenseModel> records) =>
-      records.where((r) => r.type == 'expense').fold(0.0, (s, r) => s + r.amount);
+      records
+          .where((r) => r.type == 'expense' && r.walletId != 'savings_goal')
+          .fold(0.0, (s, r) => s + r.amount);
 
   /// Net asset = total income − total expenses.
   double netAsset(List<ExpenseModel> records) =>

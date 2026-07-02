@@ -10,6 +10,7 @@ class ExpenseModel {
   final DateTime updatedAt;
   final String type; // 'expense' or 'income'
   final String walletId;
+  final String? savingsGoalId; // links to a savings goal when relevant
 
   const ExpenseModel({
     required this.id,
@@ -23,6 +24,7 @@ class ExpenseModel {
     required this.updatedAt,
     this.type = 'expense',
     this.walletId = 'default_account',
+    this.savingsGoalId,
   });
 
   factory ExpenseModel.fromJson(Map<String, dynamic> json) {
@@ -38,6 +40,7 @@ class ExpenseModel {
       updatedAt: DateTime.parse(json['updated_at'] as String),
       type: json['type'] as String? ?? 'expense',
       walletId: json['wallet_id'] as String? ?? 'default_account',
+      savingsGoalId: json['savings_goal_id'] as String?,
     );
   }
 
@@ -54,6 +57,7 @@ class ExpenseModel {
       'updated_at': updatedAt.toIso8601String(),
       'type': type,
       'wallet_id': walletId,
+      if (savingsGoalId != null) 'savings_goal_id': savingsGoalId,
     };
   }
 
@@ -65,6 +69,7 @@ class ExpenseModel {
     String? locationId,
     String? type,
     String? walletId,
+    String? savingsGoalId,
   }) {
     return ExpenseModel(
       id: id,
@@ -78,6 +83,7 @@ class ExpenseModel {
       updatedAt: DateTime.now(),
       type: type ?? this.type,
       walletId: walletId ?? this.walletId,
+      savingsGoalId: savingsGoalId ?? this.savingsGoalId,
     );
   }
 }
