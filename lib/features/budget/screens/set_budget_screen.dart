@@ -57,13 +57,17 @@ class _SetBudgetScreenState extends State<SetBudgetScreen> {
     }
 
     setState(() => _saving = true);
-    final userId = context.read<AuthProvider>().userId;
-    await context.read<BudgetProvider>().setBudget(
-          userId: userId,
-          categoryId: _selectedCategory!.id,
-          amount: double.parse(_amountCtrl.text),
-        );
-    if (mounted) Navigator.pop(context);
+    try {
+      final userId = context.read<AuthProvider>().userId;
+      await context.read<BudgetProvider>().setBudget(
+            userId: userId,
+            categoryId: _selectedCategory!.id,
+            amount: double.parse(_amountCtrl.text),
+          );
+      if (mounted) Navigator.pop(context);
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
   }
 
   @override

@@ -99,15 +99,29 @@ class BudgetProvider extends ChangeNotifier {
       updatedAt: DateTime.now(),
     );
 
-    final saved = await _service.upsertBudget(budget);
-
+    // Optimistic update: apply locally immediately
     if (existing != null) {
       final idx = _budgets.indexWhere((b) => b.id == existing.id);
-      _budgets[idx] = saved;
+      if (idx != -1) _budgets[idx] = budget;
     } else {
-      _budgets.add(saved);
+      _budgets.add(budget);
     }
     notifyListeners();
+
+    // Sync to Supabase in background
+    _service.upsertBudget(budget).then((saved) {
+      final i = _budgets.indexWhere((b) => b.id == budget.id);
+      if (i != -1) _budgets[i] = saved;
+      notifyListeners();
+    }).catchError((_) {
+      if (existing != null) {
+        final i = _budgets.indexWhere((b) => b.id == budget.id);
+        if (i != -1) _budgets[i] = existing;
+      } else {
+        _budgets.removeWhere((b) => b.id == budget.id);
+      }
+      notifyListeners();
+    });
   }
 
   Future<void> deleteBudget(String budgetId) async {
@@ -123,26 +137,31 @@ class BudgetProvider extends ChangeNotifier {
     if (_selectedMonth.month != now.month || _selectedMonth.year != now.year) {
       return false;
     }
-    final existing = await _service.getBudgets(now.month, now.year);
-    if (existing.isNotEmpty) return false;
+    try {
+      final prevMonth = DateTime(now.year, now.month - 1);
+      final results = await Future.wait([
+        _service.getBudgets(now.month, now.year),
+        _service.getBudgets(prevMonth.month, prevMonth.year),
+      ]).timeout(const Duration(seconds: 10));
 
-    final prevMonth = DateTime(now.year, now.month - 1);
-    final prev = await _service.getBudgets(prevMonth.month, prevMonth.year);
-    if (prev.isEmpty) return false;
+      final existing = results[0];
+      final prev = results[1];
+      if (existing.isNotEmpty || prev.isEmpty) return false;
 
-    for (final b in prev) {
-      await _service.upsertBudget(BudgetModel(
-        id: _uuid.v4(),
-        userId: userId,
-        categoryId: b.categoryId,
-        amount: b.amount,
-        month: now.month,
-        year: now.year,
-        createdAt: DateTime.now(),
-        updatedAt: DateTime.now(),
-      ));
+      await Future.wait(prev.map((b) => _service.upsertBudget(BudgetModel(
+            id: _uuid.v4(),
+            userId: userId,
+            categoryId: b.categoryId,
+            amount: b.amount,
+            month: now.month,
+            year: now.year,
+            createdAt: DateTime.now(),
+            updatedAt: DateTime.now(),
+          ))));
+      return true;
+    } catch (_) {
+      return false;
     }
-    return true;
   }
 
   // ── Category management ────────────────────────────────────────────────────

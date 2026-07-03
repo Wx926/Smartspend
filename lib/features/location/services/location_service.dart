@@ -41,6 +41,9 @@ class LocationService {
     _timer = null;
   }
 
+  /// Force an immediate poll outside the normal 60-second interval.
+  Future<void> forcePoll(String userId) => _poll(userId);
+
   Future<bool> _requestPermission() async {
     bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
     if (!serviceEnabled) return false;
@@ -57,8 +60,8 @@ class LocationService {
   Future<void> _poll(String userId) async {
     try {
       final position = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.high,
-      );
+        desiredAccuracy: LocationAccuracy.medium,
+      ).timeout(const Duration(seconds: 15));
 
       final knownLocations = _store.getLocations();
       LocationModel? matched;
@@ -149,9 +152,13 @@ class LocationService {
 
   Future<Position?> getCurrentPosition() async {
     try {
+      // getLastKnownPosition reflects emulator location changes immediately
+      // and is faster than waiting for a fresh GPS fix
+      final last = await Geolocator.getLastKnownPosition();
+      if (last != null) return last;
       return await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.high,
-      );
+        desiredAccuracy: LocationAccuracy.medium,
+      ).timeout(const Duration(seconds: 10));
     } catch (_) {
       return null;
     }

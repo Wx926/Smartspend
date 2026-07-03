@@ -3,6 +3,7 @@ import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import '../providers/location_provider.dart';
 import '../services/location_service.dart';
+import '../services/osm_service.dart';
 import '../../../features/auth/providers/auth_provider.dart';
 import '../../../features/budget/providers/budget_provider.dart';
 import '../../../shared/models/budget_model.dart';
@@ -16,12 +17,23 @@ class LocationScreen extends StatefulWidget {
 }
 
 class _LocationScreenState extends State<LocationScreen> {
+  bool _refreshing = false;
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      context.read<LocationProvider>().load();
+      final userId = context.read<AuthProvider>().userId;
+      context.read<LocationProvider>().load(userId);
     });
+  }
+
+  Future<void> _refresh() async {
+    if (_refreshing) return;
+    setState(() => _refreshing = true);
+    final userId = context.read<AuthProvider>().userId;
+    await context.read<LocationProvider>().refresh(userId);
+    if (mounted) setState(() => _refreshing = false);
   }
 
   Future<void> _toggleTracking() async {
@@ -86,6 +98,17 @@ class _LocationScreenState extends State<LocationScreen> {
                   padding: EdgeInsets.zero,
                 ),
                 const Spacer(),
+                IconButton(
+                  icon: _refreshing
+                      ? const SizedBox(
+                          width: 18, height: 18,
+                          child: CircularProgressIndicator(
+                              color: Colors.white, strokeWidth: 2))
+                      : const Icon(Icons.refresh, color: Colors.white),
+                  tooltip: 'Refresh location',
+                  onPressed: _refresh,
+                  padding: EdgeInsets.zero,
+                ),
               ]),
               const Text('Nearby',
                   style: TextStyle(
@@ -269,6 +292,16 @@ class _LocationScreenState extends State<LocationScreen> {
           ),
           actions: [
             IconButton(
+              icon: _refreshing
+                  ? const SizedBox(
+                      width: 18, height: 18,
+                      child: CircularProgressIndicator(
+                          color: Colors.white, strokeWidth: 2))
+                  : const Icon(Icons.refresh, color: Colors.white),
+              tooltip: 'Refresh location',
+              onPressed: _refresh,
+            ),
+            IconButton(
               icon: const Icon(Icons.add_location_alt_outlined, color: Colors.white),
               onPressed: () => _showAddDialog(context, userId),
             ),
@@ -376,67 +409,158 @@ class _LocationScreenState extends State<LocationScreen> {
   }
 
   void _showAddDialog(BuildContext context, String userId) {
-    final nameCtrl = TextEditingController();
-    final addressCtrl = TextEditingController();
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       shape: const RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-      builder: (ctx) => Padding(
-        padding: EdgeInsets.only(
-            left: 20,
-            right: 20,
-            top: 20,
-            bottom: MediaQuery.of(ctx).viewInsets.bottom + 20),
-        child: Column(mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-          const Text('Add New Location',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-          const SizedBox(height: 16),
-          TextField(
-            controller: nameCtrl,
-            decoration: const InputDecoration(
-                labelText: 'Location Name',
-                hintText: 'e.g. Pavilion KL, Sunway Pyramid',
-                prefixIcon: Icon(Icons.place_outlined)),
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: addressCtrl,
-            decoration: const InputDecoration(
-                labelText: 'Address (optional)',
-                prefixIcon: Icon(Icons.location_on_outlined)),
-          ),
-          const SizedBox(height: 20),
-          ElevatedButton(
-            onPressed: () async {
-              if (nameCtrl.text.trim().isEmpty) return;
-              Navigator.pop(ctx);
-              final pos = await LocationService.instance.getCurrentPosition();
-              if (pos != null && context.mounted) {
-                await context.read<LocationProvider>().addLocation(
-                      userId: userId,
-                      name: nameCtrl.text.trim(),
-                      address: addressCtrl.text.trim().isEmpty
-                          ? null
-                          : addressCtrl.text.trim(),
-                      latitude: pos.latitude,
-                      longitude: pos.longitude,
-                    );
-                if (context.mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                    content: Text('${nameCtrl.text.trim()} saved'),
-                    backgroundColor: AppColors.budgetGreen,
-                  ));
-                }
-              }
-            },
-            child: const Text('Save Current Location'),
-          ),
+      builder: (ctx) => _AddLocationSheet(userId: userId),
+    );
+  }
+}
+
+class _AddLocationSheet extends StatefulWidget {
+  final String userId;
+  const _AddLocationSheet({required this.userId});
+
+  @override
+  State<_AddLocationSheet> createState() => _AddLocationSheetState();
+}
+
+class _AddLocationSheetState extends State<_AddLocationSheet> {
+  final _nameCtrl = TextEditingController();
+  List<OsmPlace>? _places;
+  bool _loading = true;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchNearby();
+  }
+
+  Future<void> _fetchNearby() async {
+    final pos = await LocationService.instance.getCurrentPosition();
+    if (pos == null) {
+      setState(() { _loading = false; _error = 'Could not get GPS position.'; });
+      return;
+    }
+    final places = await OsmService.instance.nearbyPlaces(pos.latitude, pos.longitude);
+    if (mounted) setState(() { _places = places; _loading = false; });
+  }
+
+  Future<void> _save(String name,
+      {double? lat, double? lon, String? categoryHint}) async {
+    if (name.trim().isEmpty) return;
+    // Capture before Navigator.pop unmounts this widget
+    final lp = context.read<LocationProvider>();
+    final messenger = ScaffoldMessenger.of(context);
+    Navigator.pop(context);
+
+    final double saveLat;
+    final double saveLon;
+    if (lat != null && lon != null) {
+      saveLat = lat;
+      saveLon = lon;
+    } else {
+      final pos = await LocationService.instance.getCurrentPosition();
+      if (pos == null) return;
+      saveLat = pos.latitude;
+      saveLon = pos.longitude;
+    }
+
+    await lp.addLocation(
+      userId: widget.userId,
+      name: name.trim(),
+      latitude: saveLat,
+      longitude: saveLon,
+      categoryHint: categoryHint,
+    );
+
+    messenger.showSnackBar(SnackBar(
+      content: Text('${name.trim()} saved'),
+      backgroundColor: AppColors.budgetGreen,
+    ));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.fromLTRB(
+          20, 20, 20, MediaQuery.of(context).viewInsets.bottom + 20),
+      child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        const Text('Add Location', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+        const SizedBox(height: 16),
+
+        // ── Nearby places from OpenStreetMap ──────────────────────────────
+        Row(children: [
+          const Text('Nearby Places', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
+          const SizedBox(width: 6),
+          const Text('via OpenStreetMap', style: TextStyle(fontSize: 11, color: AppColors.textSecondary)),
         ]),
-      ),
+        const SizedBox(height: 8),
+
+        if (_loading)
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 16),
+            child: Center(child: CircularProgressIndicator()),
+          )
+        else if (_error != null)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            child: Text(_error!, style: const TextStyle(color: AppColors.budgetRed, fontSize: 13)),
+          )
+        else if (_places != null && _places!.isEmpty)
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 8),
+            child: Text('No places found nearby. Enter name manually below.',
+                style: TextStyle(color: AppColors.textSecondary, fontSize: 13)),
+          )
+        else if (_places != null)
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: 240),
+            child: ListView.separated(
+              shrinkWrap: true,
+              itemCount: _places!.length,
+              separatorBuilder: (_, __) => const Divider(height: 1),
+              itemBuilder: (_, i) {
+                final p = _places![i];
+                return ListTile(
+                  dense: true,
+                  leading: Text(p.emoji, style: const TextStyle(fontSize: 22)),
+                  title: Text(p.name, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
+                  subtitle: Text(p.category, style: const TextStyle(fontSize: 11, color: AppColors.textSecondary)),
+                  trailing: const Icon(Icons.add_circle_outline, color: AppColors.primary, size: 20),
+                  onTap: () => _save(p.name,
+                      lat: p.latitude,
+                      lon: p.longitude,
+                      categoryHint: OsmService.toExpenseCategory(p.category)),
+                );
+              },
+            ),
+          ),
+
+        const SizedBox(height: 16),
+        const Divider(),
+        const SizedBox(height: 8),
+
+        // ── Manual fallback ───────────────────────────────────────────────
+        const Text('Or enter manually', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
+        const SizedBox(height: 8),
+        TextField(
+          controller: _nameCtrl,
+          decoration: const InputDecoration(
+            labelText: 'Location name',
+            hintText: 'e.g. My Office, Home',
+            prefixIcon: Icon(Icons.place_outlined),
+          ),
+        ),
+        const SizedBox(height: 12),
+        ElevatedButton(
+          onPressed: () => _save(_nameCtrl.text),
+          child: const Text('Save Current Location'),
+        ),
+      ]),
     );
   }
 }
@@ -446,41 +570,114 @@ class _LocationTile extends StatelessWidget {
   const _LocationTile({required this.location});
 
   @override
-  Widget build(BuildContext context) => Card(
-        margin: const EdgeInsets.only(bottom: 8),
-        child: ListTile(
-          leading: CircleAvatar(
-            backgroundColor: AppColors.primarySurface,
-            child: const Icon(Icons.location_on, color: AppColors.primary),
+  Widget build(BuildContext context) => Dismissible(
+        key: Key(location.id),
+        direction: DismissDirection.endToStart,
+        background: Container(
+          alignment: Alignment.centerRight,
+          padding: const EdgeInsets.only(right: 20),
+          margin: const EdgeInsets.only(bottom: 8),
+          decoration: BoxDecoration(
+            color: AppColors.budgetRed,
+            borderRadius: BorderRadius.circular(12),
           ),
-          title: Row(children: [
-            Text(location.name,
-                style: const TextStyle(fontWeight: FontWeight.w600)),
-            if (location.isRoutine) ...[
-              const SizedBox(width: 6),
-              Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                decoration: BoxDecoration(
-                    color: AppColors.primarySurface,
-                    borderRadius: BorderRadius.circular(6)),
-                child: const Text('Routine',
-                    style: TextStyle(
-                        color: AppColors.primary,
-                        fontSize: 10,
-                        fontWeight: FontWeight.bold)),
-              ),
+          child: const Icon(Icons.delete, color: Colors.white),
+        ),
+        confirmDismiss: (_) => showDialog<bool>(
+          context: context,
+          builder: (_) => AlertDialog(
+            title: const Text('Remove Location'),
+            content: Text(
+                'Remove "${location.name}"? The app will no longer detect this spot.'),
+            actions: [
+              TextButton(
+                  onPressed: () => Navigator.pop(context, false),
+                  child: const Text('Cancel')),
+              TextButton(
+                  onPressed: () => Navigator.pop(context, true),
+                  child: const Text('Remove',
+                      style: TextStyle(color: AppColors.budgetRed))),
             ],
-          ]),
-          subtitle: Text(
-            location.address ??
-                '${location.latitude.toStringAsFixed(4)}, ${location.longitude.toStringAsFixed(4)}',
-            style: const TextStyle(
-                fontSize: 12, color: AppColors.textSecondary),
           ),
-          trailing: Text('${location.visitCount} visits',
+        ),
+        onDismissed: (_) =>
+            context.read<LocationProvider>().deleteLocation(location.id),
+        child: Card(
+          margin: const EdgeInsets.only(bottom: 8),
+          child: ListTile(
+            leading: CircleAvatar(
+              backgroundColor: AppColors.primarySurface,
+              child: const Icon(Icons.location_on, color: AppColors.primary),
+            ),
+            title: Row(children: [
+              Flexible(
+                child: Text(location.name,
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                    overflow: TextOverflow.ellipsis),
+              ),
+              if (location.isRoutine) ...[
+                const SizedBox(width: 6),
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(
+                      color: AppColors.primarySurface,
+                      borderRadius: BorderRadius.circular(6)),
+                  child: const Text('Routine',
+                      style: TextStyle(
+                          color: AppColors.primary,
+                          fontSize: 10,
+                          fontWeight: FontWeight.bold)),
+                ),
+              ],
+            ]),
+            subtitle: Text(
+              location.address ??
+                  '${location.latitude.toStringAsFixed(4)}, ${location.longitude.toStringAsFixed(4)}',
               style: const TextStyle(
-                  color: AppColors.textSecondary, fontSize: 12)),
+                  fontSize: 12, color: AppColors.textSecondary),
+            ),
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text('${location.visitCount} visits',
+                    style: const TextStyle(
+                        color: AppColors.textSecondary, fontSize: 12)),
+                const SizedBox(width: 4),
+                IconButton(
+                  icon: const Icon(Icons.delete_outline,
+                      color: AppColors.budgetRed, size: 20),
+                  onPressed: () async {
+                    final confirm = await showDialog<bool>(
+                      context: context,
+                      builder: (_) => AlertDialog(
+                        title: const Text('Remove Location'),
+                        content: Text(
+                            'Remove "${location.name}"? The app will no longer detect this spot.'),
+                        actions: [
+                          TextButton(
+                              onPressed: () => Navigator.pop(context, false),
+                              child: const Text('Cancel')),
+                          TextButton(
+                              onPressed: () => Navigator.pop(context, true),
+                              child: const Text('Remove',
+                                  style: TextStyle(
+                                      color: AppColors.budgetRed))),
+                        ],
+                      ),
+                    );
+                    if (confirm == true && context.mounted) {
+                      context
+                          .read<LocationProvider>()
+                          .deleteLocation(location.id);
+                    }
+                  },
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(),
+                ),
+              ],
+            ),
+          ),
         ),
       );
 }

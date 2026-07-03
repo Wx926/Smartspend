@@ -279,8 +279,11 @@ class SupabaseService {
   }
 
   Future<SavingsGoalModel> insertSavingsGoal(SavingsGoalModel goal) async {
-    final json = goal.toJson()..remove('id');
+    final json = goal.toJson();
+    // Only remove id if empty — preserve pre-generated UUIDs for optimistic inserts
+    if (goal.id.isEmpty) json.remove('id');
     final fullJson = {
+      if (goal.id.isNotEmpty) 'id': goal.id,
       ..._goalBaseJson(json, includeUserId: true),
       ..._goalExtendedJson(json),
     };
@@ -293,9 +296,13 @@ class SupabaseService {
       return SavingsGoalModel.fromJson(data);
     } catch (_) {
       // Fallback: use base columns only (extended columns not yet in schema)
+      final baseJson = {
+        if (goal.id.isNotEmpty) 'id': goal.id,
+        ..._goalBaseJson(json, includeUserId: true),
+      };
       final data = await _client
           .from('savings_goals')
-          .insert(_goalBaseJson(json, includeUserId: true))
+          .insert(baseJson)
           .select()
           .single();
       return SavingsGoalModel.fromJson(data);

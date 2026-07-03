@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:uuid/uuid.dart';
 import '../../../shared/models/savings_goal_model.dart';
 import '../../../shared/services/supabase_service.dart';
 import '../../expenses/providers/expense_provider.dart';
@@ -6,6 +7,7 @@ import '../../wallet/providers/wallet_provider.dart';
 
 class SavingsGoalProvider extends ChangeNotifier {
   final _db = SupabaseService.instance;
+  final _uuid = const Uuid();
 
   List<SavingsGoalModel> _goals = [];
   bool _isLoading = false;
@@ -24,6 +26,8 @@ class SavingsGoalProvider extends ChangeNotifier {
     notifyListeners();
     try {
       _goals = await _db.getSavingsGoals();
+    } catch (_) {
+      // Keep existing goals on error
     } finally {
       _isLoading = false;
       notifyListeners();
@@ -35,16 +39,48 @@ class SavingsGoalProvider extends ChangeNotifier {
   }
 
   Future<void> add(SavingsGoalModel goal) async {
-    final created = await _db.insertSavingsGoal(goal);
-    _goals.insert(0, created);
+    // Pre-generate UUID so we can insert optimistically without waiting for server
+    final goalWithId = SavingsGoalModel(
+      id: _uuid.v4(),
+      userId: goal.userId,
+      name: goal.name,
+      targetAmount: goal.targetAmount,
+      currentAmount: goal.currentAmount,
+      deadline: goal.deadline,
+      isCompleted: goal.isCompleted,
+      createdAt: goal.createdAt,
+      linkedWalletLabel: goal.linkedWalletLabel,
+      autoTransferEnabled: goal.autoTransferEnabled,
+      autoTransferAmount: goal.autoTransferAmount,
+      autoTransferSourceWalletId: goal.autoTransferSourceWalletId,
+      autoTransferDayOfMonth: goal.autoTransferDayOfMonth,
+      lastAutoTransferDate: goal.lastAutoTransferDate,
+    );
+    _goals.insert(0, goalWithId);
     notifyListeners();
+    _db.insertSavingsGoal(goalWithId).then((created) {
+      final idx = _goals.indexWhere((g) => g.id == goalWithId.id);
+      if (idx != -1) _goals[idx] = created;
+      notifyListeners();
+    }).catchError((_) {
+      _goals.removeWhere((g) => g.id == goalWithId.id);
+      notifyListeners();
+    });
   }
 
   Future<void> update(SavingsGoalModel goal) async {
-    final updated = await _db.updateSavingsGoal(goal);
-    final i = _goals.indexWhere((g) => g.id == goal.id);
-    if (i != -1) _goals[i] = updated;
+    final idx = _goals.indexWhere((g) => g.id == goal.id);
+    final previous = idx != -1 ? _goals[idx] : null;
+    if (idx != -1) _goals[idx] = goal;
     notifyListeners();
+    _db.updateSavingsGoal(goal).then((updated) {
+      final i = _goals.indexWhere((g) => g.id == updated.id);
+      if (i != -1) _goals[i] = updated;
+      notifyListeners();
+    }).catchError((_) {
+      if (previous != null && idx != -1) _goals[idx] = previous;
+      notifyListeners();
+    });
   }
 
   Future<void> delete(String id) async {
@@ -130,7 +166,9 @@ class SavingsGoalProvider extends ChangeNotifier {
       if (goal.autoTransferAmount == null ||
           goal.autoTransferAmount! <= 0 ||
           goal.autoTransferSourceWalletId == null ||
-          goal.autoTransferDayOfMonth == null) continue;
+          goal.autoTransferDayOfMonth == null) {
+        continue;
+      }
 
       // Already transferred this month
       if (goal.lastAutoTransferDate != null &&

@@ -69,8 +69,13 @@ class WalletProvider extends ChangeNotifier {
       totalAsset(records) - totalDebt(records);
 
   Future<void> addWallet(WalletModel wallet) async {
-    await SupabaseService.instance.upsertWallet(wallet);
-    await load(force: true);
+    // Optimistic: show wallet immediately, sync to Supabase in background
+    _wallets.add(wallet);
+    notifyListeners();
+    SupabaseService.instance.upsertWallet(wallet).catchError((_) {
+      _wallets.removeWhere((w) => w.id == wallet.id);
+      notifyListeners();
+    });
   }
 
   Future<void> deleteWallet(String id) async {

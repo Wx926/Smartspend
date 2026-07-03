@@ -191,56 +191,60 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
     }
 
     setState(() => _saving = true);
-    final userId = context.read<AuthProvider>().userId;
-    final expProvider = context.read<ExpenseProvider>();
-    final sgProvider = context.read<SavingsGoalProvider>();
-    final bp = context.read<BudgetProvider>();
+    try {
+      final userId = context.read<AuthProvider>().userId;
+      final expProvider = context.read<ExpenseProvider>();
+      final sgProvider = context.read<SavingsGoalProvider>();
+      final bp = context.read<BudgetProvider>();
 
-    if (_isEdit) {
-      await expProvider.updateExpense(
-        widget.existingExpense!.copyWith(
+      if (_isEdit) {
+        await expProvider.updateExpense(
+          widget.existingExpense!.copyWith(
+            categoryId: _selectedCategory!.id,
+            amount: amount,
+            description: _descCtrl.text.trim(),
+            date: _selectedDate,
+            type: _type,
+          ),
+        );
+      } else if (_selectedGoal != null) {
+        // Spending from a savings goal — use special walletId, deduct from goal
+        await expProvider.addExpense(
+          userId: userId,
+          categoryId: _selectedCategory!.id,
+          amount: amount,
+          description: _descCtrl.text.trim(),
+          date: _selectedDate,
+          type: 'expense',
+          walletId: 'savings_goal',
+          savingsGoalId: _selectedGoal!.id,
+        );
+        final newAmount = _selectedGoal!.currentAmount - amount;
+        await sgProvider.update(
+          _selectedGoal!.copyWith(
+            currentAmount: newAmount,
+            isCompleted: newAmount >= _selectedGoal!.targetAmount,
+          ),
+        );
+      } else {
+        await expProvider.addExpense(
+          userId: userId,
           categoryId: _selectedCategory!.id,
           amount: amount,
           description: _descCtrl.text.trim(),
           date: _selectedDate,
           type: _type,
-        ),
-      );
-    } else if (_selectedGoal != null) {
-      // Spending from a savings goal — use special walletId, deduct from goal
-      await expProvider.addExpense(
-        userId: userId,
-        categoryId: _selectedCategory!.id,
-        amount: amount,
-        description: _descCtrl.text.trim(),
-        date: _selectedDate,
-        type: 'expense',
-        walletId: 'savings_goal',
-        savingsGoalId: _selectedGoal!.id,
-      );
-      final newAmount = _selectedGoal!.currentAmount - amount;
-      await sgProvider.update(
-            _selectedGoal!.copyWith(
-              currentAmount: newAmount,
-              isCompleted: newAmount >= _selectedGoal!.targetAmount,
-            ),
-          );
-    } else {
-      await expProvider.addExpense(
-        userId: userId,
-        categoryId: _selectedCategory!.id,
-        amount: amount,
-        description: _descCtrl.text.trim(),
-        date: _selectedDate,
-        type: _type,
-        walletId: _selectedWallet?.id ?? 'default_account',
-      );
-    }
+          walletId: _selectedWallet?.id ?? 'default_account',
+        );
+      }
 
-    if (mounted) {
-      bp.recalculate(
-          expProvider.expensesForMonth(DateTime.now().month, DateTime.now().year));
-      Navigator.pop(context);
+      if (mounted) {
+        bp.recalculate(
+            expProvider.expensesForMonth(DateTime.now().month, DateTime.now().year));
+        Navigator.pop(context);
+      }
+    } finally {
+      if (mounted) setState(() => _saving = false);
     }
   }
 
@@ -359,7 +363,9 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
                           const SizedBox(width: 8),
                           Expanded(
                             child: Text(
-                              'AI detected $locationName. Category pre-set to ${_selectedCategory?.name ?? "Shopping"}.',
+                              _selectedCategory != null
+                                  ? 'At $locationName — ${_selectedCategory!.icon} ${_selectedCategory!.name} pre-selected. Change below if needed.'
+                                  : 'At $locationName — select a category below.',
                               style: const TextStyle(
                                   fontSize: 13, color: Color(0xFF7C5800)),
                             ),

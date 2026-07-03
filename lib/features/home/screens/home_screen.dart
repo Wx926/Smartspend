@@ -229,20 +229,36 @@ class _HomeScreenState extends State<HomeScreen> {
                                         fontWeight: FontWeight.bold)),
                               ],
                             ),
-                            GestureDetector(
-                              onTap: () =>
-                                  Navigator.pushNamed(context, '/profile'),
-                              child: CircleAvatar(
-                                radius: 22,
-                                backgroundColor:
-                                    Colors.white.withValues(alpha: 0.25),
-                                child: Text(_initials(displayName),
-                                    style: const TextStyle(
-                                        color: Colors.white,
-                                        fontWeight: FontWeight.bold,
-                                        fontSize: 14)),
+                            Row(children: [
+                              IconButton(
+                                icon: Icon(
+                                  lp.isTracking
+                                      ? Icons.location_on
+                                      : Icons.location_on_outlined,
+                                  color: Colors.white,
+                                ),
+                                tooltip: 'Nearby',
+                                onPressed: () => Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                        builder: (_) =>
+                                            const LocationScreen())),
                               ),
-                            ),
+                              GestureDetector(
+                                onTap: () =>
+                                    Navigator.pushNamed(context, '/profile'),
+                                child: CircleAvatar(
+                                  radius: 22,
+                                  backgroundColor:
+                                      Colors.white.withValues(alpha: 0.25),
+                                  child: Text(_initials(displayName),
+                                      style: const TextStyle(
+                                          color: Colors.white,
+                                          fontWeight: FontWeight.bold,
+                                          fontSize: 14)),
+                                ),
+                              ),
+                            ]),
                           ],
                         ),
                         const SizedBox(height: 20),

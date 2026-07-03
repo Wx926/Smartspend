@@ -87,38 +87,33 @@ class ExpenseProvider extends ChangeNotifier {
       walletId: walletId,
       savingsGoalId: savingsGoalId,
     );
-    // Optimistic update — show instantly, sync in background
+    // Optimistic: insert locally and return immediately — don't block on network
     _expenses.insert(0, expense);
     notifyListeners();
-    try {
-      final saved = await _service.addExpense(expense);
+    // Sync to Supabase in background
+    _service.addExpense(expense).then((saved) {
       final idx = _expenses.indexWhere((e) => e.id == expense.id);
       if (idx != -1) _expenses[idx] = saved;
       notifyListeners();
-    } catch (_) {
-      // Revert if Supabase fails
+    }).catchError((_) {
       _expenses.removeWhere((e) => e.id == expense.id);
       notifyListeners();
-      rethrow;
-    }
+    });
   }
 
   Future<void> updateExpense(ExpenseModel updated) async {
-    // Optimistic update
     final idx = _expenses.indexWhere((e) => e.id == updated.id);
     final previous = idx != -1 ? _expenses[idx] : null;
     if (idx != -1) _expenses[idx] = updated;
     notifyListeners();
-    try {
-      final saved = await _service.updateExpense(updated);
+    _service.updateExpense(updated).then((saved) {
       final i = _expenses.indexWhere((e) => e.id == saved.id);
       if (i != -1) _expenses[i] = saved;
       notifyListeners();
-    } catch (_) {
+    }).catchError((_) {
       if (previous != null && idx != -1) _expenses[idx] = previous;
       notifyListeners();
-      rethrow;
-    }
+    });
   }
 
   Future<void> deleteExpense(String id) async {

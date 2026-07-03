@@ -1,26 +1,47 @@
 import '../../../shared/models/expense_model.dart';
+import '../../../shared/services/local_storage_service.dart';
 import '../../../shared/services/supabase_service.dart';
 
 class ExpenseService {
   ExpenseService._();
   static final ExpenseService instance = ExpenseService._();
 
+  final _local = LocalStorageService.instance;
   final _supabase = SupabaseService.instance;
 
   Future<List<ExpenseModel>> getExpenses({int? month, int? year}) async {
-    return _supabase.getExpenses(month: month, year: year);
+    final all = _local.getExpenses();
+    if (month != null && year != null) {
+      return all.where((e) => e.date.month == month && e.date.year == year).toList();
+    }
+    return all;
   }
 
-  Future<ExpenseModel> addExpense(ExpenseModel expense) =>
-      _supabase.insertExpense(expense);
+  Future<ExpenseModel> addExpense(ExpenseModel expense) async {
+    final saved = await _local.insertExpense(expense);
+    _syncInsert(expense);
+    return saved;
+  }
 
-  Future<ExpenseModel> updateExpense(ExpenseModel expense) =>
-      _supabase.updateExpense(expense);
+  Future<ExpenseModel> updateExpense(ExpenseModel expense) async {
+    final saved = await _local.updateExpense(expense);
+    _syncUpdate(expense);
+    return saved;
+  }
 
-  Future<void> deleteExpense(String id) => _supabase.deleteExpense(id);
+  Future<void> _syncInsert(ExpenseModel e) async {
+    try { await _supabase.insertExpense(e); } catch (_) {}
+  }
 
-  /// Returns a map of categoryId → total amount for the given month/year.
-  /// Excludes savings_transfer records (goal contributions are not budget spend).
+  Future<void> _syncUpdate(ExpenseModel e) async {
+    try { await _supabase.updateExpense(e); } catch (_) {}
+  }
+
+  Future<void> deleteExpense(String id) async {
+    await _local.deleteExpense(id);
+    _supabase.deleteExpense(id).catchError((_) {});
+  }
+
   Map<String, double> getCategoryTotals(
       List<ExpenseModel> expenses, int month, int year) {
     final filtered = expenses
