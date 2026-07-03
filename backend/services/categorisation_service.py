@@ -27,7 +27,9 @@ CATEGORY_KEYWORDS: dict[str, list[str]] = {
     "Shopping": [
         "shopee", "lazada", "mall", "uniqlo", "mr diy", "watson",
         "guardian", "shopping", "store", "mart", "supermarket",
-        "hypermarket", "aeon", "lotus",
+        "hypermarket", "aeon", "lotus", "shoe", "shoes", "footwear",
+        "boot", "boots", "sneaker", "sneakers", "sandal", "apparel",
+        "clothing", "fashion", "garment",
     ],
     "Entertainment": [
         "cinema", "gsc", "tgv", "netflix", "spotify", "movie",

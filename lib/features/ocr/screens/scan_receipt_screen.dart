@@ -14,6 +14,7 @@ class ScanReceiptScreen extends StatefulWidget {
 
 class _ScanReceiptScreenState extends State<ScanReceiptScreen> {
   bool _scanning = false;
+  bool _picking = false; // guard against double-tap opening picker twice
 
   Future<void> _scan(XFile? file) async {
     if (file == null) return;
@@ -87,8 +88,14 @@ class _ScanReceiptScreenState extends State<ScanReceiptScreen> {
                   label: 'Take Photo',
                   subtitle: 'Use your camera to capture a receipt',
                   onTap: () async {
-                    final file = await OcrApiService.instance.pickFromCamera();
-                    await _scan(file);
+                    if (_picking || _scanning) return;
+                    setState(() => _picking = true);
+                    try {
+                      final file = await OcrApiService.instance.pickFromCamera();
+                      await _scan(file);
+                    } finally {
+                      if (mounted) setState(() => _picking = false);
+                    }
                   },
                 ),
                 const SizedBox(height: 16),
@@ -97,8 +104,14 @@ class _ScanReceiptScreenState extends State<ScanReceiptScreen> {
                   label: 'Choose from Gallery',
                   subtitle: 'Select an image or PDF from your device',
                   onTap: () async {
-                    final file = await OcrApiService.instance.pickFromGallery();
-                    await _scan(file);
+                    if (_picking || _scanning) return;
+                    setState(() => _picking = true);
+                    try {
+                      final file = await OcrApiService.instance.pickFromGallery();
+                      await _scan(file);
+                    } finally {
+                      if (mounted) setState(() => _picking = false);
+                    }
                   },
                 ),
                 const Spacer(),

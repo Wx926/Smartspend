@@ -45,7 +45,10 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
     _date = widget.result.date != null
         ? DateTime.tryParse(widget.result.date!) ?? DateTime.now()
         : DateTime.now();
-    _selectedCategoryId = widget.result.suggestedCategoryId;
+    // The backend's suggestedCategoryId is a Supabase UUID from a separate
+    // categories table — it never matches this app's local slug-style category
+    // ids (e.g. "shopping"), so it must not be used directly here. Only the
+    // name is trustworthy; the id gets resolved locally by name below.
     _selectedCategoryName = widget.result.suggestedCategoryName ?? 'Others';
 
 
@@ -66,6 +69,23 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
               text: (widget.result.amount ?? 0.0).toStringAsFixed(2)),
         ),
       ];
+    }
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_selectedCategoryId == null) {
+      final cats = context.read<BudgetProvider>().categories;
+      if (cats.isNotEmpty) {
+        final match = cats
+            .where((c) =>
+                c.name.toLowerCase() == _selectedCategoryName.toLowerCase())
+            .firstOrNull;
+        if (match != null) {
+          setState(() => _selectedCategoryId = match.id);
+        }
+      }
     }
   }
 
@@ -213,16 +233,13 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
     final categories = context.watch<BudgetProvider>().categories;
     final statuses = context.watch<BudgetProvider>().statuses;
 
-    // Auto-select category by name when categories load and ID is still null
-    if (categories.isNotEmpty && _selectedCategoryId == null) {
-      final match = categories
-          .where((c) => c.name.toLowerCase() == _selectedCategoryName.toLowerCase())
-          .firstOrNull;
-      if (match != null) {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted) setState(() => _selectedCategoryId = match.id);
-        });
-      }
+    // Resolve category ID from name the moment categories are available
+    if (_selectedCategoryId == null && categories.isNotEmpty) {
+      _selectedCategoryId = categories
+          .where((c) =>
+              c.name.toLowerCase() == _selectedCategoryName.toLowerCase())
+          .firstOrNull
+          ?.id;
     }
 
     // Budget remaining for selected category
@@ -517,7 +534,7 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
                                     fontSize: 14)),
                           ),
                           Text(
-                            'RM ${_total.toStringAsFixed(2)}',
+                            'RM ${(widget.result.amount ?? _total).toStringAsFixed(2)}',
                             style: const TextStyle(
                                 fontWeight: FontWeight.bold,
                                 fontSize: 14,
@@ -588,7 +605,10 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
                           spacing: 8,
                           runSpacing: 8,
                           children: categories.map((cat) {
-                            final selected = cat.id == _selectedCategoryId;
+                            final selected = _selectedCategoryId != null
+                                ? cat.id == _selectedCategoryId
+                                : cat.name.toLowerCase() ==
+                                    _selectedCategoryName.toLowerCase();
                             final emoji = _categoryEmoji(cat.name);
                             return GestureDetector(
                               onTap: () => setState(() {
