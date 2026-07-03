@@ -4,6 +4,7 @@ import '../../../shared/models/budget_model.dart';
 import '../../../shared/models/category_model.dart';
 import '../../../shared/models/expense_model.dart';
 import '../../../shared/services/local_storage_service.dart';
+import '../../../shared/services/supabase_service.dart';
 import '../services/budget_service.dart';
 
 class BudgetProvider extends ChangeNotifier {
@@ -167,7 +168,7 @@ class BudgetProvider extends ChangeNotifier {
     // Reassign existing records to the fallback category for that type.
     // expense → "others", income → "bonus"
     final fallbackId = cat.type == 'income' ? 'bonus' : 'others';
-    await LocalStorageService.instance.reassignCategory(cat.id, fallbackId);
+    await SupabaseService.instance.reassignCategoryExpenses(cat.id, fallbackId);
 
     await LocalStorageService.instance.deleteCategory(cat.id);
     _reloadCategories();

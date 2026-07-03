@@ -6,6 +6,7 @@ import '../models/location_model.dart';
 import '../models/alert_log_model.dart';
 import '../models/ai_insight_model.dart';
 import '../models/savings_goal_model.dart';
+import '../models/wallet_model.dart';
 
 /// Data Access Object — single entry point for all Supabase queries.
 class SupabaseService {
@@ -195,6 +196,46 @@ class SupabaseService {
         .select()
         .single();
     return AiInsightModel.fromJson(data);
+  }
+
+  // ── Wallets ───────────────────────────────────────────────────
+  Future<List<WalletModel>> getWallets() async {
+    final data = await _client
+        .from('wallets')
+        .select()
+        .eq('user_id', _uid)
+        .order('created_at');
+    return (data as List).map((e) => WalletModel.fromJson(e)).toList();
+  }
+
+  Future<void> upsertWallet(WalletModel wallet) async {
+    await _client.from('wallets').upsert({
+      ...wallet.toJson(),
+      'user_id': _uid,
+      'created_at': DateTime.now().toIso8601String(),
+    }, onConflict: 'id');
+  }
+
+  Future<void> deleteWallet(String id) async {
+    await _client.from('wallets').delete().eq('id', id);
+  }
+
+  Future<void> reassignWalletExpenses(
+      String fromWalletId, String toWalletId) async {
+    await _client
+        .from('expenses')
+        .update({'wallet_id': toWalletId})
+        .eq('user_id', _uid)
+        .eq('wallet_id', fromWalletId);
+  }
+
+  Future<void> reassignCategoryExpenses(
+      String fromCategoryId, String toCategoryId) async {
+    await _client
+        .from('expenses')
+        .update({'category_id': toCategoryId})
+        .eq('user_id', _uid)
+        .eq('category_id', fromCategoryId);
   }
 
   // ── Savings Goals ─────────────────────────────────────────────

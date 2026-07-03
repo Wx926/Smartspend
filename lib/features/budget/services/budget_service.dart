@@ -1,25 +1,25 @@
 import '../../../shared/models/budget_model.dart';
 import '../../../shared/models/category_model.dart';
 import '../../../shared/models/expense_model.dart';
-import '../../../shared/services/local_storage_service.dart';
+import '../../../shared/services/supabase_service.dart';
 import '../../../shared/constants/app_constants.dart';
 
 class BudgetService {
   BudgetService._();
   static final BudgetService instance = BudgetService._();
 
-  final _store = LocalStorageService.instance;
+  final _supabase = SupabaseService.instance;
 
-  Future<List<BudgetModel>> getBudgets(int month, int year) async =>
-      _store.getBudgets(month, year);
+  Future<List<BudgetModel>> getBudgets(int month, int year) =>
+      _supabase.getBudgets(month, year);
 
   Future<BudgetModel> upsertBudget(BudgetModel budget) =>
-      _store.upsertBudget(budget);
+      _supabase.upsertBudget(budget);
 
-  Future<void> deleteBudget(String budgetId) => _store.deleteBudget(budgetId);
+  Future<void> deleteBudget(String budgetId) =>
+      _supabase.deleteBudget(budgetId);
 
   /// Algorithm 2: Burn Rate Calculation + Budget Forecast
-  /// Computes budget status for each category using daily burn rate projection.
   List<BudgetStatus> computeBudgetStatuses({
     required List<BudgetModel> budgets,
     required List<CategoryModel> categories,

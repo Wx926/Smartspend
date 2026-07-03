@@ -149,6 +149,8 @@ class SavingsGoalProvider extends ChangeNotifier {
           goal.autoTransferSourceWalletId!, expenseProvider.expenses);
       if (balance < goal.autoTransferAmount!) {
         skipped.add(goal.name);
+        // Mark as attempted this month so we don't nag on every app open
+        await update(goal.copyWith(lastAutoTransferDate: now));
         continue;
       }
 

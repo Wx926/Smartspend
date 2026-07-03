@@ -1,29 +1,23 @@
 import '../../../shared/models/expense_model.dart';
-import '../../../shared/services/local_storage_service.dart';
+import '../../../shared/services/supabase_service.dart';
 
 class ExpenseService {
   ExpenseService._();
   static final ExpenseService instance = ExpenseService._();
 
-  final _store = LocalStorageService.instance;
+  final _supabase = SupabaseService.instance;
 
   Future<List<ExpenseModel>> getExpenses({int? month, int? year}) async {
-    final all = _store.getExpenses();
-    if (month == null && year == null) return all;
-    return all
-        .where((e) =>
-            (month == null || e.date.month == month) &&
-            (year == null || e.date.year == year))
-        .toList();
+    return _supabase.getExpenses(month: month, year: year);
   }
 
   Future<ExpenseModel> addExpense(ExpenseModel expense) =>
-      _store.insertExpense(expense);
+      _supabase.insertExpense(expense);
 
   Future<ExpenseModel> updateExpense(ExpenseModel expense) =>
-      _store.updateExpense(expense);
+      _supabase.updateExpense(expense);
 
-  Future<void> deleteExpense(String id) => _store.deleteExpense(id);
+  Future<void> deleteExpense(String id) => _supabase.deleteExpense(id);
 
   /// Returns a map of categoryId → total amount for the given month/year.
   /// Excludes savings_transfer records (goal contributions are not budget spend).

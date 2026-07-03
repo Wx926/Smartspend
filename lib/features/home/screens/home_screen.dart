@@ -36,10 +36,10 @@ class _HomeScreenState extends State<HomeScreen> {
     final sp = context.read<SavingsGoalProvider>();
     final wp = context.read<WalletProvider>();
     final auth = context.read<AuthProvider>();
-    await ep.load();
+    // Run independent loads in parallel — much faster than sequential awaits
+    await Future.wait([ep.load(), wp.load(), sp.load()]);
     final now = DateTime.now();
     await bp.load(ep.expensesForMonth(now.month, now.year));
-    await sp.load();
     final skipped = await sp.checkAutoTransfers(
       walletProvider: wp,
       expenseProvider: ep,

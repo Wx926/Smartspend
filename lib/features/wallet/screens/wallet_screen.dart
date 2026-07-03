@@ -158,8 +158,12 @@ class _WalletScreenState extends State<WalletScreen> {
                         ],
                       ),
                     ),
-                    onDismissed: (_) =>
-                        context.read<WalletProvider>().deleteWallet(wallet.id),
+                    onDismissed: (_) async {
+                      await context.read<WalletProvider>().deleteWallet(wallet.id);
+                      if (context.mounted) {
+                        await context.read<ExpenseProvider>().load();
+                      }
+                    },
                     child: Container(
                       margin: const EdgeInsets.only(bottom: 12),
                       padding: const EdgeInsets.all(16),

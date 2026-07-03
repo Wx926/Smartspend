@@ -368,8 +368,8 @@ class _SavingsGoalsScreenState extends State<SavingsGoalsScreen> {
                       setSheet(() => errorMsg = 'Please enter a valid amount');
                       return;
                     }
-                    final balance = wp.walletBalance(
-                        selectedWallet.id, ep.expenses);
+                    final balance =
+                        wp.walletBalance(selectedWallet.id, ep.expenses);
                     if (amount > balance) {
                       setSheet(() => errorMsg =
                           '${selectedWallet.name} only has RM ${fmt.format(balance)} — not enough to transfer RM ${fmt.format(amount)}');
@@ -404,6 +404,7 @@ class _SavingsGoalsScreenState extends State<SavingsGoalsScreen> {
     final wallets = wp.wallets;
     WalletModel selectedWallet = wp.defaultWallet;
     final amountCtrl = TextEditingController();
+    String? errorMsg;
 
     showModalBottomSheet(
       context: context,
@@ -421,7 +422,8 @@ class _SavingsGoalsScreenState extends State<SavingsGoalsScreen> {
               Text('Withdraw from "${goal.name}"',
                   style: const TextStyle(
                       fontSize: 18, fontWeight: FontWeight.bold)),
-              Text('Available: RM ${fmt.format(goal.currentAmount)}',
+              Text(
+                  'Available: RM ${fmt.format(goal.currentAmount)}',
                   style: const TextStyle(
                       color: AppColors.textSecondary, fontSize: 13)),
               const SizedBox(height: 20),
@@ -435,7 +437,10 @@ class _SavingsGoalsScreenState extends State<SavingsGoalsScreen> {
                 expenses: ep.expenses,
                 wp: wp,
                 fmt: fmt,
-                onChanged: (w) => setSheet(() => selectedWallet = w!),
+                onChanged: (w) => setSheet(() {
+                  selectedWallet = w!;
+                  errorMsg = null;
+                }),
               ),
               const SizedBox(height: 16),
               TextField(
@@ -448,19 +453,28 @@ class _SavingsGoalsScreenState extends State<SavingsGoalsScreen> {
                     prefixText: 'RM ',
                     helperText:
                         'Max: RM ${fmt.format(goal.currentAmount)}'),
+                onChanged: (_) {
+                  if (errorMsg != null) setSheet(() => errorMsg = null);
+                },
               ),
+              if (errorMsg != null) ...[
+                const SizedBox(height: 10),
+                _inlineError(errorMsg!),
+              ],
               const SizedBox(height: 20),
               SizedBox(
                 width: double.infinity,
                 child: ElevatedButton(
                   onPressed: () async {
                     final amount = double.tryParse(amountCtrl.text) ?? 0;
-                    if (amount <= 0) return;
+                    if (amount <= 0) {
+                      setSheet(
+                          () => errorMsg = 'Please enter a valid amount');
+                      return;
+                    }
                     if (amount > goal.currentAmount) {
-                      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                        content: Text(
-                            'Cannot exceed goal balance of RM ${fmt.format(goal.currentAmount)}'),
-                      ));
+                      setSheet(() => errorMsg =
+                          'Cannot exceed goal balance of RM ${fmt.format(goal.currentAmount)}');
                       return;
                     }
                     final auth = context.read<AuthProvider>();
@@ -496,6 +510,7 @@ class _SavingsGoalsScreenState extends State<SavingsGoalsScreen> {
     final allocCtrl = {for (final g in goals) g.id: TextEditingController()};
     double totalAmount = 0;
     double remaining = 0;
+    String? errorMsg;
 
     void recalc(StateSetter setSheet) {
       totalAmount = double.tryParse(totalCtrl.text) ?? 0;
@@ -504,7 +519,7 @@ class _SavingsGoalsScreenState extends State<SavingsGoalsScreen> {
         allocated += double.tryParse(ctrl.text) ?? 0;
       }
       remaining = totalAmount - allocated;
-      setSheet(() {});
+      setSheet(() => errorMsg = null);
     }
 
     showModalBottomSheet(
@@ -643,6 +658,10 @@ class _SavingsGoalsScreenState extends State<SavingsGoalsScreen> {
                       ),
                     ]),
                   ),
+                  if (errorMsg != null) ...[
+                    const SizedBox(height: 4),
+                    _inlineError(errorMsg!),
+                  ],
                   const SizedBox(height: 20),
                   SizedBox(
                     width: double.infinity,
@@ -652,11 +671,8 @@ class _SavingsGoalsScreenState extends State<SavingsGoalsScreen> {
                               final balance = wp.walletBalance(
                                   selectedWallet.id, ep.expenses);
                               if (totalAmount > balance) {
-                                ScaffoldMessenger.of(context)
-                                    .showSnackBar(SnackBar(
-                                  content: Text(
-                                      'Insufficient balance. ${selectedWallet.name} has RM ${fmt.format(balance)}'),
-                                ));
+                                setSheet(() => errorMsg =
+                                    '${selectedWallet.name} only has RM ${fmt.format(balance)} — not enough to transfer RM ${fmt.format(totalAmount)}');
                                 return;
                               }
                               final auth = context.read<AuthProvider>();
@@ -667,7 +683,6 @@ class _SavingsGoalsScreenState extends State<SavingsGoalsScreen> {
                                         allocCtrl[g.id]?.text ?? '') ??
                                     0;
                                 if (amt <= 0) continue;
-                                // Reload goal to get latest state
                                 final latest = sgProvider.goals
                                     .firstWhere((x) => x.id == g.id,
                                         orElse: () => g);
@@ -1000,6 +1015,26 @@ class _SavingsGoalsScreenState extends State<SavingsGoalsScreen> {
   }
 
   // ── Helpers ─────────────────────────────────────────────────────────────────
+
+  Widget _inlineError(String message) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(
+          color: Colors.red.shade50,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: Colors.red.shade200),
+        ),
+        child: Row(children: [
+          Icon(Icons.error_outline, size: 16, color: Colors.red.shade700),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(message,
+                style: TextStyle(
+                    color: Colors.red.shade700,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w500)),
+          ),
+        ]),
+      );
 
   Widget _walletDropdown({
     required List<WalletModel> wallets,

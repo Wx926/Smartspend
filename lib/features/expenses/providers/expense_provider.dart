@@ -87,16 +87,38 @@ class ExpenseProvider extends ChangeNotifier {
       walletId: walletId,
       savingsGoalId: savingsGoalId,
     );
-    final saved = await _service.addExpense(expense);
-    _expenses.insert(0, saved);
+    // Optimistic update — show instantly, sync in background
+    _expenses.insert(0, expense);
     notifyListeners();
+    try {
+      final saved = await _service.addExpense(expense);
+      final idx = _expenses.indexWhere((e) => e.id == expense.id);
+      if (idx != -1) _expenses[idx] = saved;
+      notifyListeners();
+    } catch (_) {
+      // Revert if Supabase fails
+      _expenses.removeWhere((e) => e.id == expense.id);
+      notifyListeners();
+      rethrow;
+    }
   }
 
   Future<void> updateExpense(ExpenseModel updated) async {
-    final saved = await _service.updateExpense(updated);
-    final idx = _expenses.indexWhere((e) => e.id == saved.id);
-    if (idx != -1) _expenses[idx] = saved;
+    // Optimistic update
+    final idx = _expenses.indexWhere((e) => e.id == updated.id);
+    final previous = idx != -1 ? _expenses[idx] : null;
+    if (idx != -1) _expenses[idx] = updated;
     notifyListeners();
+    try {
+      final saved = await _service.updateExpense(updated);
+      final i = _expenses.indexWhere((e) => e.id == saved.id);
+      if (i != -1) _expenses[i] = saved;
+      notifyListeners();
+    } catch (_) {
+      if (previous != null && idx != -1) _expenses[idx] = previous;
+      notifyListeners();
+      rethrow;
+    }
   }
 
   Future<void> deleteExpense(String id) async {

@@ -1,11 +1,20 @@
 import 'package:flutter/material.dart';
 import '../../../shared/models/expense_model.dart';
 import '../../../shared/models/wallet_model.dart';
-import '../../../shared/services/local_storage_service.dart';
+import '../../../shared/services/supabase_service.dart';
 
 class WalletProvider extends ChangeNotifier {
-  List<WalletModel> _wallets = [];
+  static const _defaultWallet = WalletModel(
+    id: 'default_account',
+    name: 'Default Account',
+    icon: '💳',
+    colorHex: '3B82F6',
+    isDefault: true,
+  );
+
+  List<WalletModel> _wallets = [_defaultWallet];
   bool _hidden = false;
+  bool _loaded = false;
 
   List<WalletModel> get wallets => _wallets;
   bool get hidden => _hidden;
@@ -14,8 +23,19 @@ class WalletProvider extends ChangeNotifier {
       _wallets.firstWhere((w) => w.id == 'default_account',
           orElse: () => _wallets.first);
 
-  void init() {
-    _wallets = LocalStorageService.instance.getWallets();
+  // Called from app.dart on startup — kept for backward compat
+  void init() {}
+
+  Future<void> load({bool force = false}) async {
+    if (_loaded && !force) return;
+    try {
+      final cloud = await SupabaseService.instance.getWallets();
+      _wallets = [_defaultWallet, ...cloud];
+      _loaded = true;
+    } catch (_) {
+      _wallets = [_defaultWallet];
+    }
+    notifyListeners();
   }
 
   void toggleHidden() {
@@ -49,16 +69,13 @@ class WalletProvider extends ChangeNotifier {
       totalAsset(records) - totalDebt(records);
 
   Future<void> addWallet(WalletModel wallet) async {
-    await LocalStorageService.instance.saveWallet(wallet);
-    _wallets = LocalStorageService.instance.getWallets();
-    notifyListeners();
+    await SupabaseService.instance.upsertWallet(wallet);
+    await load(force: true);
   }
 
   Future<void> deleteWallet(String id) async {
-    // Move all records from this wallet to the default account.
-    await LocalStorageService.instance.reassignWallet(id, 'default_account');
-    await LocalStorageService.instance.deleteWallet(id);
-    _wallets = LocalStorageService.instance.getWallets();
-    notifyListeners();
+    await SupabaseService.instance.reassignWalletExpenses(id, 'default_account');
+    await SupabaseService.instance.deleteWallet(id);
+    await load(force: true);
   }
 }
