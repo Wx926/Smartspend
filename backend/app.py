@@ -9,8 +9,12 @@ from routes.ocr_routes import ocr_bp
 # Windows' console defaults to cp1252, which can't encode arbitrary Unicode
 # (e.g. receipt text with accented characters, or debug-log arrows) — that
 # would otherwise crash print() calls and surface as a 500 error.
-sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+# line_buffering=True so debug prints (raw OCR text, extracted items) are
+# flushed to the log immediately instead of sitting in an internal buffer
+# until it fills up — otherwise they're invisible when stdout is redirected
+# to a file rather than an interactive terminal.
+sys.stdout.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
+sys.stderr.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
 
 load_dotenv()
 

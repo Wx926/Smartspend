@@ -62,7 +62,7 @@ class ExpenseProvider extends ChangeNotifier {
     }
   }
 
-  Future<void> addExpense({
+  Future<ExpenseModel> addExpense({
     required String userId,
     required String categoryId,
     required double amount,
@@ -72,6 +72,9 @@ class ExpenseProvider extends ChangeNotifier {
     String type = 'expense',
     String walletId = 'default_account',
     String? savingsGoalId,
+    String source = 'manual',
+    String? merchantName,
+    String? batchId,
   }) async {
     final expense = ExpenseModel(
       id: _uuid.v4(),
@@ -86,6 +89,9 @@ class ExpenseProvider extends ChangeNotifier {
       type: type,
       walletId: walletId,
       savingsGoalId: savingsGoalId,
+      source: source,
+      merchantName: merchantName,
+      batchId: batchId,
     );
     // Optimistic: insert locally and return immediately — don't block on network
     _expenses.insert(0, expense);
@@ -99,6 +105,7 @@ class ExpenseProvider extends ChangeNotifier {
       _expenses.removeWhere((e) => e.id == expense.id);
       notifyListeners();
     });
+    return expense;
   }
 
   Future<void> updateExpense(ExpenseModel updated) async {

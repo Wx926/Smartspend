@@ -1,12 +1,10 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:uuid/uuid.dart';
 import 'package:intl/intl.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:uuid/uuid.dart';
 import '../../../shared/theme/app_colors.dart';
-import '../../../shared/models/expense_model.dart';
-import '../../../shared/models/category_model.dart';
 import '../../../shared/models/budget_model.dart';
 import '../../../shared/services/supabase_service.dart';
 import '../../../features/auth/providers/auth_provider.dart';
@@ -58,6 +56,7 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
                 nameCtrl: TextEditingController(text: li.itemName),
                 priceCtrl: TextEditingController(
                     text: li.price.toStringAsFixed(2)),
+                qtyCtrl: TextEditingController(text: '${li.quantity}'),
               ))
           .toList();
     } else {
@@ -96,6 +95,7 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
     for (final item in _items) {
       item.nameCtrl.dispose();
       item.priceCtrl.dispose();
+      item.qtyCtrl.dispose();
     }
     super.dispose();
   }
@@ -108,10 +108,12 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
     try {
       final uid = context.read<AuthProvider>().userId;
       final categories = context.read<BudgetProvider>().categories;
+      final expenseProvider = context.read<ExpenseProvider>();
       final db = SupabaseService.instance;
-      const uuid = Uuid();
-      final now = DateTime.now();
       String? firstExpenseId;
+      // One id shared by every line item from this scan, so Receipt History
+      // can group them back into a single row instead of one per item.
+      final batchId = const Uuid().v4();
 
       final catId = _selectedCategoryId ??
           categories
@@ -124,22 +126,27 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
       for (final item in _items) {
         final price = double.tryParse(item.priceCtrl.text) ?? 0;
         if (price <= 0) continue;
+        final qty = int.tryParse(item.qtyCtrl.text) ?? 1;
 
-        final desc = [item.nameCtrl.text.trim(), if (notes.isNotEmpty) notes]
-            .join(' · ');
+        final desc = [
+          if (qty > 1) 'x$qty ${item.nameCtrl.text.trim()}' else item.nameCtrl.text.trim(),
+          if (notes.isNotEmpty) notes,
+        ].join(' · ');
 
-        final expense = ExpenseModel(
-          id: uuid.v4(),
+        // Goes through the same local-storage-first pipeline every other
+        // screen uses — writing straight to Supabase here (as before) left
+        // the record orphaned from the app's own Transactions/Budget views,
+        // which read from local storage.
+        final saved = await expenseProvider.addExpense(
           userId: uid,
           categoryId: catId,
           amount: price,
           description: desc,
           date: _date,
-          createdAt: now,
-          updatedAt: now,
+          source: 'ocr',
+          merchantName: _vendorCtrl.text.trim(),
+          batchId: batchId,
         );
-
-        final saved = await db.insertExpense(expense);
         firstExpenseId ??= saved.id;
       }
 
@@ -153,8 +160,6 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
           status: w.status,
         );
       }
-
-      if (mounted) await context.read<ExpenseProvider>().load();
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -494,13 +499,29 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
                                     fontWeight: FontWeight.w600,
                                     letterSpacing: 0.5)),
                           ),
-                          Text('PRICE',
-                              style: TextStyle(
-                                  color: Color(0xFF888888),
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w600,
-                                  letterSpacing: 0.5)),
-                          SizedBox(width: 28),
+                          SizedBox(width: 8),
+                          SizedBox(
+                            width: 40,
+                            child: Text('QTY',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                    color: Color(0xFF888888),
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w600,
+                                    letterSpacing: 0.5)),
+                          ),
+                          SizedBox(width: 8),
+                          Expanded(
+                            flex: 2,
+                            child: Text('PRICE',
+                                style: TextStyle(
+                                    color: Color(0xFF888888),
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w600,
+                                    letterSpacing: 0.5)),
+                          ),
+                          SizedBox(width: 4),
+                          SizedBox(width: 24),
                         ]),
                       ),
                       // Item rows
@@ -511,6 +532,7 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
                               ? () => setState(() {
                                     _items[i].nameCtrl.dispose();
                                     _items[i].priceCtrl.dispose();
+                                    _items[i].qtyCtrl.dispose();
                                     _items.removeAt(i);
                                   })
                               : null,
@@ -533,14 +555,21 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
                                     fontWeight: FontWeight.bold,
                                     fontSize: 14)),
                           ),
-                          Text(
-                            'RM ${(widget.result.amount ?? _total).toStringAsFixed(2)}',
-                            style: const TextStyle(
-                                fontWeight: FontWeight.bold,
-                                fontSize: 14,
-                                color: Color(0xFF1A5276)),
+                          const SizedBox(width: 8),
+                          const SizedBox(width: 40),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            flex: 2,
+                            child: Text(
+                              'RM ${(widget.result.amount ?? _total).toStringAsFixed(2)}',
+                              style: const TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 14,
+                                  color: Color(0xFF1A5276)),
+                            ),
                           ),
-                          const SizedBox(width: 28),
+                          const SizedBox(width: 4),
+                          const SizedBox(width: 24),
                         ]),
                       ),
                     ],
@@ -860,8 +889,13 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
 class _EditableItem {
   TextEditingController nameCtrl;
   TextEditingController priceCtrl;
+  TextEditingController qtyCtrl;
 
-  _EditableItem({required this.nameCtrl, required this.priceCtrl});
+  _EditableItem({
+    required this.nameCtrl,
+    required this.priceCtrl,
+    TextEditingController? qtyCtrl,
+  }) : qtyCtrl = qtyCtrl ?? TextEditingController(text: '1');
 }
 
 // ── Item row ───────────────────────────────────────────────────────────────────
@@ -894,6 +928,23 @@ class _ItemRow extends StatelessWidget {
                   EdgeInsets.symmetric(horizontal: 8, vertical: 6),
               border: OutlineInputBorder(),
               hintText: 'Item name',
+            ),
+          ),
+        ),
+        const SizedBox(width: 8),
+        SizedBox(
+          width: 40,
+          child: TextFormField(
+            controller: item.qtyCtrl,
+            onChanged: (_) => onChanged(),
+            textAlign: TextAlign.center,
+            keyboardType: TextInputType.number,
+            style: const TextStyle(fontSize: 13),
+            decoration: const InputDecoration(
+              isDense: true,
+              contentPadding:
+                  EdgeInsets.symmetric(horizontal: 4, vertical: 6),
+              border: OutlineInputBorder(),
             ),
           ),
         ),

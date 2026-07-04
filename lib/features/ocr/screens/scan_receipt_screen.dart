@@ -4,6 +4,7 @@ import '../../../shared/theme/app_colors.dart';
 import '../services/ocr_api_service.dart';
 import '../models/ocr_result.dart';
 import 'receipt_review_screen.dart';
+import 'receipt_picker_screen.dart';
 
 class ScanReceiptScreen extends StatefulWidget {
   const ScanReceiptScreen({super.key});
@@ -107,8 +108,12 @@ class _ScanReceiptScreenState extends State<ScanReceiptScreen> {
                     if (_picking || _scanning) return;
                     setState(() => _picking = true);
                     try {
-                      final file = await OcrApiService.instance.pickFromGallery();
-                      await _scan(file);
+                      final path = await Navigator.push<String>(
+                        context,
+                        MaterialPageRoute(
+                            builder: (_) => const ReceiptPickerScreen()),
+                      );
+                      if (path != null) await _scan(XFile(path));
                     } finally {
                       if (mounted) setState(() => _picking = false);
                     }

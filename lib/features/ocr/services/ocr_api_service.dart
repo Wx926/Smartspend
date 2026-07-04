@@ -21,9 +21,6 @@ class OcrApiService {
   Future<XFile?> pickFromCamera() =>
       _picker.pickImage(source: ImageSource.camera, imageQuality: 90);
 
-  Future<XFile?> pickFromGallery() =>
-      _picker.pickImage(source: ImageSource.gallery, imageQuality: 90);
-
   Future<OcrResult> scanReceipt(XFile file) async {
     final uri = Uri.parse('${AppConstants.ocrBackendUrl}/api/scan-receipt');
     final request = http.MultipartRequest('POST', uri)

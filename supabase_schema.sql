@@ -54,7 +54,10 @@ CREATE TABLE expenses (
   date        DATE NOT NULL,
   location_id UUID,
   created_at  TIMESTAMPTZ DEFAULT NOW(),
-  updated_at  TIMESTAMPTZ DEFAULT NOW()
+  updated_at  TIMESTAMPTZ DEFAULT NOW(),
+  source        TEXT DEFAULT 'manual', -- 'manual' | 'ocr' | 'voice'
+  merchant_name TEXT,
+  batch_id      UUID -- groups line items saved from the same receipt scan
 );
 
 -- ─── Locations ───────────────────────────────────────────────────────────────

@@ -8,6 +8,7 @@ import '../models/expense_model.dart';
 import '../models/location_model.dart';
 import '../models/alert_log_model.dart';
 import '../models/wallet_model.dart';
+import '../models/recent_receipt_model.dart';
 
 /// Local on-device storage. No internet or login required.
 /// Data persists across app restarts via SharedPreferences.
@@ -24,6 +25,9 @@ class LocalStorageService {
   static const _keyWallets = 'ss_wallets';
   static const _keyNotificationsEnabled = 'ss_notifications_enabled';
   static const _keyTrackingEnabled = 'ss_tracking_enabled';
+  static const _keyRecentReceipts = 'ss_recent_receipts';
+  static const _keyAiCategorisation = 'ss_ai_categorisation_enabled';
+  static const _maxRecentReceipts = 12;
 
   static final WalletModel _defaultWallet = WalletModel(
     id: 'default_account',
@@ -58,6 +62,12 @@ class LocalStorageService {
 
   Future<void> setTrackingEnabled(bool value) async =>
       _prefs?.setBool(_keyTrackingEnabled, value);
+
+  bool get aiCategorisationEnabled =>
+      _prefs?.getBool(_keyAiCategorisation) ?? true;
+
+  Future<void> setAiCategorisationEnabled(bool value) async =>
+      _prefs?.setBool(_keyAiCategorisation, value);
 
   // ── Categories ─────────────────────────────────────────────────────────────
   List<CategoryModel> _defaultCategories(String type) {
@@ -355,5 +365,26 @@ class LocalStorageService {
   void closeHistory(String id, DateTime leftAt, int dwell) {
     final idx = _historyBuffer.indexWhere((h) => h.id == id);
     if (idx >= 0) _historyBuffer.removeAt(idx);
+  }
+
+  // ── Recent receipts (custom picker "Recents" section) ──────────────────────
+  List<RecentReceiptModel> getRecentReceipts() {
+    final raw = _prefs?.getString(_keyRecentReceipts);
+    if (raw == null) return [];
+    final list = jsonDecode(raw) as List;
+    return list
+        .map((e) => RecentReceiptModel.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  Future<void> addRecentReceipt(RecentReceiptModel receipt) async {
+    final all = getRecentReceipts()
+      ..removeWhere((r) => r.filePath == receipt.filePath)
+      ..insert(0, receipt);
+    final capped = all.take(_maxRecentReceipts).toList();
+    await _prefs?.setString(
+      _keyRecentReceipts,
+      jsonEncode(capped.map((r) => r.toJson()).toList()),
+    );
   }
 }

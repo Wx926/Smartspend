@@ -5,6 +5,9 @@ import '../../../shared/services/supabase_service.dart';
 import '../../../shared/services/local_storage_service.dart';
 import '../../../shared/theme/app_colors.dart';
 import '../../ocr/screens/warranty_records_screen.dart';
+import '../../ocr/screens/receipt_history_screen.dart';
+import '../../ocr/screens/scan_receipt_screen.dart';
+import '../../expenses/providers/expense_provider.dart';
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
@@ -16,6 +19,7 @@ class ProfileScreen extends StatefulWidget {
 class _ProfileScreenState extends State<ProfileScreen> {
   bool _locationAlerts = true;
   bool _pushNotifications = true;
+  bool _aiCategorisation = true;
   int _warrantyCount = 0;
   int _expiringCount = 0;
 
@@ -24,6 +28,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     super.initState();
     _loadWarranties();
     _pushNotifications = LocalStorageService.instance.notificationsEnabled;
+    _aiCategorisation = LocalStorageService.instance.aiCategorisationEnabled;
   }
 
   Future<void> _loadWarranties() async {
@@ -41,6 +46,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
   @override
   Widget build(BuildContext context) {
     final auth = context.watch<AuthProvider>();
+    final receiptCount = context
+        .watch<ExpenseProvider>()
+        .expenses
+        .where((e) => e.source == 'ocr' || e.source == 'voice')
+        .map((e) => e.batchId ?? e.id)
+        .toSet()
+        .length;
     final name = auth.isLoggedIn
         ? (auth.displayName.isEmpty ? 'User' : auth.displayName)
         : 'Guest User';
@@ -146,6 +158,62 @@ class _ProfileScreenState extends State<ProfileScreen> {
               ),
             ),
           ),
+
+          const SizedBox(height: 20),
+
+          // ── Smart Receipts & Voice ────────────────────────────────
+          _sectionLabel('SMART RECEIPTS & VOICE'),
+          _card([
+            _tile(
+              icon: Icons.receipt_long_outlined,
+              iconColor: AppColors.primary,
+              iconBg: AppColors.primarySurface,
+              title: 'Scanned Receipt History',
+              subtitle: receiptCount == 0
+                  ? 'No receipts yet'
+                  : '$receiptCount receipts',
+              trailingBadge: receiptCount > 0 ? '$receiptCount' : null,
+              onTap: () => Navigator.push(context,
+                  MaterialPageRoute(
+                      builder: (_) => const ReceiptHistoryScreen())),
+            ),
+            _divider(),
+            _tile(
+              icon: Icons.camera_alt_outlined,
+              iconColor: const Color(0xFFFF8C42),
+              iconBg: const Color(0xFFFFF0E6),
+              title: 'Scan a new receipt',
+              subtitle: 'Camera, gallery or voice input',
+              onTap: () => Navigator.push(context,
+                  MaterialPageRoute(
+                      builder: (_) => const ScanReceiptScreen())),
+            ),
+            _divider(),
+            _tile(
+              icon: Icons.language_outlined,
+              iconColor: const Color(0xFF8B5CF6),
+              iconBg: const Color(0xFFF5F3FF),
+              title: 'Voice input language',
+              subtitle: 'English (Malaysia)',
+              onTap: () => ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                    content: Text('Voice input — coming soon')),
+              ),
+            ),
+            _divider(),
+            _toggleTile(
+              icon: Icons.auto_awesome_outlined,
+              iconColor: const Color(0xFF3B82F6),
+              iconBg: const Color(0xFFEFF6FF),
+              title: 'AI auto-categorisation',
+              subtitle: 'Suggest category from receipt content',
+              value: _aiCategorisation,
+              onChanged: (v) {
+                setState(() => _aiCategorisation = v);
+                LocalStorageService.instance.setAiCategorisationEnabled(v);
+              },
+            ),
+          ]),
 
           const SizedBox(height: 20),
 
@@ -403,6 +471,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     required String title,
     String? subtitle,
     Color? titleColor,
+    String? trailingBadge,
     VoidCallback? onTap,
   }) =>
       ListTile(
@@ -423,8 +492,29 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 style: const TextStyle(
                     fontSize: 12, color: AppColors.textSecondary))
             : null,
-        trailing: const Icon(Icons.chevron_right,
-            color: AppColors.textSecondary, size: 18),
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (trailingBadge != null) ...[
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: AppColors.primary,
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Text(trailingBadge,
+                    style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600)),
+              ),
+              const SizedBox(width: 6),
+            ],
+            const Icon(Icons.chevron_right,
+                color: AppColors.textSecondary, size: 18),
+          ],
+        ),
         onTap: onTap,
         contentPadding:
             const EdgeInsets.symmetric(horizontal: 16, vertical: 2),

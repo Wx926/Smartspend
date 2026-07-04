@@ -18,6 +18,19 @@ CATEGORY_KEYWORDS: dict[str, list[str]] = {
         "teh", "tarik", "roti", "canai", "lemak", "mee", "laksa",
         "curry", "rice", "ayam", "ikan", "sup", "bihun", "kuey",
         "dim sum", "wonton", "sushi", "tom yam", "satay", "rendang",
+        # F&B chain brand names (same pattern as mcdonald/kfc/starbucks above)
+        "nando", "chic", "chicken", "grill", "chargrill", "coleslaw",
+        "wingstop", "subway", "domino", "texas chicken",
+        # Groceries & everyday food/drink items (so a receipt full of
+        # produce/snacks correctly out-votes a generic "mart"/"store"
+        # vendor name during majority-category selection).
+        "banana", "apple", "orange", "grape", "mango", "avocado",
+        "fruit", "vegetable", "tomato", "onion", "potato", "salami",
+        "cheese", "milk", "egg", "bread", "cereal", "yogurt", "butter",
+        "snack", "chip", "biscuit", "cookie", "chocolate", "candy",
+        "coffee", "frap", "frappe", "frappuccino", "latte", "mocha",
+        "cappuccino", "espresso", "juice", "soda", "beverage", "drink",
+        "grocery", "groceries",
     ],
     "Transport": [
         "grab", "petrol", "shell", "petronas", "caltex", "parking",
@@ -25,11 +38,16 @@ CATEGORY_KEYWORDS: dict[str, list[str]] = {
         "bus fare", "train", "ride",
     ],
     "Shopping": [
-        "shopee", "lazada", "mall", "uniqlo", "mr diy", "watson",
-        "guardian", "shopping", "store", "mart", "supermarket",
-        "hypermarket", "aeon", "lotus", "shoe", "shoes", "footwear",
-        "boot", "boots", "sneaker", "sneakers", "sandal", "apparel",
-        "clothing", "fashion", "garment",
+        # Clothing, accessories, and general retail/apparel — NOT grocery
+        # stores/supermarkets, which are matched by item content instead
+        # (a "mart" sells both food and non-food, so its name alone isn't
+        # a reliable signal — see Food & Dining's grocery keywords above).
+        "shopee", "lazada", "mall", "uniqlo", "shopping",
+        "shoe", "shoes", "footwear", "boot", "boots", "sneaker",
+        "sneakers", "sandal", "apparel", "clothing", "fashion",
+        "garment", "scarf", "hat", "cap", "sock", "socks", "bag",
+        "handbag", "wallet", "jewellery", "jewelry", "accessory",
+        "accessories",
     ],
     "Entertainment": [
         "cinema", "gsc", "tgv", "netflix", "spotify", "movie",
@@ -37,7 +55,7 @@ CATEGORY_KEYWORDS: dict[str, list[str]] = {
     ],
     "Health": [
         "pharmacy", "clinic", "hospital", "medicine", "doctor",
-        "dental", "checkup", "vitamin",
+        "dental", "checkup", "vitamin", "watson", "guardian",
     ],
     "Utilities": [
         "tnb", "water bill", "unifi", "maxis", "celcom", "digi",

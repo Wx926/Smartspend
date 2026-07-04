@@ -25,12 +25,14 @@ class WarrantyInfo {
 class OcrLineItem {
   String itemName;
   double price;
+  int quantity;
   String? categoryId;
   String categoryName;
 
   OcrLineItem({
     required this.itemName,
     required this.price,
+    this.quantity = 1,
     this.categoryId,
     required this.categoryName,
   });
@@ -38,6 +40,7 @@ class OcrLineItem {
   factory OcrLineItem.fromJson(Map<String, dynamic> json) => OcrLineItem(
         itemName: json['item_name'] as String? ?? '',
         price: (json['price'] as num?)?.toDouble() ?? 0.0,
+        quantity: (json['quantity'] as num?)?.toInt() ?? 1,
         categoryId: json['category_id'] as String?,
         categoryName: json['category_name'] as String? ?? 'Others',
       );
