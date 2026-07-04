@@ -6,6 +6,7 @@ import '../models/location_model.dart';
 import '../models/alert_log_model.dart';
 import '../models/ai_insight_model.dart';
 import '../models/savings_goal_model.dart';
+import '../models/wallet_model.dart';
 
 /// Data Access Object — single entry point for all Supabase queries.
 class SupabaseService {
@@ -224,6 +225,46 @@ class SupabaseService {
     return (data as List).cast<Map<String, dynamic>>();
   }
 
+  // ── Wallets ───────────────────────────────────────────────────
+  Future<List<WalletModel>> getWallets() async {
+    final data = await _client
+        .from('wallets')
+        .select()
+        .eq('user_id', _uid)
+        .order('created_at');
+    return (data as List).map((e) => WalletModel.fromJson(e)).toList();
+  }
+
+  Future<void> upsertWallet(WalletModel wallet) async {
+    await _client.from('wallets').upsert({
+      ...wallet.toJson(),
+      'user_id': _uid,
+      'created_at': DateTime.now().toIso8601String(),
+    }, onConflict: 'id');
+  }
+
+  Future<void> deleteWallet(String id) async {
+    await _client.from('wallets').delete().eq('id', id);
+  }
+
+  Future<void> reassignWalletExpenses(
+      String fromWalletId, String toWalletId) async {
+    await _client
+        .from('expenses')
+        .update({'wallet_id': toWalletId})
+        .eq('user_id', _uid)
+        .eq('wallet_id', fromWalletId);
+  }
+
+  Future<void> reassignCategoryExpenses(
+      String fromCategoryId, String toCategoryId) async {
+    await _client
+        .from('expenses')
+        .update({'category_id': toCategoryId})
+        .eq('user_id', _uid)
+        .eq('category_id', fromCategoryId);
+  }
+
   // ── Savings Goals ─────────────────────────────────────────────
   Future<List<SavingsGoalModel>> getSavingsGoals() async {
     final data = await _client
@@ -234,24 +275,91 @@ class SupabaseService {
     return (data as List).map((e) => SavingsGoalModel.fromJson(e)).toList();
   }
 
+  // Base-only fields that are guaranteed to exist in the original schema
+  Map<String, dynamic> _goalBaseJson(Map<String, dynamic> json,
+      {bool includeUserId = false}) {
+    return {
+      if (includeUserId) 'user_id': json['user_id'],
+      'name': json['name'],
+      'target_amount': json['target_amount'],
+      'current_amount': json['current_amount'],
+      'deadline': json['deadline'],
+      'is_completed': json['is_completed'],
+    };
+  }
+
+  // Extended fields — only exist after running the Supabase migration
+  Map<String, dynamic> _goalExtendedJson(Map<String, dynamic> json) {
+    return {
+      if (json['linked_wallet_label'] != null)
+        'linked_wallet_label': json['linked_wallet_label'],
+      'auto_transfer_enabled': json['auto_transfer_enabled'] ?? false,
+      if (json['auto_transfer_amount'] != null)
+        'auto_transfer_amount': json['auto_transfer_amount'],
+      if (json['auto_transfer_source_wallet_id'] != null)
+        'auto_transfer_source_wallet_id': json['auto_transfer_source_wallet_id'],
+      if (json['auto_transfer_day_of_month'] != null)
+        'auto_transfer_day_of_month': json['auto_transfer_day_of_month'],
+      if (json['last_auto_transfer_date'] != null)
+        'last_auto_transfer_date': json['last_auto_transfer_date'],
+    };
+  }
+
   Future<SavingsGoalModel> insertSavingsGoal(SavingsGoalModel goal) async {
-    final json = goal.toJson()..remove('id');
-    final data = await _client
-        .from('savings_goals')
-        .insert(json)
-        .select()
-        .single();
-    return SavingsGoalModel.fromJson(data);
+    final json = goal.toJson();
+    // Only remove id if empty — preserve pre-generated UUIDs for optimistic inserts
+    if (goal.id.isEmpty) json.remove('id');
+    final fullJson = {
+      if (goal.id.isNotEmpty) 'id': goal.id,
+      ..._goalBaseJson(json, includeUserId: true),
+      ..._goalExtendedJson(json),
+    };
+    try {
+      final data = await _client
+          .from('savings_goals')
+          .insert(fullJson)
+          .select()
+          .single();
+      return SavingsGoalModel.fromJson(data);
+    } catch (_) {
+      // Fallback: use base columns only (extended columns not yet in schema)
+      final baseJson = {
+        if (goal.id.isNotEmpty) 'id': goal.id,
+        ..._goalBaseJson(json, includeUserId: true),
+      };
+      final data = await _client
+          .from('savings_goals')
+          .insert(baseJson)
+          .select()
+          .single();
+      return SavingsGoalModel.fromJson(data);
+    }
   }
 
   Future<SavingsGoalModel> updateSavingsGoal(SavingsGoalModel goal) async {
-    final data = await _client
-        .from('savings_goals')
-        .update(goal.toJson())
-        .eq('id', goal.id)
-        .select()
-        .single();
-    return SavingsGoalModel.fromJson(data);
+    final json = goal.toJson();
+    final fullJson = {
+      ..._goalBaseJson(json),
+      ..._goalExtendedJson(json),
+    };
+    try {
+      final data = await _client
+          .from('savings_goals')
+          .update(fullJson)
+          .eq('id', goal.id)
+          .select()
+          .single();
+      return SavingsGoalModel.fromJson(data);
+    } catch (_) {
+      // Fallback: update base columns only
+      final data = await _client
+          .from('savings_goals')
+          .update(_goalBaseJson(json))
+          .eq('id', goal.id)
+          .select()
+          .single();
+      return SavingsGoalModel.fromJson(data);
+    }
   }
 
   Future<void> deleteSavingsGoal(String goalId) async {

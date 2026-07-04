@@ -1,11 +1,20 @@
 import 'package:flutter/material.dart';
 import '../../../shared/models/expense_model.dart';
 import '../../../shared/models/wallet_model.dart';
-import '../../../shared/services/local_storage_service.dart';
+import '../../../shared/services/supabase_service.dart';
 
 class WalletProvider extends ChangeNotifier {
-  List<WalletModel> _wallets = [];
+  static const _defaultWallet = WalletModel(
+    id: 'default_account',
+    name: 'Default Account',
+    icon: '💳',
+    colorHex: '3B82F6',
+    isDefault: true,
+  );
+
+  List<WalletModel> _wallets = [_defaultWallet];
   bool _hidden = false;
+  bool _loaded = false;
 
   List<WalletModel> get wallets => _wallets;
   bool get hidden => _hidden;
@@ -14,8 +23,19 @@ class WalletProvider extends ChangeNotifier {
       _wallets.firstWhere((w) => w.id == 'default_account',
           orElse: () => _wallets.first);
 
-  void init() {
-    _wallets = LocalStorageService.instance.getWallets();
+  // Called from app.dart on startup — kept for backward compat
+  void init() {}
+
+  Future<void> load({bool force = false}) async {
+    if (_loaded && !force) return;
+    try {
+      final cloud = await SupabaseService.instance.getWallets();
+      _wallets = [_defaultWallet, ...cloud];
+      _loaded = true;
+    } catch (_) {
+      _wallets = [_defaultWallet];
+    }
+    notifyListeners();
   }
 
   void toggleHidden() {
@@ -38,24 +58,29 @@ class WalletProvider extends ChangeNotifier {
       records.where((r) => r.type == 'income').fold(0.0, (s, r) => s + r.amount);
 
   /// Total expenses across ALL wallets.
+  /// Excludes savings_goal-sourced purchases (already counted when transferred to goal).
   double totalDebt(List<ExpenseModel> records) =>
-      records.where((r) => r.type == 'expense').fold(0.0, (s, r) => s + r.amount);
+      records
+          .where((r) => r.type == 'expense' && r.walletId != 'savings_goal')
+          .fold(0.0, (s, r) => s + r.amount);
 
   /// Net asset = total income − total expenses.
   double netAsset(List<ExpenseModel> records) =>
       totalAsset(records) - totalDebt(records);
 
   Future<void> addWallet(WalletModel wallet) async {
-    await LocalStorageService.instance.saveWallet(wallet);
-    _wallets = LocalStorageService.instance.getWallets();
+    // Optimistic: show wallet immediately, sync to Supabase in background
+    _wallets.add(wallet);
     notifyListeners();
+    SupabaseService.instance.upsertWallet(wallet).catchError((_) {
+      _wallets.removeWhere((w) => w.id == wallet.id);
+      notifyListeners();
+    });
   }
 
   Future<void> deleteWallet(String id) async {
-    // Move all records from this wallet to the default account.
-    await LocalStorageService.instance.reassignWallet(id, 'default_account');
-    await LocalStorageService.instance.deleteWallet(id);
-    _wallets = LocalStorageService.instance.getWallets();
-    notifyListeners();
+    await SupabaseService.instance.reassignWalletExpenses(id, 'default_account');
+    await SupabaseService.instance.deleteWallet(id);
+    await load(force: true);
   }
 }

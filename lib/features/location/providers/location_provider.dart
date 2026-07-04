@@ -28,12 +28,16 @@ class LocationProvider extends ChangeNotifier {
   List<LocationModel> get routineLocations =>
       _locations.where((l) => l.isRoutine).toList();
 
-  Future<void> load() async {
+  Future<void> load([String? userId]) async {
     _isLoading = true;
     _error = null;
     notifyListeners();
     try {
       _locations = _store.getLocations();
+      // Auto-resume tracking if it was on before the app was closed
+      if (!_isTracking && userId != null && _store.trackingEnabled) {
+        await startTracking(userId);
+      }
     } catch (e) {
       _error = e.toString();
     } finally {
@@ -46,6 +50,7 @@ class LocationProvider extends ChangeNotifier {
     final started = await _service.startTracking(userId);
     _isTracking = started;
     if (started) {
+      _store.setTrackingEnabled(true);
       _sub?.cancel();
       _sub = _service.events.listen((event) {
         _activeLocation = event.location;
@@ -59,10 +64,19 @@ class LocationProvider extends ChangeNotifier {
 
   void stopTracking() {
     _service.stopTracking();
+    _store.setTrackingEnabled(false);
     _sub?.cancel();
     _isTracking = false;
     _activeLocation = null;
     _activeDwellMinutes = 0;
+    notifyListeners();
+  }
+
+  Future<void> refresh(String userId) => _service.forcePoll(userId);
+
+  Future<void> deleteLocation(String locationId) async {
+    await _store.deleteLocation(locationId);
+    _locations.removeWhere((l) => l.id == locationId);
     notifyListeners();
   }
 

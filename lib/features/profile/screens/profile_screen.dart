@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../../features/auth/providers/auth_provider.dart';
 import '../../../shared/services/supabase_service.dart';
+import '../../../shared/services/local_storage_service.dart';
 import '../../../shared/theme/app_colors.dart';
 import '../../ocr/screens/warranty_records_screen.dart';
 
@@ -22,6 +23,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   void initState() {
     super.initState();
     _loadWarranties();
+    _pushNotifications = LocalStorageService.instance.notificationsEnabled;
   }
 
   Future<void> _loadWarranties() async {
@@ -64,9 +66,19 @@ class _ProfileScreenState extends State<ProfileScreen> {
             child: SafeArea(
               bottom: false,
               child: Padding(
-                padding: const EdgeInsets.fromLTRB(24, 24, 24, 32),
+                padding: const EdgeInsets.fromLTRB(24, 16, 24, 32),
                 child: Column(
                   children: [
+                    if (Navigator.canPop(context))
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: IconButton(
+                          icon: const Icon(Icons.arrow_back, color: Colors.white),
+                          onPressed: () => Navigator.pop(context),
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(),
+                        ),
+                      ),
                     Container(
                       width: 88,
                       height: 88,
@@ -204,7 +216,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
               title: 'Push notifications',
               subtitle: 'Budget warnings and AI insights',
               value: _pushNotifications,
-              onChanged: (v) => setState(() => _pushNotifications = v),
+              onChanged: (v) {
+                setState(() => _pushNotifications = v);
+                LocalStorageService.instance.setNotificationsEnabled(v);
+              },
             ),
             _divider(),
             _tile(

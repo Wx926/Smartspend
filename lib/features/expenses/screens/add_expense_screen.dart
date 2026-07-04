@@ -5,9 +5,11 @@ import '../providers/expense_provider.dart';
 import '../../../features/auth/providers/auth_provider.dart';
 import '../../../features/budget/providers/budget_provider.dart';
 import '../../../features/location/providers/location_provider.dart';
+import '../../../features/savings_goals/providers/savings_goal_provider.dart';
 import '../../../features/wallet/providers/wallet_provider.dart';
 import '../../../shared/models/category_model.dart';
 import '../../../shared/models/expense_model.dart';
+import '../../../shared/models/savings_goal_model.dart';
 import '../../../shared/models/wallet_model.dart';
 import '../../../shared/theme/app_colors.dart';
 import '../../ocr/screens/scan_receipt_screen.dart';
@@ -29,6 +31,8 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
   DateTime _selectedDate = DateTime.now();
   bool _saving = false;
   String _type = 'expense';
+
+  SavingsGoalModel? _selectedGoal;
 
   bool get _isEdit => widget.existingExpense != null;
   bool get _isIncome => _type == 'income';
@@ -94,7 +98,61 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
     setState(() {
       _type = newType;
       _selectedCategory = null;
+      if (newType == 'income') _selectedGoal = null;
     });
+  }
+
+  Future<void> _pickSavingsGoal() async {
+    final sp = context.read<SavingsGoalProvider>();
+    await sp.loadIfNeeded();
+    if (!mounted) return;
+    final goals = sp.goals;
+    if (goals.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No savings goals found')),
+      );
+      return;
+    }
+    final fmt = NumberFormat('#,##0.00', 'en_MY');
+    final selected = await showModalBottomSheet<SavingsGoalModel>(
+      context: context,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (ctx) => Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Padding(
+            padding: EdgeInsets.fromLTRB(20, 20, 20, 8),
+            child: Text('Select Savings Goal',
+                style:
+                    TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+          ),
+          ...goals.map((g) => ListTile(
+                leading: CircleAvatar(
+                  backgroundColor: AppColors.primary.withValues(alpha: 0.1),
+                  child: const Text('🎯',
+                      style: TextStyle(fontSize: 16)),
+                ),
+                title: Text(g.name),
+                subtitle: Text(
+                    'Available: RM ${fmt.format(g.currentAmount)} / RM ${fmt.format(g.targetAmount)}'),
+                trailing: g.isCompleted
+                    ? const Icon(Icons.check_circle,
+                        color: AppColors.budgetGreen)
+                    : null,
+                onTap: () => Navigator.pop(ctx, g),
+              )),
+          const SizedBox(height: 16),
+        ],
+      ),
+    );
+    if (selected != null) {
+      setState(() {
+        _selectedGoal = selected;
+        _selectedWallet = null;
+      });
+    }
   }
 
   Future<void> _pickDate() async {
@@ -122,37 +180,72 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
       return;
     }
 
-    setState(() => _saving = true);
-    final userId = context.read<AuthProvider>().userId;
-    final expProvider = context.read<ExpenseProvider>();
+    final amount = double.parse(_amountCtrl.text);
 
-    if (_isEdit) {
-      await expProvider.updateExpense(
-        widget.existingExpense!.copyWith(
+    // Validate savings goal balance if spending from one
+    if (_selectedGoal != null && amount > _selectedGoal!.currentAmount) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(
+            'Amount exceeds ${_selectedGoal!.name} balance of RM ${_selectedGoal!.currentAmount.toStringAsFixed(2)}'),
+      ));
+      return;
+    }
+
+    setState(() => _saving = true);
+    try {
+      final userId = context.read<AuthProvider>().userId;
+      final expProvider = context.read<ExpenseProvider>();
+      final sgProvider = context.read<SavingsGoalProvider>();
+      final bp = context.read<BudgetProvider>();
+
+      if (_isEdit) {
+        await expProvider.updateExpense(
+          widget.existingExpense!.copyWith(
+            categoryId: _selectedCategory!.id,
+            amount: amount,
+            description: _descCtrl.text.trim(),
+            date: _selectedDate,
+            type: _type,
+          ),
+        );
+      } else if (_selectedGoal != null) {
+        // Spending from a savings goal — use special walletId, deduct from goal
+        await expProvider.addExpense(
+          userId: userId,
           categoryId: _selectedCategory!.id,
-          amount: double.parse(_amountCtrl.text),
+          amount: amount,
+          description: _descCtrl.text.trim(),
+          date: _selectedDate,
+          type: 'expense',
+          walletId: 'savings_goal',
+          savingsGoalId: _selectedGoal!.id,
+        );
+        final newAmount = _selectedGoal!.currentAmount - amount;
+        await sgProvider.update(
+          _selectedGoal!.copyWith(
+            currentAmount: newAmount,
+            isCompleted: newAmount >= _selectedGoal!.targetAmount,
+          ),
+        );
+      } else {
+        await expProvider.addExpense(
+          userId: userId,
+          categoryId: _selectedCategory!.id,
+          amount: amount,
           description: _descCtrl.text.trim(),
           date: _selectedDate,
           type: _type,
-        ),
-      );
-    } else {
-      await expProvider.addExpense(
-        userId: userId,
-        categoryId: _selectedCategory!.id,
-        amount: double.parse(_amountCtrl.text),
-        description: _descCtrl.text.trim(),
-        date: _selectedDate,
-        type: _type,
-        walletId: _selectedWallet?.id ?? 'default_account',
-      );
-    }
+          walletId: _selectedWallet?.id ?? 'default_account',
+        );
+      }
 
-    if (mounted) {
-      final bp = context.read<BudgetProvider>();
-      bp.recalculate(
-          expProvider.expensesForMonth(DateTime.now().month, DateTime.now().year));
-      Navigator.pop(context);
+      if (mounted) {
+        bp.recalculate(
+            expProvider.expensesForMonth(DateTime.now().month, DateTime.now().year));
+        Navigator.pop(context);
+      }
+    } finally {
+      if (mounted) setState(() => _saving = false);
     }
   }
 
@@ -271,7 +364,9 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
                           const SizedBox(width: 8),
                           Expanded(
                             child: Text(
-                              'AI detected $locationName. Category pre-set to ${_selectedCategory?.name ?? "Shopping"}.',
+                              _selectedCategory != null
+                                  ? 'At $locationName — ${_selectedCategory!.icon} ${_selectedCategory!.name} pre-selected. Change below if needed.'
+                                  : 'At $locationName — select a category below.',
                               style: const TextStyle(
                                   fontSize: 13, color: Color(0xFF7C5800)),
                             ),
@@ -380,34 +475,102 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
                         style: TextStyle(
                             fontWeight: FontWeight.w600, fontSize: 14)),
                     const SizedBox(height: 8),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 16, vertical: 4),
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: const Color(0xFFE0E0E0)),
+                    // Regular wallet picker (hidden when savings goal selected)
+                    if (_selectedGoal == null)
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 16, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(12),
+                          border:
+                              Border.all(color: const Color(0xFFE0E0E0)),
+                        ),
+                        child: DropdownButton<WalletModel>(
+                          value: _selectedWallet,
+                          isExpanded: true,
+                          underline: const SizedBox.shrink(),
+                          items: wp.wallets
+                              .map((w) => DropdownMenuItem(
+                                    value: w,
+                                    child: Row(children: [
+                                      Text(w.icon,
+                                          style: const TextStyle(
+                                              fontSize: 18)),
+                                      const SizedBox(width: 10),
+                                      Text(w.name),
+                                    ]),
+                                  ))
+                              .toList(),
+                          onChanged: (v) =>
+                              setState(() => _selectedWallet = v),
+                        ),
                       ),
-                      child: DropdownButton<WalletModel>(
-                        value: _selectedWallet,
-                        isExpanded: true,
-                        underline: const SizedBox.shrink(),
-                        items: wp.wallets
-                            .map((w) => DropdownMenuItem(
-                                  value: w,
-                                  child: Row(children: [
-                                    Text(w.icon,
-                                        style:
-                                            const TextStyle(fontSize: 18)),
-                                    const SizedBox(width: 10),
-                                    Text(w.name),
-                                  ]),
-                                ))
-                            .toList(),
-                        onChanged: (v) =>
-                            setState(() => _selectedWallet = v),
+                    // Savings goal wallet (only for expenses, not edit)
+                    if (!_isEdit && !_isIncome) ...[
+                      const SizedBox(height: 8),
+                      GestureDetector(
+                        onTap: _selectedGoal != null
+                            ? () => setState(() {
+                                  _selectedGoal = null;
+                                  _selectedWallet = wp.defaultWallet;
+                                })
+                            : _pickSavingsGoal,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 14, vertical: 12),
+                          decoration: BoxDecoration(
+                            color: _selectedGoal != null
+                                ? AppColors.primary.withValues(alpha: 0.06)
+                                : Colors.white,
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(
+                              color: _selectedGoal != null
+                                  ? AppColors.primary
+                                  : const Color(0xFFE0E0E0),
+                            ),
+                          ),
+                          child: Row(children: [
+                            const Text('🎯',
+                                style: TextStyle(fontSize: 18)),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: _selectedGoal != null
+                                  ? Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(_selectedGoal!.name,
+                                            style: const TextStyle(
+                                                fontWeight:
+                                                    FontWeight.w600,
+                                                fontSize: 14)),
+                                        Text(
+                                            'Available: RM ${_selectedGoal!.currentAmount.toStringAsFixed(2)}',
+                                            style: const TextStyle(
+                                                color:
+                                                    AppColors.textSecondary,
+                                                fontSize: 12)),
+                                      ],
+                                    )
+                                  : const Text(
+                                      'Pay from Savings Goal',
+                                      style: TextStyle(
+                                          color: AppColors.textSecondary,
+                                          fontSize: 14),
+                                    ),
+                            ),
+                            Icon(
+                              _selectedGoal != null
+                                  ? Icons.close
+                                  : Icons.chevron_right,
+                              color: AppColors.textSecondary,
+                              size: 18,
+                            ),
+                          ]),
+                        ),
                       ),
-                    ),
+                    ],
                     const SizedBox(height: 20),
 
                     // ── Date ─────────────────────────────────────────────

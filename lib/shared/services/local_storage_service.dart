@@ -22,6 +22,8 @@ class LocalStorageService {
   static const _keyDeviceId = 'ss_device_id';
   static const _keyCustomCategories = 'ss_custom_categories';
   static const _keyWallets = 'ss_wallets';
+  static const _keyNotificationsEnabled = 'ss_notifications_enabled';
+  static const _keyTrackingEnabled = 'ss_tracking_enabled';
 
   static final WalletModel _defaultWallet = WalletModel(
     id: 'default_account',
@@ -43,6 +45,19 @@ class LocalStorageService {
   }
 
   String get localUserId => _prefs?.getString(_keyDeviceId) ?? 'local_user';
+
+  // ── Notification preference ────────────────────────────────────────────────
+  bool get notificationsEnabled =>
+      _prefs?.getBool(_keyNotificationsEnabled) ?? true;
+
+  Future<void> setNotificationsEnabled(bool value) async =>
+      _prefs?.setBool(_keyNotificationsEnabled, value);
+
+  bool get trackingEnabled =>
+      _prefs?.getBool(_keyTrackingEnabled) ?? false;
+
+  Future<void> setTrackingEnabled(bool value) async =>
+      _prefs?.setBool(_keyTrackingEnabled, value);
 
   // ── Categories ─────────────────────────────────────────────────────────────
   List<CategoryModel> _defaultCategories(String type) {
@@ -258,6 +273,11 @@ class LocalStorageService {
     }
     await _saveLocations(all);
     return loc;
+  }
+
+  Future<void> deleteLocation(String locationId) async {
+    final all = _loadLocations()..removeWhere((l) => l.id == locationId);
+    await _saveLocations(all);
   }
 
   Future<void> incrementVisitCount(String locationId) async {

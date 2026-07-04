@@ -4,6 +4,7 @@ import '../../../shared/models/budget_model.dart';
 import '../../../shared/models/category_model.dart';
 import '../../../shared/models/expense_model.dart';
 import '../../../shared/services/local_storage_service.dart';
+import '../../../shared/services/supabase_service.dart';
 import '../services/budget_service.dart';
 
 class BudgetProvider extends ChangeNotifier {
@@ -98,21 +99,69 @@ class BudgetProvider extends ChangeNotifier {
       updatedAt: DateTime.now(),
     );
 
-    final saved = await _service.upsertBudget(budget);
-
+    // Optimistic update: apply locally immediately
     if (existing != null) {
       final idx = _budgets.indexWhere((b) => b.id == existing.id);
-      _budgets[idx] = saved;
+      if (idx != -1) _budgets[idx] = budget;
     } else {
-      _budgets.add(saved);
+      _budgets.add(budget);
     }
     notifyListeners();
+
+    // Sync to Supabase in background
+    _service.upsertBudget(budget).then((saved) {
+      final i = _budgets.indexWhere((b) => b.id == budget.id);
+      if (i != -1) _budgets[i] = saved;
+      notifyListeners();
+    }).catchError((_) {
+      if (existing != null) {
+        final i = _budgets.indexWhere((b) => b.id == budget.id);
+        if (i != -1) _budgets[i] = existing;
+      } else {
+        _budgets.removeWhere((b) => b.id == budget.id);
+      }
+      notifyListeners();
+    });
   }
 
   Future<void> deleteBudget(String budgetId) async {
     await _service.deleteBudget(budgetId);
     _budgets.removeWhere((b) => b.id == budgetId);
     notifyListeners();
+  }
+
+  /// Auto-copies previous month's budgets into the current month if none exist.
+  /// Returns true if budgets were copied, false otherwise.
+  Future<bool> autoCopyFromPreviousMonth(String userId) async {
+    final now = DateTime.now();
+    if (_selectedMonth.month != now.month || _selectedMonth.year != now.year) {
+      return false;
+    }
+    try {
+      final prevMonth = DateTime(now.year, now.month - 1);
+      final results = await Future.wait([
+        _service.getBudgets(now.month, now.year),
+        _service.getBudgets(prevMonth.month, prevMonth.year),
+      ]).timeout(const Duration(seconds: 10));
+
+      final existing = results[0];
+      final prev = results[1];
+      if (existing.isNotEmpty || prev.isEmpty) return false;
+
+      await Future.wait(prev.map((b) => _service.upsertBudget(BudgetModel(
+            id: _uuid.v4(),
+            userId: userId,
+            categoryId: b.categoryId,
+            amount: b.amount,
+            month: now.month,
+            year: now.year,
+            createdAt: DateTime.now(),
+            updatedAt: DateTime.now(),
+          ))));
+      return true;
+    } catch (_) {
+      return false;
+    }
   }
 
   // ── Category management ────────────────────────────────────────────────────
@@ -138,7 +187,7 @@ class BudgetProvider extends ChangeNotifier {
     // Reassign existing records to the fallback category for that type.
     // expense → "others", income → "bonus"
     final fallbackId = cat.type == 'income' ? 'bonus' : 'others';
-    await LocalStorageService.instance.reassignCategory(cat.id, fallbackId);
+    await SupabaseService.instance.reassignCategoryExpenses(cat.id, fallbackId);
 
     await LocalStorageService.instance.deleteCategory(cat.id);
     _reloadCategories();
