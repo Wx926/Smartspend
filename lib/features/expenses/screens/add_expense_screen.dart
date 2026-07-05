@@ -12,6 +12,7 @@ import '../../../shared/models/expense_model.dart';
 import '../../../shared/models/savings_goal_model.dart';
 import '../../../shared/models/wallet_model.dart';
 import '../../../shared/theme/app_colors.dart';
+import '../../ocr/screens/scan_receipt_screen.dart';
 
 class AddExpenseScreen extends StatefulWidget {
   final ExpenseModel? existingExpense;
@@ -288,10 +289,10 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
                           label: 'Scan receipt',
                           sub: 'Auto-fill via OCR',
                           selected: false,
-                          onTap: () => ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                                content: Text(
-                                    'OCR Receipt scanning — partner module (Yen Han Soon)')),
+                          onTap: () => Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                                builder: (_) => const ScanReceiptScreen()),
                           ),
                         ),
                         const SizedBox(width: 10),

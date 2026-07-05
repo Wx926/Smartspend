@@ -11,6 +11,9 @@ class ExpenseModel {
   final String type; // 'expense' or 'income'
   final String walletId;
   final String? savingsGoalId; // links to a savings goal when relevant
+  final String source; // 'manual' | 'ocr' | 'voice' — how this record was created
+  final String? merchantName; // set when source is 'ocr'/'voice'
+  final String? batchId; // shared by every line item from the same receipt scan
 
   const ExpenseModel({
     required this.id,
@@ -25,6 +28,9 @@ class ExpenseModel {
     this.type = 'expense',
     this.walletId = 'default_account',
     this.savingsGoalId,
+    this.source = 'manual',
+    this.merchantName,
+    this.batchId,
   });
 
   factory ExpenseModel.fromJson(Map<String, dynamic> json) {
@@ -41,6 +47,9 @@ class ExpenseModel {
       type: json['type'] as String? ?? 'expense',
       walletId: json['wallet_id'] as String? ?? 'default_account',
       savingsGoalId: json['savings_goal_id'] as String?,
+      source: json['source'] as String? ?? 'manual',
+      merchantName: json['merchant_name'] as String?,
+      batchId: json['batch_id'] as String?,
     );
   }
 
@@ -58,6 +67,9 @@ class ExpenseModel {
       'type': type,
       'wallet_id': walletId,
       if (savingsGoalId != null) 'savings_goal_id': savingsGoalId,
+      'source': source,
+      if (merchantName != null) 'merchant_name': merchantName,
+      if (batchId != null) 'batch_id': batchId,
     };
   }
 
@@ -70,6 +82,9 @@ class ExpenseModel {
     String? type,
     String? walletId,
     String? savingsGoalId,
+    String? source,
+    String? merchantName,
+    String? batchId,
   }) {
     return ExpenseModel(
       id: id,
@@ -84,6 +99,9 @@ class ExpenseModel {
       type: type ?? this.type,
       walletId: walletId ?? this.walletId,
       savingsGoalId: savingsGoalId ?? this.savingsGoalId,
+      source: source ?? this.source,
+      merchantName: merchantName ?? this.merchantName,
+      batchId: batchId ?? this.batchId,
     );
   }
 }

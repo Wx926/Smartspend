@@ -11,6 +11,7 @@ import '../../../shared/models/budget_model.dart';
 import '../../../shared/theme/app_colors.dart';
 import '../../analytics/screens/analytics_screen.dart';
 import '../../location/screens/location_screen.dart';
+import '../../ocr/screens/scan_receipt_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -393,6 +394,50 @@ class _HomeScreenState extends State<HomeScreen> {
                           onTap: () =>
                               Navigator.pushNamed(context, '/ai-advice'))),
                 ]),
+              ),
+            ),
+
+            // ── Scan Receipt shortcut ──────────────────────────────────────
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+                child: GestureDetector(
+                  onTap: () => Navigator.push(context,
+                      MaterialPageRoute(
+                          builder: (_) => const ScanReceiptScreen())),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 18, vertical: 14),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(color: const Color(0xFFE0E0E0)),
+                    ),
+                    child: const Row(children: [
+                      Icon(Icons.receipt_long_rounded,
+                          color: AppColors.primary, size: 22),
+                      SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text('Scan Receipt',
+                                style: TextStyle(
+                                    fontWeight: FontWeight.w600,
+                                    fontSize: 14,
+                                    color: AppColors.textPrimary)),
+                            Text('Auto-extract expenses via OCR',
+                                style: TextStyle(
+                                    fontSize: 11,
+                                    color: AppColors.textSecondary)),
+                          ],
+                        ),
+                      ),
+                      Icon(Icons.chevron_right_rounded,
+                          color: AppColors.textSecondary),
+                    ]),
+                  ),
+                ),
               ),
             ),
 

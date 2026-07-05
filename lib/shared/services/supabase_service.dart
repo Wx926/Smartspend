@@ -198,6 +198,33 @@ class SupabaseService {
     return AiInsightModel.fromJson(data);
   }
 
+  // ── Warranties (FR 4.13, 4.15) ───────────────────────────────
+  Future<void> insertWarranty({
+    required String expenseId,
+    required String vendorName,
+    int? durationMonths,
+    String? expiryDate,
+    required String status,
+  }) async {
+    await _client.from('warranties').insert({
+      'user_id': _uid,
+      'expense_id': expenseId,
+      'vendor_name': vendorName,
+      'duration_months': durationMonths,
+      'expiry_date': expiryDate,
+      'status': status,
+    });
+  }
+
+  Future<List<Map<String, dynamic>>> getWarranties() async {
+    final data = await _client
+        .from('warranties')
+        .select()
+        .eq('user_id', _uid)
+        .order('created_at', ascending: false);
+    return (data as List).cast<Map<String, dynamic>>();
+  }
+
   // ── Wallets ───────────────────────────────────────────────────
   Future<List<WalletModel>> getWallets() async {
     final data = await _client

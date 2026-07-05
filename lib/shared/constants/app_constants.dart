@@ -5,6 +5,7 @@ class AppConstants {
   static String get supabaseUrl => dotenv.env['SUPABASE_URL'] ?? '';
   static String get supabaseAnonKey => dotenv.env['SUPABASE_ANON_KEY'] ?? '';
   static String get geminiApiKey => dotenv.env['GEMINI_API_KEY'] ?? '';
+  static String get ocrBackendUrl => dotenv.env['OCR_BACKEND_URL'] ?? 'http://10.0.2.2:5000';
 
   static const String geminiEndpoint =
       'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent';
