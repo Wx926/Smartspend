@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import '../providers/expense_provider.dart';
 import '../../../features/auth/providers/auth_provider.dart';
 import '../../../features/budget/providers/budget_provider.dart';
 import '../../../features/location/providers/location_provider.dart';
+import '../../../features/location/services/location_service.dart';
+import '../../../features/location/services/osm_service.dart';
 import '../../../features/savings_goals/providers/savings_goal_provider.dart';
 import '../../../features/wallet/providers/wallet_provider.dart';
 import '../../../shared/models/category_model.dart';
@@ -34,6 +37,14 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
 
   SavingsGoalModel? _selectedGoal;
 
+  // All places within range of the current position — saved locations and
+  // unsaved OSM places alike — so the user can pick the right one when more
+  // than one is nearby, instead of the app silently guessing.
+  List<_LocationCandidate> _locationCandidates = [];
+  _LocationCandidate? _selectedLocationCandidate;
+  bool _categoryManuallySet = false;
+  bool _detectingLocation = false;
+
   bool get _isEdit => widget.existingExpense != null;
   bool get _isIncome => _type == 'income';
 
@@ -46,6 +57,147 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
       _descCtrl.text = e.description;
       _selectedDate = e.date;
       _type = e.type;
+    } else {
+      // Request a fresh location check so the candidate list reflects where
+      // the device actually is now, rather than the last periodic
+      // background poll (which runs at most once every 60s).
+      final userId = context.read<AuthProvider>().userId;
+      context.read<LocationProvider>().refresh(userId);
+      _detectLocationCandidates();
+    }
+  }
+
+  // Deliberately wider than AppConstants.geofenceRadiusMeters (the
+  // background arrival-detection radius). A false positive here just adds
+  // an extra selectable chip the user can ignore; a false positive in the
+  // background geofence would wrongly fire an "you've arrived" alert. GPS
+  // and OSM node placement are rarely pinpoint-exact, so a tight radius
+  // makes real nearby places (like a cafe next to a saved venue) miss.
+  static const double _candidateRadiusMeters = 150;
+  static const int _maxCandidates = 6;
+
+  /// Gathers every place within range of the current position — both
+  /// locations the user has explicitly saved and unsaved places from a live
+  /// OSM lookup — so the user can pick the right one when more than one is
+  /// nearby (e.g. a saved venue and a cafe inside/next to it).
+  Future<void> _detectLocationCandidates() async {
+    setState(() => _detectingLocation = true);
+    final pos = await LocationService.instance.getCurrentPosition();
+    if (pos == null || !mounted) {
+      if (mounted) setState(() => _detectingLocation = false);
+      return;
+    }
+
+    // Saved locations are normally loaded by the Nearby screen; if the user
+    // opens Add Record without ever visiting it this session, the list
+    // would otherwise be empty and every saved venue would be missed.
+    final lp = context.read<LocationProvider>();
+    if (lp.locations.isEmpty) {
+      await lp.load(context.read<AuthProvider>().userId);
+      if (!mounted) return;
+    }
+    final savedLocations = lp.locations;
+    final candidates = <_LocationCandidate>[];
+
+    for (final loc in savedLocations) {
+      final dist = Geolocator.distanceBetween(
+        pos.latitude,
+        pos.longitude,
+        loc.latitude,
+        loc.longitude,
+      );
+      if (dist <= _candidateRadiusMeters) {
+        candidates.add(
+          _LocationCandidate(
+            name: loc.name,
+            emoji: '📍',
+            locationId: loc.id,
+            suggestedCategoryName: loc.categoryHint,
+            distanceMeters: dist,
+          ),
+        );
+      }
+    }
+
+    final savedNames = savedLocations.map((l) => l.name.toLowerCase()).toSet();
+    final places = await OsmService.instance.nearbyPlaces(
+      pos.latitude,
+      pos.longitude,
+      radiusMeters: _candidateRadiusMeters.round(),
+    );
+    for (final p in places) {
+      if (savedNames.contains(p.name.toLowerCase())) continue;
+      final dist = Geolocator.distanceBetween(
+        pos.latitude,
+        pos.longitude,
+        p.latitude,
+        p.longitude,
+      );
+      candidates.add(
+        _LocationCandidate(
+          name: p.name,
+          emoji: p.emoji,
+          suggestedCategoryName: OsmService.toExpenseCategory(p.category),
+          distanceMeters: dist,
+        ),
+      );
+    }
+
+    if (!mounted) return;
+    if (candidates.isEmpty) {
+      setState(() => _detectingLocation = false);
+      return;
+    }
+    candidates.sort((a, b) => a.distanceMeters.compareTo(b.distanceMeters));
+    final nearest = candidates.take(_maxCandidates).toList();
+
+    setState(() {
+      _locationCandidates = nearest;
+      _selectedLocationCandidate = nearest.first;
+      _detectingLocation = false;
+    });
+    _suggestCategoryFor(nearest.first);
+  }
+
+  /// Suggests a category for [candidate]: prefers the category most recently
+  /// used at that exact saved location, then its static place-type hint.
+  /// Never overrides a category the user picked manually themselves.
+  void _suggestCategoryFor(_LocationCandidate candidate) {
+    if (_categoryManuallySet) return;
+    final cats = context.read<BudgetProvider>().categories;
+    CategoryModel? suggestion;
+
+    if (candidate.locationId != null) {
+      final pastExpenses =
+          context
+              .read<ExpenseProvider>()
+              .expenses
+              .where(
+                (e) =>
+                    e.locationId == candidate.locationId && e.type == 'expense',
+              )
+              .toList()
+            ..sort((a, b) => b.date.compareTo(a.date));
+      if (pastExpenses.isNotEmpty) {
+        suggestion = cats
+            .where((c) => c.id == pastExpenses.first.categoryId)
+            .firstOrNull;
+      }
+    }
+
+    if (suggestion == null && candidate.suggestedCategoryName != null) {
+      final hint = candidate.suggestedCategoryName!.toLowerCase();
+      suggestion = cats
+          .where(
+            (c) =>
+                c.name.toLowerCase().contains(hint) ||
+                hint.contains(c.name.toLowerCase()),
+          )
+          .firstOrNull;
+    }
+
+    if (suggestion != null && mounted) {
+      setState(() => _selectedCategory = suggestion);
     }
   }
 
@@ -55,9 +207,11 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
     final wp = context.read<WalletProvider>();
     if (_selectedWallet == null) {
       if (_isEdit) {
-        _selectedWallet = wp.wallets
-            .where((w) => w.id == widget.existingExpense!.walletId)
-            .firstOrNull ?? wp.defaultWallet;
+        _selectedWallet =
+            wp.wallets
+                .where((w) => w.id == widget.existingExpense!.walletId)
+                .firstOrNull ??
+            wp.defaultWallet;
       } else {
         _selectedWallet = wp.defaultWallet;
       }
@@ -69,21 +223,9 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
           .where((c) => c.id == widget.existingExpense!.categoryId)
           .firstOrNull;
     }
-    // Auto-select from location hint (expenses only)
-    if (_selectedCategory == null && !_isEdit && !_isIncome) {
-      final cats = context.read<BudgetProvider>().categories;
-      final lp = context.read<LocationProvider>();
-      if (lp.activeLocation?.categoryHint != null) {
-        _selectedCategory = cats
-            .where((c) =>
-                c.name.toLowerCase().contains(
-                    lp.activeLocation!.categoryHint!.toLowerCase()) ||
-                lp.activeLocation!.categoryHint!
-                    .toLowerCase()
-                    .contains(c.name.toLowerCase()))
-            .firstOrNull;
-      }
-    }
+    // New (non-edit) expenses get their category suggestion from
+    // _detectLocationCandidates / _suggestCategoryFor instead, since that
+    // considers every nearby place, not just the single geofence match.
   }
 
   @override
@@ -98,8 +240,12 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
     setState(() {
       _type = newType;
       _selectedCategory = null;
+      _categoryManuallySet = false;
       if (newType == 'income') _selectedGoal = null;
     });
+    if (newType == 'expense' && _selectedLocationCandidate != null) {
+      _suggestCategoryFor(_selectedLocationCandidate!);
+    }
   }
 
   Future<void> _pickSavingsGoal() async {
@@ -108,41 +254,44 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
     if (!mounted) return;
     final goals = sp.goals;
     if (goals.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No savings goals found')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('No savings goals found')));
       return;
     }
     final fmt = NumberFormat('#,##0.00', 'en_MY');
     final selected = await showModalBottomSheet<SavingsGoalModel>(
       context: context,
       shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
       builder: (ctx) => Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const Padding(
             padding: EdgeInsets.fromLTRB(20, 20, 20, 8),
-            child: Text('Select Savings Goal',
-                style:
-                    TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+            child: Text(
+              'Select Savings Goal',
+              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+            ),
           ),
-          ...goals.map((g) => ListTile(
-                leading: CircleAvatar(
-                  backgroundColor: AppColors.primary.withValues(alpha: 0.1),
-                  child: const Text('🎯',
-                      style: TextStyle(fontSize: 16)),
-                ),
-                title: Text(g.name),
-                subtitle: Text(
-                    'Available: RM ${fmt.format(g.currentAmount)} / RM ${fmt.format(g.targetAmount)}'),
-                trailing: g.isCompleted
-                    ? const Icon(Icons.check_circle,
-                        color: AppColors.budgetGreen)
-                    : null,
-                onTap: () => Navigator.pop(ctx, g),
-              )),
+          ...goals.map(
+            (g) => ListTile(
+              leading: CircleAvatar(
+                backgroundColor: AppColors.primary.withValues(alpha: 0.1),
+                child: const Text('🎯', style: TextStyle(fontSize: 16)),
+              ),
+              title: Text(g.name),
+              subtitle: Text(
+                'Available: RM ${fmt.format(g.currentAmount)} / RM ${fmt.format(g.targetAmount)}',
+              ),
+              trailing: g.isCompleted
+                  ? const Icon(Icons.check_circle, color: AppColors.budgetGreen)
+                  : null,
+              onTap: () => Navigator.pop(ctx, g),
+            ),
+          ),
           const SizedBox(height: 16),
         ],
       ),
@@ -174,9 +323,9 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
   Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
     if (_selectedCategory == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please select a category')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Please select a category')));
       return;
     }
 
@@ -184,10 +333,13 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
 
     // Validate savings goal balance if spending from one
     if (_selectedGoal != null && amount > _selectedGoal!.currentAmount) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(
-            'Amount exceeds ${_selectedGoal!.name} balance of RM ${_selectedGoal!.currentAmount.toStringAsFixed(2)}'),
-      ));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Amount exceeds ${_selectedGoal!.name} balance of RM ${_selectedGoal!.currentAmount.toStringAsFixed(2)}',
+          ),
+        ),
+      );
       return;
     }
 
@@ -197,6 +349,9 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
       final expProvider = context.read<ExpenseProvider>();
       final sgProvider = context.read<SavingsGoalProvider>();
       final bp = context.read<BudgetProvider>();
+      final activeLocationId = _isIncome
+          ? null
+          : _selectedLocationCandidate?.locationId;
 
       if (_isEdit) {
         await expProvider.updateExpense(
@@ -219,6 +374,7 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
           type: 'expense',
           walletId: 'savings_goal',
           savingsGoalId: _selectedGoal!.id,
+          locationId: activeLocationId,
         );
         final newAmount = _selectedGoal!.currentAmount - amount;
         await sgProvider.update(
@@ -236,12 +392,17 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
           date: _selectedDate,
           type: _type,
           walletId: _selectedWallet?.id ?? 'default_account',
+          locationId: activeLocationId,
         );
       }
 
       if (mounted) {
         bp.recalculate(
-            expProvider.expensesForMonth(DateTime.now().month, DateTime.now().year));
+          expProvider.expensesForMonth(
+            DateTime.now().month,
+            DateTime.now().year,
+          ),
+        );
         Navigator.pop(context);
       }
     } finally {
@@ -254,7 +415,14 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
     final bp = context.watch<BudgetProvider>();
     final wp = context.watch<WalletProvider>();
     final lp = context.watch<LocationProvider>();
-    final locationName = lp.activeLocation?.name;
+    // When editing, show the location the record was originally saved with,
+    // not wherever the device happens to be right now.
+    final displayLocationName = _isEdit
+        ? lp.locations
+              .where((l) => l.id == widget.existingExpense!.locationId)
+              .firstOrNull
+              ?.name
+        : _selectedLocationCandidate?.name;
     final cats = _isIncome ? bp.incomeCategories : bp.categories;
     final accentColor = _isIncome ? AppColors.budgetGreen : AppColors.primary;
 
@@ -269,8 +437,10 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
               icon: const Icon(Icons.arrow_back, color: Colors.white),
               onPressed: () => Navigator.pop(context),
             ),
-            title: Text(_isEdit ? 'Edit Record' : 'Add Record',
-                style: const TextStyle(color: Colors.white)),
+            title: Text(
+              _isEdit ? 'Edit Record' : 'Add Record',
+              style: const TextStyle(color: Colors.white),
+            ),
           ),
 
           SliverPadding(
@@ -283,39 +453,44 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
                   children: [
                     // ── Input method row (add only) ──────────────────────
                     if (!_isEdit) ...[
-                      Row(children: [
-                        _MethodCard(
-                          icon: Icons.camera_alt_outlined,
-                          label: 'Scan receipt',
-                          sub: 'Auto-fill via OCR',
-                          selected: false,
-                          onTap: () => Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                                builder: (_) => const ScanReceiptScreen()),
+                      Row(
+                        children: [
+                          _MethodCard(
+                            icon: Icons.camera_alt_outlined,
+                            label: 'Scan receipt',
+                            sub: 'Auto-fill via OCR',
+                            selected: false,
+                            onTap: () => Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => const ScanReceiptScreen(),
+                              ),
+                            ),
                           ),
-                        ),
-                        const SizedBox(width: 10),
-                        _MethodCard(
-                          icon: Icons.mic_outlined,
-                          label: 'Voice input',
-                          sub: 'Speak your expense',
-                          selected: false,
-                          onTap: () => ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
+                          const SizedBox(width: 10),
+                          _MethodCard(
+                            icon: Icons.mic_outlined,
+                            label: 'Voice input',
+                            sub: 'Speak your expense',
+                            selected: false,
+                            onTap: () => ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
                                 content: Text(
-                                    'Voice input — partner module (Yen Han Soon)')),
+                                  'Voice input — partner module (Yen Han Soon)',
+                                ),
+                              ),
+                            ),
                           ),
-                        ),
-                        const SizedBox(width: 10),
-                        _MethodCard(
-                          icon: Icons.edit_outlined,
-                          label: 'Manual entry',
-                          sub: 'Selected',
-                          selected: true,
-                          onTap: () {},
-                        ),
-                      ]),
+                          const SizedBox(width: 10),
+                          _MethodCard(
+                            icon: Icons.edit_outlined,
+                            label: 'Manual entry',
+                            sub: 'Selected',
+                            selected: true,
+                            onTap: () {},
+                          ),
+                        ],
+                      ),
                       const SizedBox(height: 16),
                     ],
 
@@ -327,81 +502,102 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
                           borderRadius: BorderRadius.circular(12),
                         ),
                         padding: const EdgeInsets.all(4),
-                        child: Row(children: [
-                          _TypeTab(
-                            label: 'Expense',
-                            icon: Icons.arrow_upward_rounded,
-                            selected: !_isIncome,
-                            color: AppColors.budgetRed,
-                            onTap: () => _switchType('expense'),
-                          ),
-                          _TypeTab(
-                            label: 'Income',
-                            icon: Icons.arrow_downward_rounded,
-                            selected: _isIncome,
-                            color: AppColors.budgetGreen,
-                            onTap: () => _switchType('income'),
-                          ),
-                        ]),
+                        child: Row(
+                          children: [
+                            _TypeTab(
+                              label: 'Expense',
+                              icon: Icons.arrow_upward_rounded,
+                              selected: !_isIncome,
+                              color: AppColors.budgetRed,
+                              onTap: () => _switchType('expense'),
+                            ),
+                            _TypeTab(
+                              label: 'Income',
+                              icon: Icons.arrow_downward_rounded,
+                              selected: _isIncome,
+                              color: AppColors.budgetGreen,
+                              onTap: () => _switchType('income'),
+                            ),
+                          ],
+                        ),
                       ),
                       const SizedBox(height: 20),
                     ],
 
                     // ── AI location banner ───────────────────────────────
-                    if (locationName != null && !_isEdit && !_isIncome)
+                    if (_selectedLocationCandidate != null &&
+                        !_isEdit &&
+                        !_isIncome)
                       Container(
                         margin: const EdgeInsets.only(bottom: 16),
                         padding: const EdgeInsets.symmetric(
-                            horizontal: 14, vertical: 10),
+                          horizontal: 14,
+                          vertical: 10,
+                        ),
                         decoration: BoxDecoration(
                           color: const Color(0xFFFFF8E1),
                           borderRadius: BorderRadius.circular(10),
                           border: Border.all(color: const Color(0xFFFFE082)),
                         ),
-                        child: Row(children: [
-                          const Icon(Icons.auto_awesome,
-                              color: AppColors.budgetYellow, size: 18),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              _selectedCategory != null
-                                  ? 'At $locationName — ${_selectedCategory!.icon} ${_selectedCategory!.name} pre-selected. Change below if needed.'
-                                  : 'At $locationName — select a category below.',
-                              style: const TextStyle(
-                                  fontSize: 13, color: Color(0xFF7C5800)),
+                        child: Row(
+                          children: [
+                            const Icon(
+                              Icons.auto_awesome,
+                              color: AppColors.budgetYellow,
+                              size: 18,
                             ),
-                          ),
-                        ]),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                _selectedCategory != null
+                                    ? 'At ${_selectedLocationCandidate!.name} — ${_selectedCategory!.icon} ${_selectedCategory!.name} pre-selected. Change below if needed.'
+                                    : 'At ${_selectedLocationCandidate!.name} — select a category below.',
+                                style: const TextStyle(
+                                  fontSize: 13,
+                                  color: Color(0xFF7C5800),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
 
                     // ── Amount ───────────────────────────────────────────
-                    const Text('Amount (RM)',
-                        style: TextStyle(
-                            fontWeight: FontWeight.w600, fontSize: 14)),
+                    const Text(
+                      'Amount (RM)',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w600,
+                        fontSize: 14,
+                      ),
+                    ),
                     const SizedBox(height: 8),
                     TextFormField(
                       controller: _amountCtrl,
-                      keyboardType:
-                          const TextInputType.numberWithOptions(decimal: true),
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
                       style: TextStyle(
-                          fontSize: 32,
-                          fontWeight: FontWeight.bold,
-                          color: accentColor),
+                        fontSize: 32,
+                        fontWeight: FontWeight.bold,
+                        color: accentColor,
+                      ),
                       decoration: InputDecoration(
                         prefixText: 'RM ',
                         prefixStyle: TextStyle(
-                            fontSize: 32,
-                            fontWeight: FontWeight.bold,
-                            color: accentColor),
+                          fontSize: 32,
+                          fontWeight: FontWeight.bold,
+                          color: accentColor,
+                        ),
                         hintText: '0.00',
                         border: UnderlineInputBorder(
-                            borderSide:
-                                BorderSide(color: accentColor, width: 2)),
+                          borderSide: BorderSide(color: accentColor, width: 2),
+                        ),
                         enabledBorder: const UnderlineInputBorder(
-                            borderSide: BorderSide(color: Color(0xFFE0E0E0))),
+                          borderSide: BorderSide(color: Color(0xFFE0E0E0)),
+                        ),
                         focusedBorder: UnderlineInputBorder(
-                            borderSide:
-                                BorderSide(color: accentColor, width: 2)),
+                          borderSide: BorderSide(color: accentColor, width: 2),
+                        ),
                         filled: false,
                       ),
                       validator: (v) {
@@ -416,9 +612,13 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
                     const SizedBox(height: 20),
 
                     // ── Category ─────────────────────────────────────────
-                    const Text('Category',
-                        style: TextStyle(
-                            fontWeight: FontWeight.w600, fontSize: 14)),
+                    const Text(
+                      'Category',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w600,
+                        fontSize: 14,
+                      ),
+                    ),
                     const SizedBox(height: 10),
                     Wrap(
                       spacing: 8,
@@ -427,12 +627,16 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
                         final selected = _selectedCategory?.id == c.id;
                         final color = AppColors.fromHex(c.colorHex);
                         return GestureDetector(
-                          onTap: () =>
-                              setState(() => _selectedCategory = c),
+                          onTap: () => setState(() {
+                            _selectedCategory = c;
+                            _categoryManuallySet = true;
+                          }),
                           child: AnimatedContainer(
                             duration: const Duration(milliseconds: 150),
                             padding: const EdgeInsets.symmetric(
-                                horizontal: 14, vertical: 9),
+                              horizontal: 14,
+                              vertical: 9,
+                            ),
                             decoration: BoxDecoration(
                               color: selected
                                   ? color.withValues(alpha: 0.12)
@@ -446,24 +650,27 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
                               ),
                             ),
                             child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Text(c.icon,
-                                      style: const TextStyle(fontSize: 15)),
-                                  const SizedBox(width: 6),
-                                  Text(
-                                    c.name.split(' ').first,
-                                    style: TextStyle(
-                                      fontSize: 13,
-                                      fontWeight: selected
-                                          ? FontWeight.bold
-                                          : FontWeight.normal,
-                                      color: selected
-                                          ? color
-                                          : AppColors.textPrimary,
-                                    ),
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(
+                                  c.icon,
+                                  style: const TextStyle(fontSize: 15),
+                                ),
+                                const SizedBox(width: 6),
+                                Text(
+                                  c.name.split(' ').first,
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: selected
+                                        ? FontWeight.bold
+                                        : FontWeight.normal,
+                                    color: selected
+                                        ? color
+                                        : AppColors.textPrimary,
                                   ),
-                                ]),
+                                ),
+                              ],
+                            ),
                           ),
                         );
                       }).toList(),
@@ -471,39 +678,48 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
                     const SizedBox(height: 20),
 
                     // ── Wallet ────────────────────────────────────────────
-                    const Text('Wallet',
-                        style: TextStyle(
-                            fontWeight: FontWeight.w600, fontSize: 14)),
+                    const Text(
+                      'Wallet',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w600,
+                        fontSize: 14,
+                      ),
+                    ),
                     const SizedBox(height: 8),
                     // Regular wallet picker (hidden when savings goal selected)
                     if (_selectedGoal == null)
                       Container(
                         padding: const EdgeInsets.symmetric(
-                            horizontal: 16, vertical: 4),
+                          horizontal: 16,
+                          vertical: 4,
+                        ),
                         decoration: BoxDecoration(
                           color: Colors.white,
                           borderRadius: BorderRadius.circular(12),
-                          border:
-                              Border.all(color: const Color(0xFFE0E0E0)),
+                          border: Border.all(color: const Color(0xFFE0E0E0)),
                         ),
                         child: DropdownButton<WalletModel>(
                           value: _selectedWallet,
                           isExpanded: true,
                           underline: const SizedBox.shrink(),
                           items: wp.wallets
-                              .map((w) => DropdownMenuItem(
-                                    value: w,
-                                    child: Row(children: [
-                                      Text(w.icon,
-                                          style: const TextStyle(
-                                              fontSize: 18)),
+                              .map(
+                                (w) => DropdownMenuItem(
+                                  value: w,
+                                  child: Row(
+                                    children: [
+                                      Text(
+                                        w.icon,
+                                        style: const TextStyle(fontSize: 18),
+                                      ),
                                       const SizedBox(width: 10),
                                       Text(w.name),
-                                    ]),
-                                  ))
+                                    ],
+                                  ),
+                                ),
+                              )
                               .toList(),
-                          onChanged: (v) =>
-                              setState(() => _selectedWallet = v),
+                          onChanged: (v) => setState(() => _selectedWallet = v),
                         ),
                       ),
                     // Savings goal wallet (only for expenses, not edit)
@@ -512,13 +728,15 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
                       GestureDetector(
                         onTap: _selectedGoal != null
                             ? () => setState(() {
-                                  _selectedGoal = null;
-                                  _selectedWallet = wp.defaultWallet;
-                                })
+                                _selectedGoal = null;
+                                _selectedWallet = wp.defaultWallet;
+                              })
                             : _pickSavingsGoal,
                         child: Container(
                           padding: const EdgeInsets.symmetric(
-                              horizontal: 14, vertical: 12),
+                            horizontal: 14,
+                            vertical: 12,
+                          ),
                           decoration: BoxDecoration(
                             color: _selectedGoal != null
                                 ? AppColors.primary.withValues(alpha: 0.06)
@@ -530,83 +748,106 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
                                   : const Color(0xFFE0E0E0),
                             ),
                           ),
-                          child: Row(children: [
-                            const Text('🎯',
-                                style: TextStyle(fontSize: 18)),
-                            const SizedBox(width: 10),
-                            Expanded(
-                              child: _selectedGoal != null
-                                  ? Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        Text(_selectedGoal!.name,
+                          child: Row(
+                            children: [
+                              const Text('🎯', style: TextStyle(fontSize: 18)),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: _selectedGoal != null
+                                    ? Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            _selectedGoal!.name,
                                             style: const TextStyle(
-                                                fontWeight:
-                                                    FontWeight.w600,
-                                                fontSize: 14)),
-                                        Text(
+                                              fontWeight: FontWeight.w600,
+                                              fontSize: 14,
+                                            ),
+                                          ),
+                                          Text(
                                             'Available: RM ${_selectedGoal!.currentAmount.toStringAsFixed(2)}',
                                             style: const TextStyle(
-                                                color:
-                                                    AppColors.textSecondary,
-                                                fontSize: 12)),
-                                      ],
-                                    )
-                                  : const Text(
-                                      'Pay from Savings Goal',
-                                      style: TextStyle(
+                                              color: AppColors.textSecondary,
+                                              fontSize: 12,
+                                            ),
+                                          ),
+                                        ],
+                                      )
+                                    : const Text(
+                                        'Pay from Savings Goal',
+                                        style: TextStyle(
                                           color: AppColors.textSecondary,
-                                          fontSize: 14),
-                                    ),
-                            ),
-                            Icon(
-                              _selectedGoal != null
-                                  ? Icons.close
-                                  : Icons.chevron_right,
-                              color: AppColors.textSecondary,
-                              size: 18,
-                            ),
-                          ]),
+                                          fontSize: 14,
+                                        ),
+                                      ),
+                              ),
+                              Icon(
+                                _selectedGoal != null
+                                    ? Icons.close
+                                    : Icons.chevron_right,
+                                color: AppColors.textSecondary,
+                                size: 18,
+                              ),
+                            ],
+                          ),
                         ),
                       ),
                     ],
                     const SizedBox(height: 20),
 
                     // ── Date ─────────────────────────────────────────────
-                    const Text('Date',
-                        style: TextStyle(
-                            fontWeight: FontWeight.w600, fontSize: 14)),
+                    const Text(
+                      'Date',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w600,
+                        fontSize: 14,
+                      ),
+                    ),
                     const SizedBox(height: 8),
                     InkWell(
                       onTap: _pickDate,
                       child: Container(
                         padding: const EdgeInsets.symmetric(
-                            horizontal: 16, vertical: 14),
+                          horizontal: 16,
+                          vertical: 14,
+                        ),
                         decoration: BoxDecoration(
                           color: Colors.white,
                           borderRadius: BorderRadius.circular(12),
-                          border:
-                              Border.all(color: const Color(0xFFE0E0E0)),
+                          border: Border.all(color: const Color(0xFFE0E0E0)),
                         ),
-                        child: Row(children: [
-                          Icon(Icons.calendar_today_outlined,
-                              color: accentColor, size: 18),
-                          const SizedBox(width: 10),
-                          Text(DateFormat('d MMM yyyy').format(_selectedDate),
-                              style: const TextStyle(fontSize: 15)),
-                          const Spacer(),
-                          const Icon(Icons.arrow_drop_down,
-                              color: AppColors.textSecondary),
-                        ]),
+                        child: Row(
+                          children: [
+                            Icon(
+                              Icons.calendar_today_outlined,
+                              color: accentColor,
+                              size: 18,
+                            ),
+                            const SizedBox(width: 10),
+                            Text(
+                              DateFormat('d MMM yyyy').format(_selectedDate),
+                              style: const TextStyle(fontSize: 15),
+                            ),
+                            const Spacer(),
+                            const Icon(
+                              Icons.arrow_drop_down,
+                              color: AppColors.textSecondary,
+                            ),
+                          ],
+                        ),
                       ),
                     ),
                     const SizedBox(height: 20),
 
                     // ── Details ───────────────────────────────────────────
-                    const Text('Details',
-                        style: TextStyle(
-                            fontWeight: FontWeight.w600, fontSize: 14)),
+                    const Text(
+                      'Details',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w600,
+                        fontSize: 14,
+                      ),
+                    ),
                     const SizedBox(height: 8),
                     TextFormField(
                       controller: _descCtrl,
@@ -620,28 +861,151 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
                     ),
 
                     // ── Location (auto-detected, expenses only) ───────────
-                    if (locationName != null && !_isIncome) ...[
+                    if (_isEdit &&
+                        displayLocationName != null &&
+                        !_isIncome) ...[
                       const SizedBox(height: 20),
-                      const Text('Location',
-                          style: TextStyle(
-                              fontWeight: FontWeight.w600, fontSize: 14)),
+                      const Text(
+                        'Location',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w600,
+                          fontSize: 14,
+                        ),
+                      ),
                       const SizedBox(height: 8),
                       Container(
                         padding: const EdgeInsets.symmetric(
-                            horizontal: 16, vertical: 14),
+                          horizontal: 16,
+                          vertical: 14,
+                        ),
                         decoration: BoxDecoration(
                           color: Colors.white,
                           borderRadius: BorderRadius.circular(12),
-                          border:
-                              Border.all(color: const Color(0xFFE0E0E0)),
+                          border: Border.all(color: const Color(0xFFE0E0E0)),
                         ),
-                        child: Row(children: [
-                          const Icon(Icons.location_on,
-                              color: AppColors.budgetRed, size: 18),
-                          const SizedBox(width: 10),
-                          Text(locationName,
-                              style: const TextStyle(fontSize: 15)),
-                        ]),
+                        child: Row(
+                          children: [
+                            const Icon(
+                              Icons.location_on,
+                              color: AppColors.budgetRed,
+                              size: 18,
+                            ),
+                            const SizedBox(width: 10),
+                            Text(
+                              displayLocationName,
+                              style: const TextStyle(fontSize: 15),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ] else if (!_isEdit &&
+                        _detectingLocation &&
+                        !_isIncome) ...[
+                      const SizedBox(height: 20),
+                      const Text(
+                        'Location',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w600,
+                          fontSize: 14,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: const [
+                          SizedBox(
+                            width: 14,
+                            height: 14,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          ),
+                          SizedBox(width: 10),
+                          Text(
+                            'Detecting nearby places...',
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: AppColors.textSecondary,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ] else if (!_isEdit &&
+                        _locationCandidates.isNotEmpty &&
+                        !_isIncome) ...[
+                      const SizedBox(height: 20),
+                      const Text(
+                        'Location',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w600,
+                          fontSize: 14,
+                        ),
+                      ),
+                      if (_locationCandidates.length > 1) ...[
+                        const SizedBox(height: 4),
+                        const Text(
+                          'More than one place nearby — pick the right one.',
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: AppColors.textSecondary,
+                          ),
+                        ),
+                      ],
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: _locationCandidates.map((cand) {
+                          final selected = _selectedLocationCandidate == cand;
+                          return GestureDetector(
+                            onTap: () {
+                              setState(() => _selectedLocationCandidate = cand);
+                              _suggestCategoryFor(cand);
+                            },
+                            child: AnimatedContainer(
+                              duration: const Duration(milliseconds: 150),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 14,
+                                vertical: 9,
+                              ),
+                              decoration: BoxDecoration(
+                                color: selected
+                                    ? AppColors.primary.withValues(alpha: 0.12)
+                                    : Colors.white,
+                                borderRadius: BorderRadius.circular(24),
+                                border: Border.all(
+                                  color: selected
+                                      ? AppColors.primary
+                                      : const Color(0xFFE0E0E0),
+                                  width: selected ? 2 : 1,
+                                ),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Text(
+                                    cand.emoji,
+                                    style: const TextStyle(fontSize: 15),
+                                  ),
+                                  const SizedBox(width: 6),
+                                  ConstrainedBox(
+                                    constraints: const BoxConstraints(
+                                      maxWidth: 160,
+                                    ),
+                                    child: Text(
+                                      cand.name,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                        fontSize: 13,
+                                        fontWeight: selected
+                                            ? FontWeight.w600
+                                            : FontWeight.normal,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          );
+                        }).toList(),
                       ),
                     ],
 
@@ -657,7 +1021,10 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
                               height: 20,
                               width: 20,
                               child: CircularProgressIndicator(
-                                  strokeWidth: 2, color: Colors.white))
+                                strokeWidth: 2,
+                                color: Colors.white,
+                              ),
+                            )
                           : Text(_isEdit ? 'Update Record' : 'Save Record'),
                     ),
                     const SizedBox(height: 40),
@@ -670,6 +1037,25 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
       ),
     );
   }
+}
+
+/// A place within geofence range of the current position — either a
+/// location the user has explicitly saved, or an unsaved place found via a
+/// live OSM lookup. [locationId] is set only for the former.
+class _LocationCandidate {
+  final String name;
+  final String emoji;
+  final String? locationId;
+  final String? suggestedCategoryName;
+  final double distanceMeters;
+
+  const _LocationCandidate({
+    required this.name,
+    required this.emoji,
+    this.locationId,
+    this.suggestedCategoryName,
+    required this.distanceMeters,
+  });
 }
 
 class _TypeTab extends StatelessWidget {
@@ -701,26 +1087,30 @@ class _TypeTab extends StatelessWidget {
             boxShadow: selected
                 ? [
                     BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.08),
-                        blurRadius: 4,
-                        offset: const Offset(0, 2))
+                      color: Colors.black.withValues(alpha: 0.08),
+                      blurRadius: 4,
+                      offset: const Offset(0, 2),
+                    ),
                   ]
                 : [],
           ),
           child: Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(icon,
-                  size: 16,
-                  color: selected ? color : AppColors.textSecondary),
+              Icon(
+                icon,
+                size: 16,
+                color: selected ? color : AppColors.textSecondary,
+              ),
               const SizedBox(width: 6),
-              Text(label,
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight:
-                        selected ? FontWeight.bold : FontWeight.normal,
-                    color: selected ? color : AppColors.textSecondary,
-                  )),
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: selected ? FontWeight.bold : FontWeight.normal,
+                  color: selected ? color : AppColors.textSecondary,
+                ),
+              ),
             ],
           ),
         ),
@@ -759,29 +1149,34 @@ class _MethodCard extends StatelessWidget {
               width: selected ? 2 : 1,
             ),
           ),
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-            Icon(icon,
-                color: selected
-                    ? AppColors.primary
-                    : AppColors.textSecondary,
-                size: 24),
-            const SizedBox(height: 6),
-            Text(label,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                icon,
+                color: selected ? AppColors.primary : AppColors.textSecondary,
+                size: 24,
+              ),
+              const SizedBox(height: 6),
+              Text(
+                label,
                 style: TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                    color: selected
-                        ? AppColors.primary
-                        : AppColors.textPrimary),
-                textAlign: TextAlign.center),
-            Text(sub,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: selected ? AppColors.primary : AppColors.textPrimary,
+                ),
+                textAlign: TextAlign.center,
+              ),
+              Text(
+                sub,
                 style: TextStyle(
-                    fontSize: 10,
-                    color: selected
-                        ? AppColors.primary
-                        : AppColors.textSecondary),
-                textAlign: TextAlign.center),
-          ]),
+                  fontSize: 10,
+                  color: selected ? AppColors.primary : AppColors.textSecondary,
+                ),
+                textAlign: TextAlign.center,
+              ),
+            ],
+          ),
         ),
       ),
     );

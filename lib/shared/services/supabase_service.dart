@@ -56,7 +56,8 @@ class SupabaseService {
         .from('expenses')
         .select()
         .eq('user_id', _uid)
-        .order('date', ascending: false);
+        .order('date', ascending: false)
+        .order('created_at', ascending: false);
 
     final data = await query;
     final expenses =

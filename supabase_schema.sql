@@ -35,7 +35,7 @@ INSERT INTO categories (name, icon, color_hex, type) VALUES
 CREATE TABLE budgets (
   id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id     UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
-  category_id UUID NOT NULL REFERENCES categories(id),
+  category_id TEXT NOT NULL,
   amount      NUMERIC(12,2) NOT NULL CHECK (amount > 0),
   month       INTEGER NOT NULL CHECK (month BETWEEN 1 AND 12),
   year        INTEGER NOT NULL,
@@ -48,7 +48,7 @@ CREATE TABLE budgets (
 CREATE TABLE expenses (
   id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id     UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
-  category_id UUID NOT NULL REFERENCES categories(id),
+  category_id TEXT NOT NULL,
   amount      NUMERIC(12,2) NOT NULL CHECK (amount > 0),
   description TEXT DEFAULT '',
   date        DATE NOT NULL,
@@ -98,7 +98,7 @@ CREATE TABLE alert_logs (
   type        TEXT NOT NULL CHECK (type IN ('green','yellow','red','location')),
   title       TEXT NOT NULL,
   message     TEXT NOT NULL,
-  category_id UUID REFERENCES categories(id) ON DELETE SET NULL,
+  category_id TEXT,
   is_read     BOOLEAN DEFAULT FALSE,
   created_at  TIMESTAMPTZ DEFAULT NOW()
 );

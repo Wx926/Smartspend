@@ -17,12 +17,16 @@ class LocationService {
   String? _activeHistoryId;
   String? _currentLocationId;
   DateTime? _arrivedAt;
+  // Whether _currentLocationId has been confirmed as the "now location"
+  // (either by dwelling there long enough, or by a manual refresh).
+  bool _confirmed = false;
 
   final StreamController<LocationEvent> _eventController =
       StreamController.broadcast();
   Stream<LocationEvent> get events => _eventController.stream;
 
-  /// Request permission and start polling every 60 seconds.
+  /// Request permission and start polling every
+  /// [AppConstants.locationIntervalSeconds] seconds.
   Future<bool> startTracking(String userId) async {
     final permission = await _requestPermission();
     if (!permission) return false;
@@ -41,8 +45,11 @@ class LocationService {
     _timer = null;
   }
 
-  /// Force an immediate poll outside the normal 60-second interval.
-  Future<void> forcePoll(String userId) => _poll(userId);
+  /// Force an immediate poll outside the normal periodic interval. Unlike a
+  /// regular background poll, a forced one confirms whatever location is
+  /// currently matched right away instead of waiting for
+  /// [AppConstants.dwellTimeMinutes] to pass.
+  Future<void> forcePoll(String userId) => _poll(userId, forced: true);
 
   Future<bool> _requestPermission() async {
     bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
@@ -57,10 +64,16 @@ class LocationService {
     return true;
   }
 
-  Future<void> _poll(String userId) async {
+  /// Runs one detection cycle.
+  ///
+  /// Algorithm: a newly-matched location is tracked immediately, but only
+  /// confirmed as the "now location" (surfaced via a LocationEvent) once the
+  /// user has dwelled there for [AppConstants.dwellTimeMinutes] — unless
+  /// [forced] is true (a manual refresh), which confirms it right away.
+  Future<void> _poll(String userId, {bool forced = false}) async {
     try {
       final position = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.medium,
+        desiredAccuracy: LocationAccuracy.high,
       ).timeout(const Duration(seconds: 15));
 
       final knownLocations = _store.getLocations();
@@ -81,35 +94,79 @@ class LocationService {
 
       if (matched != null) {
         if (_currentLocationId != matched.id) {
+          // Switched to a new (or first) location — reset the dwell clock
+          // and un-confirm until it earns "now location" status too.
+          final wasConfirmed = _confirmed;
           await _closeCurrentVisit(userId);
           _currentLocationId = matched.id;
           _arrivedAt = DateTime.now();
           _activeHistoryId = _uuid.v4();
-          _store.bufferHistory(LocationHistoryModel(
-            id: _activeHistoryId!,
-            userId: userId,
-            locationId: matched.id,
-            latitude: position.latitude,
-            longitude: position.longitude,
-            arrivedAt: _arrivedAt!,
-          ));
-          _eventController.add(LocationEvent(
-            type: LocationEventType.entered,
-            location: matched,
-            dwellMinutes: 0,
-          ));
-        } else {
+          _store.bufferHistory(
+            LocationHistoryModel(
+              id: _activeHistoryId!,
+              userId: userId,
+              locationId: matched.id,
+              latitude: position.latitude,
+              longitude: position.longitude,
+              arrivedAt: _arrivedAt!,
+            ),
+          );
+
+          if (forced) {
+            _confirmed = true;
+            _eventController.add(
+              LocationEvent(
+                type: LocationEventType.entered,
+                location: matched,
+                dwellMinutes: 0,
+              ),
+            );
+          } else if (wasConfirmed) {
+            // Left a confirmed location for an unconfirmed one — clear the
+            // "now location" state until the new spot earns it.
+            _eventController.add(
+              const LocationEvent(
+                type: LocationEventType.left,
+                location: null,
+                dwellMinutes: 0,
+              ),
+            );
+          }
+        } else if (!_confirmed) {
           final dwell = DateTime.now().difference(_arrivedAt!).inMinutes;
-          if (dwell >= AppConstants.dwellTimeMinutes) {
-            _eventController.add(LocationEvent(
+          if (forced || dwell >= AppConstants.dwellTimeMinutes) {
+            _confirmed = true;
+            _eventController.add(
+              LocationEvent(
+                type: LocationEventType.entered,
+                location: matched,
+                dwellMinutes: dwell,
+              ),
+            );
+          }
+        } else {
+          // Already confirmed — keep the displayed dwell time current.
+          final dwell = DateTime.now().difference(_arrivedAt!).inMinutes;
+          _eventController.add(
+            LocationEvent(
               type: LocationEventType.dwell,
               location: matched,
               dwellMinutes: dwell,
-            ));
-          }
+            ),
+          );
         }
       } else if (_currentLocationId != null) {
+        final wasConfirmed = _confirmed;
         await _closeCurrentVisit(userId);
+        if (wasConfirmed) {
+          _eventController.add(
+            const LocationEvent(
+              type: LocationEventType.left,
+              location: null,
+              dwellMinutes: 0,
+            ),
+          );
+        }
       }
     } catch (_) {
       // Silently ignore GPS errors
@@ -127,6 +184,7 @@ class LocationService {
     _activeHistoryId = null;
     _currentLocationId = null;
     _arrivedAt = null;
+    _confirmed = false;
   }
 
   Future<LocationModel> saveLocation({
@@ -152,24 +210,22 @@ class LocationService {
 
   Future<Position?> getCurrentPosition() async {
     try {
-      // getLastKnownPosition reflects emulator location changes immediately
-      // and is faster than waiting for a fresh GPS fix
-      final last = await Geolocator.getLastKnownPosition();
-      if (last != null) return last;
       return await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.medium,
+        desiredAccuracy: LocationAccuracy.high,
       ).timeout(const Duration(seconds: 10));
     } catch (_) {
-      return null;
+      // Fall back to a cached fix if a fresh one couldn't be obtained
+      // (e.g. GPS unavailable or the request timed out).
+      return Geolocator.getLastKnownPosition();
     }
   }
 }
 
-enum LocationEventType { entered, dwell }
+enum LocationEventType { entered, dwell, left }
 
 class LocationEvent {
   final LocationEventType type;
-  final LocationModel location;
+  final LocationModel? location;
   final int dwellMinutes;
   const LocationEvent({
     required this.type,

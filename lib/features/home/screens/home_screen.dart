@@ -10,6 +10,7 @@ import '../../../features/wallet/providers/wallet_provider.dart';
 import '../../../shared/models/budget_model.dart';
 import '../../../shared/theme/app_colors.dart';
 import '../../analytics/screens/analytics_screen.dart';
+import '../../expenses/screens/add_expense_screen.dart';
 import '../../location/screens/location_screen.dart';
 import '../../ocr/screens/scan_receipt_screen.dart';
 
@@ -47,11 +48,14 @@ class _HomeScreenState extends State<HomeScreen> {
       userId: auth.userId,
     );
     if (mounted && skipped.isNotEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(
-            'Auto-transfer skipped for: ${skipped.join(', ')} — insufficient funds'),
-        duration: const Duration(seconds: 4),
-      ));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Auto-transfer skipped for: ${skipped.join(', ')} — insufficient funds',
+          ),
+          duration: const Duration(seconds: 4),
+        ),
+      );
     }
   }
 
@@ -60,8 +64,11 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() {
       _txStart = newStart;
       // Use end of day on last day of month to include all transactions
-      _txEnd = DateTime(newStart.year, newStart.month + 1, 1)
-          .subtract(const Duration(seconds: 1));
+      _txEnd = DateTime(
+        newStart.year,
+        newStart.month + 1,
+        1,
+      ).subtract(const Duration(seconds: 1));
       _filterLabel = DateFormat('MMM yyyy').format(newStart);
     });
   }
@@ -76,59 +83,95 @@ class _HomeScreenState extends State<HomeScreen> {
       _txStart = nextStart;
       _txEnd = isCurrentMonth
           ? now
-          : DateTime(nextStart.year, nextStart.month + 1, 1)
-              .subtract(const Duration(seconds: 1));
-      _filterLabel =
-          isCurrentMonth ? 'This Month' : DateFormat('MMM yyyy').format(nextStart);
+          : DateTime(
+              nextStart.year,
+              nextStart.month + 1,
+              1,
+            ).subtract(const Duration(seconds: 1));
+      _filterLabel = isCurrentMonth
+          ? 'This Month'
+          : DateFormat('MMM yyyy').format(nextStart);
     });
   }
 
   void _showFilterSheet() {
     final now = DateTime.now();
     final presets = [
-      {'label': 'Last 7 days', 'start': now.subtract(const Duration(days: 6)), 'end': now},
-      {'label': 'This Month', 'start': DateTime(now.year, now.month, 1), 'end': now},
-      {'label': 'Last Month', 'start': DateTime(now.year, now.month - 1, 1), 'end': DateTime(now.year, now.month, 0)},
-      {'label': 'Last 3 Months', 'start': DateTime(now.year, now.month - 2, 1), 'end': now},
-      {'label': 'Last 6 Months', 'start': DateTime(now.year, now.month - 5, 1), 'end': now},
-      {'label': 'Last Year', 'start': DateTime(now.year - 1, now.month, 1), 'end': now},
+      {
+        'label': 'Last 7 days',
+        'start': now.subtract(const Duration(days: 6)),
+        'end': now,
+      },
+      {
+        'label': 'This Month',
+        'start': DateTime(now.year, now.month, 1),
+        'end': now,
+      },
+      {
+        'label': 'Last Month',
+        'start': DateTime(now.year, now.month - 1, 1),
+        'end': DateTime(now.year, now.month, 0),
+      },
+      {
+        'label': 'Last 3 Months',
+        'start': DateTime(now.year, now.month - 2, 1),
+        'end': now,
+      },
+      {
+        'label': 'Last 6 Months',
+        'start': DateTime(now.year, now.month - 5, 1),
+        'end': now,
+      },
+      {
+        'label': 'Last Year',
+        'start': DateTime(now.year - 1, now.month, 1),
+        'end': now,
+      },
     ];
 
     showModalBottomSheet(
       context: context,
       shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
       builder: (ctx) => Padding(
         padding: const EdgeInsets.fromLTRB(24, 20, 24, 32),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('Filter Period',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+            const Text(
+              'Filter Period',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+            ),
             const SizedBox(height: 16),
-            ...presets.map((p) => ListTile(
-                  dense: true,
-                  contentPadding: EdgeInsets.zero,
-                  title: Text(p['label'] as String),
-                  trailing: _filterLabel == p['label']
-                      ? const Icon(Icons.check, color: AppColors.primary)
-                      : null,
-                  onTap: () {
-                    setState(() {
-                      _txStart = p['start'] as DateTime;
-                      _txEnd = p['end'] as DateTime;
-                      _filterLabel = p['label'] as String;
-                    });
-                    Navigator.pop(ctx);
-                  },
-                )),
+            ...presets.map(
+              (p) => ListTile(
+                dense: true,
+                contentPadding: EdgeInsets.zero,
+                title: Text(p['label'] as String),
+                trailing: _filterLabel == p['label']
+                    ? const Icon(Icons.check, color: AppColors.primary)
+                    : null,
+                onTap: () {
+                  setState(() {
+                    _txStart = p['start'] as DateTime;
+                    _txEnd = p['end'] as DateTime;
+                    _filterLabel = p['label'] as String;
+                  });
+                  Navigator.pop(ctx);
+                },
+              ),
+            ),
             ListTile(
               dense: true,
               contentPadding: EdgeInsets.zero,
               title: const Text('Custom Range'),
-              trailing: const Icon(Icons.calendar_month_outlined,
-                  color: AppColors.primary, size: 20),
+              trailing: const Icon(
+                Icons.calendar_month_outlined,
+                color: AppColors.primary,
+                size: 20,
+              ),
               onTap: () async {
                 Navigator.pop(ctx);
                 final range = await showDateRangePicker(
@@ -138,8 +181,10 @@ class _HomeScreenState extends State<HomeScreen> {
                   initialDateRange: DateTimeRange(start: _txStart, end: _txEnd),
                   builder: (context, child) => Theme(
                     data: Theme.of(context).copyWith(
-                        colorScheme: const ColorScheme.light(
-                            primary: AppColors.primary)),
+                      colorScheme: const ColorScheme.light(
+                        primary: AppColors.primary,
+                      ),
+                    ),
                     child: child!,
                   ),
                 );
@@ -184,8 +229,12 @@ class _HomeScreenState extends State<HomeScreen> {
     final now = DateTime.now();
     final fmt = NumberFormat('#,##0.00', 'en_MY');
 
-    final totalSpent = ep.expensesForMonth(now.month, now.year).fold(0.0, (s, e) => s + e.amount);
-    final totalIncome = ep.incomeForMonth(now.month, now.year).fold(0.0, (s, e) => s + e.amount);
+    final totalSpent = ep
+        .expensesForMonth(now.month, now.year)
+        .fold(0.0, (s, e) => s + e.amount);
+    final totalIncome = ep
+        .incomeForMonth(now.month, now.year)
+        .fold(0.0, (s, e) => s + e.amount);
     final totalBudget = bp.totalBudget;
     final remaining = (totalBudget - totalSpent).clamp(0.0, double.infinity);
     final daysLeft = DateTime(now.year, now.month + 1, 0).day - now.day;
@@ -220,46 +269,60 @@ class _HomeScreenState extends State<HomeScreen> {
                             Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Text(_greeting(),
-                                    style: const TextStyle(
-                                        color: Colors.white70, fontSize: 13)),
-                                Text(displayName,
-                                    style: const TextStyle(
-                                        color: Colors.white,
-                                        fontSize: 22,
-                                        fontWeight: FontWeight.bold)),
+                                Text(
+                                  _greeting(),
+                                  style: const TextStyle(
+                                    color: Colors.white70,
+                                    fontSize: 13,
+                                  ),
+                                ),
+                                Text(
+                                  displayName,
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 22,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
                               ],
                             ),
-                            Row(children: [
-                              IconButton(
-                                icon: Icon(
-                                  lp.isTracking
-                                      ? Icons.location_on
-                                      : Icons.location_on_outlined,
-                                  color: Colors.white,
-                                ),
-                                tooltip: 'Nearby',
-                                onPressed: () => Navigator.push(
+                            Row(
+                              children: [
+                                IconButton(
+                                  icon: Icon(
+                                    lp.isTracking
+                                        ? Icons.location_on
+                                        : Icons.location_on_outlined,
+                                    color: Colors.white,
+                                  ),
+                                  tooltip: 'Nearby',
+                                  onPressed: () => Navigator.push(
                                     context,
                                     MaterialPageRoute(
-                                        builder: (_) =>
-                                            const LocationScreen())),
-                              ),
-                              GestureDetector(
-                                onTap: () =>
-                                    Navigator.pushNamed(context, '/profile'),
-                                child: CircleAvatar(
-                                  radius: 22,
-                                  backgroundColor:
-                                      Colors.white.withValues(alpha: 0.25),
-                                  child: Text(_initials(displayName),
-                                      style: const TextStyle(
-                                          color: Colors.white,
-                                          fontWeight: FontWeight.bold,
-                                          fontSize: 14)),
+                                      builder: (_) => const LocationScreen(),
+                                    ),
+                                  ),
                                 ),
-                              ),
-                            ]),
+                                GestureDetector(
+                                  onTap: () =>
+                                      Navigator.pushNamed(context, '/profile'),
+                                  child: CircleAvatar(
+                                    radius: 22,
+                                    backgroundColor: Colors.white.withValues(
+                                      alpha: 0.25,
+                                    ),
+                                    child: Text(
+                                      _initials(displayName),
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 14,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
                           ],
                         ),
                         const SizedBox(height: 20),
@@ -271,40 +334,56 @@ class _HomeScreenState extends State<HomeScreen> {
                             color: Colors.white.withValues(alpha: 0.12),
                             borderRadius: BorderRadius.circular(16),
                             border: Border.all(
-                                color: Colors.white.withValues(alpha: 0.2)),
+                              color: Colors.white.withValues(alpha: 0.2),
+                            ),
                           ),
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              const Text('Total remaining budget',
-                                  style: TextStyle(
-                                      color: Colors.white70, fontSize: 12)),
+                              const Text(
+                                'Total remaining budget',
+                                style: TextStyle(
+                                  color: Colors.white70,
+                                  fontSize: 12,
+                                ),
+                              ),
                               const SizedBox(height: 4),
-                              Text('RM ${fmt.format(remaining)}',
-                                  style: const TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 34,
-                                      fontWeight: FontWeight.bold)),
+                              Text(
+                                'RM ${fmt.format(remaining)}',
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 34,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
                               Text(
                                 totalBudget > 0
                                     ? 'of RM ${fmt.format(totalBudget)} monthly budget'
                                     : 'No budget set yet',
                                 style: const TextStyle(
-                                    color: Colors.white70, fontSize: 12),
+                                  color: Colors.white70,
+                                  fontSize: 12,
+                                ),
                               ),
                               const SizedBox(height: 16),
-                              Row(children: [
-                                _StatChip(
+                              Row(
+                                children: [
+                                  _StatChip(
                                     label: 'Spent',
-                                    value: 'RM ${fmt.format(totalSpent)}'),
-                                const SizedBox(width: 10),
-                                _StatChip(
+                                    value: 'RM ${fmt.format(totalSpent)}',
+                                  ),
+                                  const SizedBox(width: 10),
+                                  _StatChip(
                                     label: 'Income',
-                                    value: 'RM ${fmt.format(totalIncome)}'),
-                                const SizedBox(width: 10),
-                                _StatChip(
-                                    label: 'Days left', value: '$daysLeft'),
-                              ]),
+                                    value: 'RM ${fmt.format(totalIncome)}',
+                                  ),
+                                  const SizedBox(width: 10),
+                                  _StatChip(
+                                    label: 'Days left',
+                                    value: '$daysLeft',
+                                  ),
+                                ],
+                              ),
                             ],
                           ),
                         ),
@@ -319,46 +398,63 @@ class _HomeScreenState extends State<HomeScreen> {
             if (lp.activeLocation != null)
               SliverToBoxAdapter(
                 child: GestureDetector(
-                  onTap: () => Navigator.push(context,
-                      MaterialPageRoute(
-                          builder: (_) => const LocationScreen())),
+                  onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const LocationScreen()),
+                  ),
                   child: Container(
                     margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
                     padding: const EdgeInsets.symmetric(
-                        horizontal: 14, vertical: 12),
+                      horizontal: 14,
+                      vertical: 12,
+                    ),
                     decoration: BoxDecoration(
                       color: Colors.white,
                       borderRadius: BorderRadius.circular(12),
                       boxShadow: [
                         BoxShadow(
-                            color: Colors.black.withValues(alpha: 0.06),
-                            blurRadius: 6,
-                            offset: const Offset(0, 2))
+                          color: Colors.black.withValues(alpha: 0.06),
+                          blurRadius: 6,
+                          offset: const Offset(0, 2),
+                        ),
                       ],
                     ),
-                    child: Row(children: [
-                      const Icon(Icons.circle,
-                          color: Color(0xFFF39C12), size: 10),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Column(
+                    child: Row(
+                      children: [
+                        const Icon(
+                          Icons.circle,
+                          color: Color(0xFFF39C12),
+                          size: 10,
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
-                                  'Location alert — ${lp.activeLocation!.name}',
-                                  style: const TextStyle(
-                                      fontWeight: FontWeight.w600,
-                                      fontSize: 13)),
+                                'Location alert — ${lp.activeLocation!.name}',
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w600,
+                                  fontSize: 13,
+                                ),
+                              ),
                               Text(
-                                  '${lp.activeDwellMinutes} min · Tap to view',
-                                  style: const TextStyle(
-                                      color: AppColors.textSecondary,
-                                      fontSize: 11)),
-                            ]),
-                      ),
-                      const Icon(Icons.chevron_right,
-                          color: AppColors.textSecondary, size: 18),
-                    ]),
+                                '${lp.activeDwellMinutes} min · Tap to view',
+                                style: const TextStyle(
+                                  color: AppColors.textSecondary,
+                                  fontSize: 11,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const Icon(
+                          Icons.chevron_right,
+                          color: AppColors.textSecondary,
+                          size: 18,
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               ),
@@ -367,33 +463,42 @@ class _HomeScreenState extends State<HomeScreen> {
             SliverToBoxAdapter(
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
-                child: Row(children: [
-                  Expanded(
+                child: Row(
+                  children: [
+                    Expanded(
                       child: _QuickAction(
-                          icon: Icons.add,
-                          label: 'Add Record',
-                          filled: true,
-                          onTap: () =>
-                              Navigator.pushNamed(context, '/add-expense'))),
-                  const SizedBox(width: 10),
-                  Expanded(
+                        icon: Icons.add,
+                        label: 'Add Record',
+                        filled: true,
+                        onTap: () =>
+                            Navigator.pushNamed(context, '/add-expense'),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
                       child: _QuickAction(
-                          icon: Icons.bar_chart_outlined,
-                          label: 'Analytics',
-                          filled: false,
-                          onTap: () => Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                  builder: (_) => const AnalyticsScreen())))),
-                  const SizedBox(width: 10),
-                  Expanded(
+                        icon: Icons.bar_chart_outlined,
+                        label: 'Analytics',
+                        filled: false,
+                        onTap: () => Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => const AnalyticsScreen(),
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
                       child: _QuickAction(
-                          icon: Icons.auto_awesome_outlined,
-                          label: 'AI Advice',
-                          filled: false,
-                          onTap: () =>
-                              Navigator.pushNamed(context, '/ai-advice'))),
-                ]),
+                        icon: Icons.auto_awesome_outlined,
+                        label: 'AI Advice',
+                        filled: false,
+                        onTap: () => Navigator.pushNamed(context, '/ai-advice'),
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
 
@@ -402,40 +507,58 @@ class _HomeScreenState extends State<HomeScreen> {
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
                 child: GestureDetector(
-                  onTap: () => Navigator.push(context,
-                      MaterialPageRoute(
-                          builder: (_) => const ScanReceiptScreen())),
+                  onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const ScanReceiptScreen(),
+                    ),
+                  ),
                   child: Container(
                     padding: const EdgeInsets.symmetric(
-                        horizontal: 18, vertical: 14),
+                      horizontal: 18,
+                      vertical: 14,
+                    ),
                     decoration: BoxDecoration(
                       color: Colors.white,
                       borderRadius: BorderRadius.circular(14),
                       border: Border.all(color: const Color(0xFFE0E0E0)),
                     ),
-                    child: const Row(children: [
-                      Icon(Icons.receipt_long_rounded,
-                          color: AppColors.primary, size: 22),
-                      SizedBox(width: 12),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text('Scan Receipt',
-                                style: TextStyle(
-                                    fontWeight: FontWeight.w600,
-                                    fontSize: 14,
-                                    color: AppColors.textPrimary)),
-                            Text('Auto-extract expenses via OCR',
-                                style: TextStyle(
-                                    fontSize: 11,
-                                    color: AppColors.textSecondary)),
-                          ],
+                    child: const Row(
+                      children: [
+                        Icon(
+                          Icons.receipt_long_rounded,
+                          color: AppColors.primary,
+                          size: 22,
                         ),
-                      ),
-                      Icon(Icons.chevron_right_rounded,
-                          color: AppColors.textSecondary),
-                    ]),
+                        SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Scan Receipt',
+                                style: TextStyle(
+                                  fontWeight: FontWeight.w600,
+                                  fontSize: 14,
+                                  color: AppColors.textPrimary,
+                                ),
+                              ),
+                              Text(
+                                'Auto-extract expenses via OCR',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  color: AppColors.textSecondary,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        Icon(
+                          Icons.chevron_right_rounded,
+                          color: AppColors.textSecondary,
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               ),
@@ -446,16 +569,21 @@ class _HomeScreenState extends State<HomeScreen> {
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(16, 20, 16, 8),
                 child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      const Text('Budget Overview',
-                          style: TextStyle(
-                              fontSize: 16, fontWeight: FontWeight.bold)),
-                      TextButton(
-                          onPressed: () =>
-                              Navigator.pushNamed(context, '/budget'),
-                          child: const Text('See All')),
-                    ]),
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text(
+                      'Budget Overview',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    TextButton(
+                      onPressed: () => Navigator.pushNamed(context, '/budget'),
+                      child: const Text('See All'),
+                    ),
+                  ],
+                ),
               ),
             ),
 
@@ -463,147 +591,195 @@ class _HomeScreenState extends State<HomeScreen> {
                 ? SliverToBoxAdapter(
                     child: Padding(
                       padding: const EdgeInsets.symmetric(
-                          horizontal: 16, vertical: 8),
+                        horizontal: 16,
+                        vertical: 8,
+                      ),
                       child: Container(
                         padding: const EdgeInsets.all(20),
                         decoration: BoxDecoration(
-                            color: Colors.white,
-                            borderRadius: BorderRadius.circular(14)),
-                        child: Column(children: [
-                          const Icon(Icons.pie_chart_outline,
-                              size: 48, color: AppColors.textSecondary),
-                          const SizedBox(height: 8),
-                          const Text('No budgets set yet',
-                              style: TextStyle(fontWeight: FontWeight.bold)),
-                          const SizedBox(height: 4),
-                          const Text(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                        child: Column(
+                          children: [
+                            const Icon(
+                              Icons.pie_chart_outline,
+                              size: 48,
+                              color: AppColors.textSecondary,
+                            ),
+                            const SizedBox(height: 8),
+                            const Text(
+                              'No budgets set yet',
+                              style: TextStyle(fontWeight: FontWeight.bold),
+                            ),
+                            const SizedBox(height: 4),
+                            const Text(
                               'Set monthly budgets to track your spending',
                               style: TextStyle(
-                                  color: AppColors.textSecondary,
-                                  fontSize: 13)),
-                          const SizedBox(height: 12),
-                          ElevatedButton(
+                                color: AppColors.textSecondary,
+                                fontSize: 13,
+                              ),
+                            ),
+                            const SizedBox(height: 12),
+                            ElevatedButton(
                               onPressed: () =>
                                   Navigator.pushNamed(context, '/budget'),
-                              child: const Text('Set Budget')),
-                        ]),
+                              child: const Text('Set Budget'),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
                   )
                 : SliverList(
                     delegate: SliverChildBuilderDelegate(
-                        (_, i) => _BudgetCard(status: bp.statuses[i]),
-                        childCount: bp.statuses.length)),
+                      (_, i) => _BudgetCard(status: bp.statuses[i]),
+                      childCount: bp.statuses.length,
+                    ),
+                  ),
 
             // ── Transactions header with month nav + filter ───────────────
             SliverToBoxAdapter(
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(16, 20, 16, 8),
-                child: Row(children: [
-                  const Text('Transactions',
+                child: Row(
+                  children: [
+                    const Text(
+                      'Transactions',
                       style: TextStyle(
-                          fontSize: 16, fontWeight: FontWeight.bold)),
-                  const Spacer(),
-                  IconButton(
-                    icon: const Icon(Icons.chevron_left,
-                        color: AppColors.textSecondary, size: 22),
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(),
-                    onPressed: _prevMonth,
-                  ),
-                  GestureDetector(
-                    onTap: _showFilterSheet,
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 4),
-                      child: Text(_filterLabel,
-                          style: const TextStyle(
-                              fontSize: 13,
-                              fontWeight: FontWeight.w600,
-                              color: AppColors.primary)),
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.chevron_right,
-                        color: AppColors.textSecondary, size: 22),
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(),
-                    onPressed: _nextMonth,
-                  ),
-                  const SizedBox(width: 4),
-                  GestureDetector(
-                    onTap: _showFilterSheet,
-                    child: const Icon(Icons.tune,
-                        color: AppColors.primary, size: 20),
-                  ),
-                ]),
+                    const Spacer(),
+                    IconButton(
+                      icon: const Icon(
+                        Icons.chevron_left,
+                        color: AppColors.textSecondary,
+                        size: 22,
+                      ),
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(),
+                      onPressed: _prevMonth,
+                    ),
+                    GestureDetector(
+                      onTap: _showFilterSheet,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 4),
+                        child: Text(
+                          _filterLabel,
+                          style: const TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                            color: AppColors.primary,
+                          ),
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(
+                        Icons.chevron_right,
+                        color: AppColors.textSecondary,
+                        size: 22,
+                      ),
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(),
+                      onPressed: _nextMonth,
+                    ),
+                    const SizedBox(width: 4),
+                    GestureDetector(
+                      onTap: _showFilterSheet,
+                      child: const Icon(
+                        Icons.tune,
+                        color: AppColors.primary,
+                        size: 20,
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
 
             // ── Period income/expense summary ─────────────────────────────
             SliverToBoxAdapter(
-              child: Builder(builder: (context) {
-                final periodTx = ep.expenses.where((e) =>
-                    !e.date.isBefore(_txStart) &&
-                    !e.date.isAfter(_txEnd)).toList();
-                final periodIncome = periodTx
-                    .where((e) => e.type == 'income')
-                    .fold(0.0, (s, e) => s + e.amount);
-                final periodExpense = periodTx
-                    .where((e) => e.type == 'expense')
-                    .fold(0.0, (s, e) => s + e.amount);
-                return Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-                  child: Row(children: [
-                    _PeriodStat(
-                        label: 'Income',
-                        value: '+RM ${fmt.format(periodIncome)}',
-                        color: AppColors.budgetGreen),
-                    const SizedBox(width: 10),
-                    _PeriodStat(
-                        label: 'Expenses',
-                        value: '-RM ${fmt.format(periodExpense)}',
-                        color: AppColors.budgetRed),
-                  ]),
-                );
-              }),
+              child: Builder(
+                builder: (context) {
+                  final periodTx = ep.expenses
+                      .where(
+                        (e) =>
+                            !e.date.isBefore(_txStart) &&
+                            !e.date.isAfter(_txEnd),
+                      )
+                      .toList();
+                  final periodIncome = periodTx
+                      .where((e) => e.type == 'income')
+                      .fold(0.0, (s, e) => s + e.amount);
+                  final periodExpense = periodTx
+                      .where((e) => e.type == 'expense')
+                      .fold(0.0, (s, e) => s + e.amount);
+                  return Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                    child: Row(
+                      children: [
+                        _PeriodStat(
+                          label: 'Income',
+                          value: '+RM ${fmt.format(periodIncome)}',
+                          color: AppColors.budgetGreen,
+                        ),
+                        const SizedBox(width: 10),
+                        _PeriodStat(
+                          label: 'Expenses',
+                          value: '-RM ${fmt.format(periodExpense)}',
+                          color: AppColors.budgetRed,
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              ),
             ),
 
             // ── Transaction list for selected period ──────────────────────
             SliverPadding(
               padding: const EdgeInsets.fromLTRB(16, 0, 16, 100),
-              sliver: Builder(builder: (context) {
-                final allCats = [...bp.categories, ...bp.incomeCategories];
-                final periodTx = ep.expenses
-                    .where((e) =>
-                        !e.date.isBefore(_txStart) &&
-                        !e.date.isAfter(_txEnd))
-                    .toList();
+              sliver: Builder(
+                builder: (context) {
+                  final allCats = [...bp.categories, ...bp.incomeCategories];
+                  final periodTx = ep.expenses
+                      .where(
+                        (e) =>
+                            !e.date.isBefore(_txStart) &&
+                            !e.date.isAfter(_txEnd),
+                      )
+                      .toList();
 
-                if (periodTx.isEmpty) {
-                  return const SliverToBoxAdapter(
-                    child: Padding(
-                      padding: EdgeInsets.symmetric(vertical: 24),
-                      child: Center(
-                        child: Text('No transactions in this period',
+                  if (periodTx.isEmpty) {
+                    return const SliverToBoxAdapter(
+                      child: Padding(
+                        padding: EdgeInsets.symmetric(vertical: 24),
+                        child: Center(
+                          child: Text(
+                            'No transactions in this period',
                             style: TextStyle(
-                                color: AppColors.textSecondary,
-                                fontSize: 14)),
+                              color: AppColors.textSecondary,
+                              fontSize: 14,
+                            ),
+                          ),
+                        ),
                       ),
-                    ),
-                  );
-                }
+                    );
+                  }
 
-                // Group by date
-                final byDate = <String, List<dynamic>>{};
-                for (final e in periodTx) {
-                  final key = DateFormat('d MMM yyyy').format(e.date);
-                  byDate.putIfAbsent(key, () => []).add(e);
-                }
+                  // Group by date
+                  final byDate = <String, List<dynamic>>{};
+                  for (final e in periodTx) {
+                    final key = DateFormat('d MMM yyyy').format(e.date);
+                    byDate.putIfAbsent(key, () => []).add(e);
+                  }
 
-                final days = byDate.keys.toList();
-                return SliverList(
-                  delegate: SliverChildBuilderDelegate(
-                    (_, di) {
+                  final days = byDate.keys.toList();
+                  return SliverList(
+                    delegate: SliverChildBuilderDelegate((_, di) {
                       final dayKey = days[di];
                       final dayTx = byDate[dayKey]!;
                       final dayIncome = dayTx
@@ -619,28 +795,39 @@ class _HomeScreenState extends State<HomeScreen> {
                           // Day header
                           Padding(
                             padding: const EdgeInsets.fromLTRB(0, 8, 0, 6),
-                            child: Row(children: [
-                              Text(dayKey,
+                            child: Row(
+                              children: [
+                                Text(
+                                  dayKey,
                                   style: const TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.bold,
+                                    color: AppColors.textSecondary,
+                                  ),
+                                ),
+                                const Spacer(),
+                                if (dayIncome > 0)
+                                  Text(
+                                    '+RM ${fmt.format(dayIncome)}',
+                                    style: const TextStyle(
                                       fontSize: 11,
-                                      fontWeight: FontWeight.bold,
-                                      color: AppColors.textSecondary)),
-                              const Spacer(),
-                              if (dayIncome > 0)
-                                Text('+RM ${fmt.format(dayIncome)}',
+                                      color: AppColors.budgetGreen,
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                                  ),
+                                if (dayIncome > 0 && dayExpense > 0)
+                                  const SizedBox(width: 8),
+                                if (dayExpense > 0)
+                                  Text(
+                                    '-RM ${fmt.format(dayExpense)}',
                                     style: const TextStyle(
-                                        fontSize: 11,
-                                        color: AppColors.budgetGreen,
-                                        fontWeight: FontWeight.w500)),
-                              if (dayIncome > 0 && dayExpense > 0)
-                                const SizedBox(width: 8),
-                              if (dayExpense > 0)
-                                Text('-RM ${fmt.format(dayExpense)}',
-                                    style: const TextStyle(
-                                        fontSize: 11,
-                                        color: AppColors.budgetRed,
-                                        fontWeight: FontWeight.w500)),
-                            ]),
+                                      fontSize: 11,
+                                      color: AppColors.budgetRed,
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                                  ),
+                              ],
+                            ),
                           ),
                           // Transactions for this day
                           ...dayTx.map((e) {
@@ -649,8 +836,8 @@ class _HomeScreenState extends State<HomeScreen> {
                             final cat = isSavingsTransfer
                                 ? null
                                 : allCats
-                                    .where((c) => c.id == e.categoryId)
-                                    .firstOrNull;
+                                      .where((c) => c.id == e.categoryId)
+                                      .firstOrNull;
                             final col = isSavingsTransfer
                                 ? AppColors.primary
                                 : AppColors.fromHex(cat?.colorHex ?? '6B7280');
@@ -658,66 +845,99 @@ class _HomeScreenState extends State<HomeScreen> {
                             final displayTitle = e.description.isNotEmpty
                                 ? e.description
                                 : (isSavingsTransfer
-                                    ? 'Savings Transfer'
-                                    : (cat?.name ??
-                                        (isIncome ? 'Income' : 'Expense')));
+                                      ? 'Savings Transfer'
+                                      : (cat?.name ??
+                                            (isIncome ? 'Income' : 'Expense')));
                             final displaySub = isSavingsTransfer
                                 ? 'Savings Transfer'
                                 : (cat?.name ?? '');
-                            return Container(
-                              margin: const EdgeInsets.only(bottom: 6),
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 14, vertical: 12),
-                              decoration: BoxDecoration(
+                            return GestureDetector(
+                              onTap: isSavingsTransfer
+                                  ? null
+                                  : () async {
+                                      await Navigator.push(
+                                        context,
+                                        MaterialPageRoute(
+                                          builder: (_) => AddExpenseScreen(
+                                            existingExpense: e,
+                                          ),
+                                        ),
+                                      );
+                                      if (context.mounted) {
+                                        context.read<ExpenseProvider>().load();
+                                      }
+                                    },
+                              child: Container(
+                                margin: const EdgeInsets.only(bottom: 6),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 14,
+                                  vertical: 12,
+                                ),
+                                decoration: BoxDecoration(
                                   color: Colors.white,
-                                  borderRadius: BorderRadius.circular(12)),
-                              child: Row(children: [
-                                CircleAvatar(
-                                    radius: 20,
-                                    backgroundColor:
-                                        col.withValues(alpha: 0.15),
-                                    child: Text(
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: Row(
+                                  children: [
+                                    CircleAvatar(
+                                      radius: 20,
+                                      backgroundColor: col.withValues(
+                                        alpha: 0.15,
+                                      ),
+                                      child: Text(
                                         isSavingsTransfer
                                             ? '🎯'
                                             : (cat?.icon ??
-                                                (isIncome ? '💰' : '📦')),
-                                        style: const TextStyle(
-                                            fontSize: 16))),
-                                const SizedBox(width: 12),
-                                Expanded(
-                                    child: Column(
+                                                  (isIncome ? '💰' : '📦')),
+                                        style: const TextStyle(fontSize: 16),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 12),
+                                    Expanded(
+                                      child: Column(
                                         crossAxisAlignment:
                                             CrossAxisAlignment.start,
                                         children: [
-                                      Text(displayTitle,
-                                          style: const TextStyle(
+                                          Text(
+                                            displayTitle,
+                                            style: const TextStyle(
                                               fontWeight: FontWeight.w600,
-                                              fontSize: 14)),
-                                      Text(displaySub,
-                                          style: const TextStyle(
+                                              fontSize: 14,
+                                            ),
+                                          ),
+                                          Text(
+                                            displaySub,
+                                            style: const TextStyle(
                                               color: AppColors.textSecondary,
-                                              fontSize: 12)),
-                                    ])),
-                                Text(
-                                    isIncome
-                                        ? '+RM ${e.amount.toStringAsFixed(2)}'
-                                        : '-RM ${e.amount.toStringAsFixed(2)}',
-                                    style: TextStyle(
+                                              fontSize: 12,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                    Text(
+                                      isIncome
+                                          ? '+RM ${e.amount.toStringAsFixed(2)}'
+                                          : '-RM ${e.amount.toStringAsFixed(2)}',
+                                      style: TextStyle(
                                         color: isIncome
                                             ? AppColors.budgetGreen
                                             : AppColors.budgetRed,
                                         fontWeight: FontWeight.bold,
-                                        fontSize: 14)),
-                              ]),
+                                        fontSize: 14,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
                             );
                           }),
                         ],
                       );
-                    },
-                    childCount: days.length,
-                  ),
-                );
-              }),
+                    }, childCount: days.length),
+                  );
+                },
+              ),
             ),
           ],
         ),
@@ -732,30 +952,38 @@ class _PeriodStat extends StatelessWidget {
   final String label;
   final String value;
   final Color color;
-  const _PeriodStat(
-      {required this.label, required this.value, required this.color});
+  const _PeriodStat({
+    required this.label,
+    required this.value,
+    required this.color,
+  });
 
   @override
   Widget build(BuildContext context) => Expanded(
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-          decoration: BoxDecoration(
-            color: color.withValues(alpha: 0.08),
-            borderRadius: BorderRadius.circular(10),
-            border: Border.all(color: color.withValues(alpha: 0.2)),
+    child: Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: color.withValues(alpha: 0.2)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(label, style: TextStyle(color: color, fontSize: 11)),
+          const SizedBox(height: 2),
+          Text(
+            value,
+            style: TextStyle(
+              color: color,
+              fontWeight: FontWeight.bold,
+              fontSize: 13,
+            ),
           ),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(label,
-                style: TextStyle(color: color, fontSize: 11)),
-            const SizedBox(height: 2),
-            Text(value,
-                style: TextStyle(
-                    color: color,
-                    fontWeight: FontWeight.bold,
-                    fontSize: 13)),
-          ]),
-        ),
-      );
+        ],
+      ),
+    ),
+  );
 }
 
 class _StatChip extends StatelessWidget {
@@ -765,27 +993,32 @@ class _StatChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Expanded(
-        child: Container(
-          padding:
-              const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-          decoration: BoxDecoration(
-            color: Colors.white.withValues(alpha: 0.15),
-            borderRadius: BorderRadius.circular(10),
+    child: Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.15),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label,
+            style: const TextStyle(color: Colors.white60, fontSize: 10),
           ),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-            Text(label,
-                style:
-                    const TextStyle(color: Colors.white60, fontSize: 10)),
-            const SizedBox(height: 2),
-            Text(value,
-                style: const TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.bold,
-                    fontSize: 12)),
-          ]),
-        ),
-      );
+          const SizedBox(height: 2),
+          Text(
+            value,
+            style: const TextStyle(
+              color: Colors.white,
+              fontWeight: FontWeight.bold,
+              fontSize: 12,
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
 }
 
 class _QuickAction extends StatelessWidget {
@@ -793,48 +1026,54 @@ class _QuickAction extends StatelessWidget {
   final String label;
   final bool filled;
   final VoidCallback onTap;
-  const _QuickAction(
-      {required this.icon,
-      required this.label,
-      required this.filled,
-      required this.onTap});
+  const _QuickAction({
+    required this.icon,
+    required this.label,
+    required this.filled,
+    required this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) => GestureDetector(
-        onTap: onTap,
-        child: Container(
-          padding: const EdgeInsets.symmetric(vertical: 14),
-          decoration: BoxDecoration(
-            color: filled ? AppColors.primary : Colors.white,
-            borderRadius: BorderRadius.circular(14),
-            border:
-                filled ? null : Border.all(color: const Color(0xFFE0E0E0)),
-            boxShadow: filled
-                ? [
-                    BoxShadow(
-                        color:
-                            AppColors.primary.withValues(alpha: 0.3),
-                        blurRadius: 8,
-                        offset: const Offset(0, 3))
-                  ]
-                : null,
+    onTap: onTap,
+    child: Container(
+      padding: const EdgeInsets.symmetric(vertical: 14),
+      decoration: BoxDecoration(
+        color: filled ? AppColors.primary : Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        border: filled ? null : Border.all(color: const Color(0xFFE0E0E0)),
+        boxShadow: filled
+            ? [
+                BoxShadow(
+                  color: AppColors.primary.withValues(alpha: 0.3),
+                  blurRadius: 8,
+                  offset: const Offset(0, 3),
+                ),
+              ]
+            : null,
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            icon,
+            color: filled ? Colors.white : AppColors.primary,
+            size: 22,
           ),
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-            Icon(icon,
-                color: filled ? Colors.white : AppColors.primary,
-                size: 22),
-            const SizedBox(height: 6),
-            Text(label,
-                style: TextStyle(
-                    color: filled
-                        ? Colors.white
-                        : AppColors.textPrimary,
-                    fontSize: 11,
-                    fontWeight: FontWeight.w600),
-                textAlign: TextAlign.center),
-          ]),
-        ),
-      );
+          const SizedBox(height: 6),
+          Text(
+            label,
+            style: TextStyle(
+              color: filled ? Colors.white : AppColors.textPrimary,
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+            ),
+            textAlign: TextAlign.center,
+          ),
+        ],
+      ),
+    ),
+  );
 }
 
 class _BudgetCard extends StatelessWidget {
@@ -847,62 +1086,86 @@ class _BudgetCard extends StatelessWidget {
     final color = status.severity == AlertSeverity.red
         ? AppColors.budgetRed
         : status.severity == AlertSeverity.yellow
-            ? AppColors.budgetYellow
-            : AppColors.budgetGreen;
+        ? AppColors.budgetYellow
+        : AppColors.budgetGreen;
     final pct = status.percentUsed.clamp(0.0, 1.0);
     final lbl = status.severity == AlertSeverity.red
         ? 'Running low'
         : status.severity == AlertSeverity.yellow
-            ? 'Getting high'
-            : '✓ On track';
+        ? 'Getting high'
+        : '✓ On track';
 
     return Container(
       margin: const EdgeInsets.fromLTRB(16, 0, 16, 10),
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(14),
-          boxShadow: [
-            BoxShadow(
-                color: Colors.black.withValues(alpha: 0.04),
-                blurRadius: 6,
-                offset: const Offset(0, 2))
-          ]),
-      child: Column(children: [
-        Row(children: [
-          Text(status.categoryIcon,
-              style: const TextStyle(fontSize: 20)),
-          const SizedBox(width: 10),
-          Expanded(
-              child: Text(status.categoryName,
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.04),
+            blurRadius: 6,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              Text(status.categoryIcon, style: const TextStyle(fontSize: 20)),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  status.categoryName,
                   style: const TextStyle(
-                      fontWeight: FontWeight.w600, fontSize: 14))),
-          Text(
-              'RM ${fmt.format(status.spent)} / RM ${fmt.format(status.budget.amount)}',
-              style: const TextStyle(
-                  color: AppColors.textSecondary, fontSize: 12)),
-        ]),
-        const SizedBox(height: 8),
-        ClipRRect(
+                    fontWeight: FontWeight.w600,
+                    fontSize: 14,
+                  ),
+                ),
+              ),
+              Text(
+                'RM ${fmt.format(status.spent)} / RM ${fmt.format(status.budget.amount)}',
+                style: const TextStyle(
+                  color: AppColors.textSecondary,
+                  fontSize: 12,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          ClipRRect(
             borderRadius: BorderRadius.circular(4),
             child: LinearProgressIndicator(
-                value: pct,
-                backgroundColor: color.withValues(alpha: 0.12),
-                color: color,
-                minHeight: 7)),
-        const SizedBox(height: 6),
-        Row(mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              value: pct,
+              backgroundColor: color.withValues(alpha: 0.12),
+              color: color,
+              minHeight: 7,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-          Text(lbl,
-              style: TextStyle(
+              Text(
+                lbl,
+                style: TextStyle(
                   color: color,
                   fontSize: 11,
-                  fontWeight: FontWeight.w600)),
-          Text('${(pct * 100).toStringAsFixed(0)}%',
-              style: const TextStyle(
-                  color: AppColors.textSecondary, fontSize: 11)),
-        ]),
-      ]),
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              Text(
+                '${(pct * 100).toStringAsFixed(0)}%',
+                style: const TextStyle(
+                  color: AppColors.textSecondary,
+                  fontSize: 11,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
     );
   }
 }

@@ -234,7 +234,11 @@ class LocalStorageService {
 
   List<ExpenseModel> getExpenses() {
     final expenses = _loadExpenses();
-    expenses.sort((a, b) => b.date.compareTo(a.date));
+    expenses.sort((a, b) {
+      final byDate = b.date.compareTo(a.date);
+      if (byDate != 0) return byDate;
+      return b.createdAt.compareTo(a.createdAt);
+    });
     return expenses;
   }
 

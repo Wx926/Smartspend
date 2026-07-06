@@ -65,6 +65,12 @@ class _SetBudgetScreenState extends State<SetBudgetScreen> {
             amount: double.parse(_amountCtrl.text),
           );
       if (mounted) Navigator.pop(context);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to save budget: $e')),
+        );
+      }
     } finally {
       if (mounted) setState(() => _saving = false);
     }

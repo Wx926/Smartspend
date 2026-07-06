@@ -53,8 +53,13 @@ class LocationProvider extends ChangeNotifier {
       _store.setTrackingEnabled(true);
       _sub?.cancel();
       _sub = _service.events.listen((event) {
-        _activeLocation = event.location;
-        _activeDwellMinutes = event.dwellMinutes;
+        if (event.type == LocationEventType.left) {
+          _activeLocation = null;
+          _activeDwellMinutes = 0;
+        } else {
+          _activeLocation = event.location;
+          _activeDwellMinutes = event.dwellMinutes;
+        }
         notifyListeners();
       });
     }

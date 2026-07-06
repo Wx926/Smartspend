@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 
 class OsmPlace {
@@ -29,7 +30,8 @@ class OsmService {
     double lon, {
     int radiusMeters = 500,
   }) async {
-    final query = '''
+    final query =
+        '''
 [out:json][timeout:25];
 (
   node["name"]["amenity"](around:$radiusMeters,$lat,$lon);
@@ -45,12 +47,28 @@ class OsmService {
 out center;
 ''';
 
-    try {
-      final response = await http
-          .post(Uri.parse(_overpassUrl), body: {'data': query}, headers: _headers)
-          .timeout(const Duration(seconds: 20));
+    // The public Overpass endpoint occasionally times out or rate-limits
+    // under load; retry once before giving up so a single transient
+    // failure doesn't silently hide every nearby place from the user.
+    http.Response? response;
+    for (var attempt = 0; attempt < 2; attempt++) {
+      try {
+        response = await http
+            .post(
+              Uri.parse(_overpassUrl),
+              body: {'data': query},
+              headers: _headers,
+            )
+            .timeout(const Duration(seconds: 20));
+        if (response.statusCode == 200) break;
+      } catch (_) {
+        response = null;
+      }
+      if (attempt == 0) await Future.delayed(const Duration(seconds: 1));
+    }
 
-      if (response.statusCode != 200) return [];
+    try {
+      if (response == null || response.statusCode != 200) return [];
 
       final data = jsonDecode(response.body) as Map<String, dynamic>;
       final elements = data['elements'] as List? ?? [];
@@ -79,17 +97,33 @@ out center;
         final elLon = (el['lon'] ?? center?['lon']) as num?;
         if (elLat == null || elLon == null) continue;
 
-        places.add(OsmPlace(
-          name: name,
-          category: _formatCategory(rawCategory),
-          emoji: _categoryEmoji(amenity, shop, tourism, leisure),
-          latitude: elLat.toDouble(),
-          longitude: elLon.toDouble(),
-        ));
+        places.add(
+          OsmPlace(
+            name: name,
+            category: _formatCategory(rawCategory),
+            emoji: _categoryEmoji(amenity, shop, tourism, leisure),
+            latitude: elLat.toDouble(),
+            longitude: elLon.toDouble(),
+          ),
+        );
       }
 
-      // Sort alphabetically for readability
-      places.sort((a, b) => a.name.compareTo(b.name));
+      // Sort nearest-first so callers can treat places.first as "where I am"
+      places.sort((a, b) {
+        final da = Geolocator.distanceBetween(
+          lat,
+          lon,
+          a.latitude,
+          a.longitude,
+        );
+        final db = Geolocator.distanceBetween(
+          lat,
+          lon,
+          b.latitude,
+          b.longitude,
+        );
+        return da.compareTo(db);
+      });
       return places;
     } catch (_) {
       return [];
@@ -100,32 +134,90 @@ out center;
   static String toExpenseCategory(String osmCategory) {
     final cat = osmCategory.toLowerCase().replaceAll(' ', '_');
     const food = {
-      'restaurant', 'cafe', 'fast_food', 'bar', 'pub', 'bakery',
-      'food_court', 'ice_cream', 'juice_bar', 'biergarten', 'bbq',
+      'restaurant',
+      'cafe',
+      'fast_food',
+      'bar',
+      'pub',
+      'bakery',
+      'food_court',
+      'ice_cream',
+      'juice_bar',
+      'biergarten',
+      'bbq',
     };
     const shopping = {
-      'supermarket', 'grocery', 'convenience', 'clothes', 'fashion',
-      'shoes', 'electronics', 'books', 'sports', 'gift', 'jewellery',
-      'optician', 'department_store', 'mall', 'hairdresser', 'beauty',
-      'cosmetics', 'mobile_phone', 'computer', 'toys', 'pet',
-      'florist', 'hardware', 'stationery', 'boutique',
+      'supermarket',
+      'grocery',
+      'convenience',
+      'clothes',
+      'fashion',
+      'shoes',
+      'electronics',
+      'books',
+      'sports',
+      'gift',
+      'jewellery',
+      'optician',
+      'department_store',
+      'mall',
+      'hairdresser',
+      'beauty',
+      'cosmetics',
+      'mobile_phone',
+      'computer',
+      'toys',
+      'pet',
+      'florist',
+      'hardware',
+      'stationery',
+      'boutique',
     };
     const transport = {
-      'fuel', 'bus_stop', 'bus_station', 'taxi', 'car_rental',
-      'parking', 'bicycle', 'car_wash', 'charging_station',
+      'fuel',
+      'bus_stop',
+      'bus_station',
+      'taxi',
+      'car_rental',
+      'parking',
+      'bicycle',
+      'car_wash',
+      'charging_station',
     };
     const entertainment = {
-      'cinema', 'theatre', 'museum', 'attraction', 'amusement_park',
-      'casino', 'arts_centre', 'nightclub', 'karaoke', 'escape_game',
-      'bowling_alley', 'billiards', 'arcade',
+      'cinema',
+      'theatre',
+      'museum',
+      'attraction',
+      'amusement_park',
+      'casino',
+      'arts_centre',
+      'nightclub',
+      'karaoke',
+      'escape_game',
+      'bowling_alley',
+      'billiards',
+      'arcade',
     };
     const health = {
-      'hospital', 'clinic', 'dentist', 'doctors', 'pharmacy',
-      'gym', 'fitness_centre', 'spa',
+      'hospital',
+      'clinic',
+      'dentist',
+      'doctors',
+      'pharmacy',
+      'gym',
+      'fitness_centre',
+      'spa',
     };
     const utilities = {
-      'bank', 'atm', 'post_office', 'government', 'police',
-      'office', 'townhall', 'library',
+      'bank',
+      'atm',
+      'post_office',
+      'government',
+      'police',
+      'office',
+      'townhall',
+      'library',
     };
     if (food.contains(cat)) return 'Food';
     if (shopping.contains(cat)) return 'Shopping';
@@ -141,7 +233,11 @@ out center;
   }
 
   String _categoryEmoji(
-      String? amenity, String? shop, String? tourism, String? leisure) {
+    String? amenity,
+    String? shop,
+    String? tourism,
+    String? leisure,
+  ) {
     switch (amenity) {
       case 'restaurant':
         return '🍽️';

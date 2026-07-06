@@ -108,20 +108,22 @@ class BudgetProvider extends ChangeNotifier {
     }
     notifyListeners();
 
-    // Sync to Supabase in background
-    _service.upsertBudget(budget).then((saved) {
+    try {
+      final saved = await _service.upsertBudget(budget);
       final i = _budgets.indexWhere((b) => b.id == budget.id);
       if (i != -1) _budgets[i] = saved;
       notifyListeners();
-    }).catchError((_) {
+    } catch (e) {
       if (existing != null) {
         final i = _budgets.indexWhere((b) => b.id == budget.id);
         if (i != -1) _budgets[i] = existing;
       } else {
         _budgets.removeWhere((b) => b.id == budget.id);
       }
+      _error = e.toString();
       notifyListeners();
-    });
+      rethrow;
+    }
   }
 
   Future<void> deleteBudget(String budgetId) async {
