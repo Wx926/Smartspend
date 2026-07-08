@@ -6,15 +6,19 @@ class GeminiService {
   GeminiService._();
   static final GeminiService instance = GeminiService._();
 
-  Future<String> _generate(String prompt,
-      {int maxTokens = 250, String? errorMessage}) async {
+  Future<String> _generate(
+    String prompt, {
+    int maxTokens = 250,
+    String? errorMessage,
+  }) async {
     if (AppConstants.geminiApiKey.isEmpty ||
         AppConstants.geminiApiKey == 'your-gemini-api-key') {
       return errorMessage ?? _fallbackAdvice();
     }
     try {
       final uri = Uri.parse(
-          '${AppConstants.geminiEndpoint}?key=${AppConstants.geminiApiKey}');
+        '${AppConstants.geminiEndpoint}?key=${AppConstants.geminiApiKey}',
+      );
       final response = await http
           .post(
             uri,
@@ -23,9 +27,9 @@ class GeminiService {
               'contents': [
                 {
                   'parts': [
-                    {'text': prompt}
-                  ]
-                }
+                    {'text': prompt},
+                  ],
+                },
               ],
               'generationConfig': {
                 'maxOutputTokens': maxTokens,
@@ -53,7 +57,8 @@ class GeminiService {
     String? locationName,
   }) async {
     final overspend = spent - budgetAmount;
-    final prompt = '''
+    final prompt =
+        '''
 You are a friendly personal finance advisor for SmartSpend, a Malaysian budgeting app.
 
 The user has EXCEEDED their monthly budget for "$categoryName".
@@ -76,7 +81,8 @@ Use Malaysian Ringgit (RM). Keep it friendly, actionable, and specific. No heade
     required double topCategorySpent,
     required String month,
   }) async {
-    final prompt = '''
+    final prompt =
+        '''
 You are a friendly personal finance advisor for SmartSpend, a Malaysian budgeting app.
 
 User's spending summary for $month:
@@ -95,7 +101,8 @@ Use Malaysian Ringgit (RM). Keep it conversational. No headers or bullet points.
     required String categoryName,
     required double budgetRemaining,
   }) async {
-    final prompt = '''
+    final prompt =
+        '''
 You are a friendly personal finance advisor for SmartSpend, a Malaysian budgeting app.
 
 The user just arrived at "$locationName" (a $categoryName location).
@@ -107,12 +114,41 @@ Use Malaysian Ringgit (RM). Be specific and encouraging, not preachy. No headers
     return _generate(prompt);
   }
 
+  /// Algorithm 3 Step 4: called when a genuine (dwelled ≥15min, non-routine)
+  /// venue visit is confirmed and at least one relevant budget category is
+  /// Caution or Critical.
+  Future<String> getVenueVisitAdvice({
+    required String venueName,
+    required String categorySummary,
+    double? averageSpendAtVenue,
+    int pastVisitCount = 0,
+  }) async {
+    final history = (averageSpendAtVenue != null && pastVisitCount > 0)
+        ? '- Based on $pastVisitCount past visit(s) here, they usually spend about RM ${averageSpendAtVenue.toStringAsFixed(2)}.'
+        : '';
+    final prompt =
+        '''
+You are a friendly personal finance advisor for SmartSpend, a Malaysian budgeting app.
+
+The user has just arrived at "$venueName" and stayed long enough to count as a genuine visit, not just passing by.
+
+Relevant budget status:
+$categorySummary
+$history
+
+Write a short, specific, contextual warning (2-3 sentences) about spending here today, referencing their remaining budget and their usual spend at this venue if given.
+Use Malaysian Ringgit (RM). Be direct but not preachy. No headers or bullet points.
+''';
+    return _generate(prompt);
+  }
+
   /// Called on the analytics screen for a personalised savings tip.
   Future<String> getSavingsTip({
     required double monthlyIncome,
     required double monthlySpending,
   }) async {
-    final prompt = '''
+    final prompt =
+        '''
 You are a friendly personal finance advisor for SmartSpend, a Malaysian budgeting app.
 
 This month:
@@ -136,7 +172,8 @@ Use Malaysian Ringgit (RM). No headers.
     final breakdown = categoryBreakdown.isNotEmpty
         ? categoryBreakdown.join('\n')
         : 'No budget categories set yet.';
-    final prompt = '''
+    final prompt =
+        '''
 You are a friendly personal finance advisor for SmartSpend, a Malaysian budgeting app.
 
 The user's financial data for $month:

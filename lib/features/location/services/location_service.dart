@@ -101,7 +101,7 @@ class LocationService {
           _currentLocationId = matched.id;
           _arrivedAt = DateTime.now();
           _activeHistoryId = _uuid.v4();
-          _store.bufferHistory(
+          await _store.bufferHistory(
             LocationHistoryModel(
               id: _activeHistoryId!,
               userId: userId,
@@ -176,7 +176,7 @@ class LocationService {
   Future<void> _closeCurrentVisit(String userId) async {
     if (_activeHistoryId != null && _arrivedAt != null) {
       final dwell = DateTime.now().difference(_arrivedAt!).inMinutes;
-      _store.closeHistory(_activeHistoryId!, DateTime.now(), dwell);
+      await _store.closeHistory(_activeHistoryId!, DateTime.now(), dwell);
       if (_currentLocationId != null) {
         await _store.incrementVisitCount(_currentLocationId!);
       }

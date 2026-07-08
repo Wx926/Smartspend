@@ -183,28 +183,25 @@ class _LocationScreenState extends State<LocationScreen> {
                               ),
                             ),
                           ),
-                          Positioned(
-                            bottom: 20,
-                            child: Container(
-                              width: 16,
-                              height: 16,
-                              decoration: BoxDecoration(
-                                color: AppColors.budgetGreen,
-                                shape: BoxShape.circle,
-                                border: Border.all(
-                                  color: Colors.white,
-                                  width: 2,
-                                ),
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: AppColors.budgetGreen.withValues(
-                                      alpha: 0.5,
-                                    ),
-                                    blurRadius: 8,
-                                    spreadRadius: 2,
+                          // Centered — you're confirmed as being at this
+                          // location, so your position dot sits at the
+                          // radar's center rather than off to one side.
+                          Container(
+                            width: 16,
+                            height: 16,
+                            decoration: BoxDecoration(
+                              color: AppColors.budgetGreen,
+                              shape: BoxShape.circle,
+                              border: Border.all(color: Colors.white, width: 2),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: AppColors.budgetGreen.withValues(
+                                    alpha: 0.5,
                                   ),
-                                ],
-                              ),
+                                  blurRadius: 8,
+                                  spreadRadius: 2,
+                                ),
+                              ],
                             ),
                           ),
                         ],

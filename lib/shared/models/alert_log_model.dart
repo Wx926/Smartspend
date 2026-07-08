@@ -5,6 +5,7 @@ class AlertLogModel {
   final String title;
   final String message;
   final String? categoryId;
+  final String? locationId;
   final bool isRead;
   final DateTime createdAt;
 
@@ -15,6 +16,7 @@ class AlertLogModel {
     required this.title,
     required this.message,
     this.categoryId,
+    this.locationId,
     this.isRead = false,
     required this.createdAt,
   });
@@ -27,6 +29,7 @@ class AlertLogModel {
       title: json['title'] as String,
       message: json['message'] as String,
       categoryId: json['category_id'] as String?,
+      locationId: json['location_id'] as String?,
       isRead: json['is_read'] as bool? ?? false,
       createdAt: DateTime.parse(json['created_at'] as String),
     );
@@ -40,6 +43,7 @@ class AlertLogModel {
       'title': title,
       'message': message,
       if (categoryId != null) 'category_id': categoryId,
+      if (locationId != null) 'location_id': locationId,
       'is_read': isRead,
       'created_at': createdAt.toIso8601String(),
     };
@@ -53,6 +57,7 @@ class AlertLogModel {
       title: title,
       message: message,
       categoryId: categoryId,
+      locationId: locationId,
       isRead: true,
       createdAt: createdAt,
     );
