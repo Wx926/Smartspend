@@ -8,6 +8,7 @@ import '../../auth/providers/auth_provider.dart';
 import '../../budget/providers/budget_provider.dart';
 import '../../expenses/providers/expense_provider.dart';
 import 'scan_receipt_screen.dart';
+import 'receipt_review_screen.dart';
 
 /// One row in Receipt History — every line item saved from the same scan
 /// (sharing a batchId) is merged back into a single receipt with a summed
@@ -20,6 +21,7 @@ class _ReceiptGroup {
   final String source;
   final double amount;
   final String? categoryId;
+  final List<ExpenseModel> items;
 
   const _ReceiptGroup({
     required this.id,
@@ -29,6 +31,7 @@ class _ReceiptGroup {
     required this.source,
     required this.amount,
     required this.categoryId,
+    required this.items,
   });
 
   static List<_ReceiptGroup> groupFrom(List<ExpenseModel> items) {
@@ -59,6 +62,7 @@ class _ReceiptGroup {
         source: first.source,
         amount: group.fold(0.0, (s, e) => s + e.amount),
         categoryId: majorityCategoryId,
+        items: group,
       );
     }).toList();
   }
@@ -263,7 +267,7 @@ class _ReceiptHistoryScreenState extends State<ReceiptHistoryScreen> {
           padding: const EdgeInsets.symmetric(horizontal: 14),
           alignment: Alignment.center,
           decoration: BoxDecoration(
-            color: selected ? const Color(0xFF6C3483) : Colors.white,
+            color: selected ? AppColors.primary : Colors.white,
             borderRadius: BorderRadius.circular(20),
           ),
           child: Row(
@@ -320,60 +324,69 @@ class _ReceiptHistoryScreenState extends State<ReceiptHistoryScreen> {
 
   Widget _receiptTile(_ReceiptGroup r, CategoryModel? category) {
     final isVoice = r.source == 'voice';
-    return Container(
-      margin: const EdgeInsets.fromLTRB(16, 0, 16, 10),
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
+    return InkWell(
+      borderRadius: BorderRadius.circular(12),
+      onTap: () => Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => ReceiptReviewScreen(existingExpenses: r.items),
+        ),
       ),
-      child: Row(
-        children: [
-          Container(
-            width: 42,
-            height: 42,
-            decoration: BoxDecoration(
-              color: AppColors.primarySurface,
-              borderRadius: BorderRadius.circular(10),
+      child: Container(
+        margin: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 42,
+              height: 42,
+              decoration: BoxDecoration(
+                color: AppColors.primarySurface,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Icon(isVoice ? Icons.mic : Icons.receipt_long,
+                  color: AppColors.primary, size: 20),
             ),
-            child: Icon(isVoice ? Icons.mic : Icons.receipt_long,
-                color: AppColors.primary, size: 20),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  r.merchantName?.isNotEmpty == true
-                      ? r.merchantName!
-                      : r.description,
-                  style: const TextStyle(
-                      fontSize: 14, fontWeight: FontWeight.w600),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                const SizedBox(height: 2),
-                Text(DateFormat('d MMM yyyy').format(r.date),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    r.merchantName?.isNotEmpty == true
+                        ? r.merchantName!
+                        : r.description,
                     style: const TextStyle(
-                        fontSize: 11, color: AppColors.textSecondary)),
-                const SizedBox(height: 6),
-                Wrap(
-                  spacing: 6,
-                  children: [
-                    _tag(isVoice ? '🎤 Voice' : '📄 Scanned'),
-                    if (category != null) _tag('${category.icon} ${category.name}'),
-                  ],
-                ),
-              ],
+                        fontSize: 14, fontWeight: FontWeight.w600),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 2),
+                  Text(DateFormat('d MMM yyyy').format(r.date),
+                      style: const TextStyle(
+                          fontSize: 11, color: AppColors.textSecondary)),
+                  const SizedBox(height: 6),
+                  Wrap(
+                    spacing: 6,
+                    children: [
+                      _tag(isVoice ? '🎤 Voice' : '📄 Scanned'),
+                      if (category != null) _tag('${category.icon} ${category.name}'),
+                    ],
+                  ),
+                ],
+              ),
             ),
-          ),
-          Text('-RM ${r.amount.toStringAsFixed(2)}',
-              style: const TextStyle(
-                  color: AppColors.budgetRed,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 13)),
-        ],
+            Text('-RM ${r.amount.toStringAsFixed(2)}',
+                style: const TextStyle(
+                    color: AppColors.budgetRed,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 13)),
+          ],
+        ),
       ),
     );
   }

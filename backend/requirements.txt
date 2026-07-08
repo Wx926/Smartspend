@@ -4,4 +4,5 @@ python-dotenv
 opencv-python
 pytesseract
 supabase
-openai
+faster-whisper
+pymupdf

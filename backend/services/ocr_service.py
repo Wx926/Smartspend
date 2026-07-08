@@ -58,7 +58,7 @@ _LOOSE_WORD_SEP = r"-|\d+(?:[+\/]\d+)+"
 LINE_ITEM_PATTERN = re.compile(
     rf"^((?:[A-Za-z{_CJK}][A-Za-z{_CJK}\-&'\/\(\)]*|\d+\/\d+)"
     rf"(?:\s(?:[A-Za-z{_CJK}][A-Za-z{_CJK}\-&'\/\(\)]*|{_LOOSE_WORD_SEP}))*)"
-    rf"\s+.*?{_CURRENCY}(\d+[.,]\d{{2}})\s*[A-Z]{{0,2}}\s*$",
+    rf"\s+.*?{_CURRENCY}(\d+[.,]\d{{2}})\s*\*?\s*[A-Z]{{0,2}}\s*$",
     re.IGNORECASE,
 )
 
@@ -71,7 +71,14 @@ LINE_ITEM_PATTERN = re.compile(
 #   dash separator/size descriptor: "Naughty Spare Rib - Full", "HH Asahi 1+1/2"
 _NAME_ONLY = re.compile(
     rf"^([A-Za-z{_CJK}][A-Za-z0-9{_CJK}\-&'\/\(\)]*"
-    rf"(?:\s(?:[A-Za-z{_CJK}][A-Za-z0-9{_CJK}\-&'\/\(\)]*|[0-9]+[A-Za-z][A-Za-z0-9\-&'\/\(\)]*|{_LOOSE_WORD_SEP}))*)"
+    # A bare 1-4 digit token (no letters at all) is allowed as a continuation
+    # word too — product names commonly end in a model/size number that
+    # Vision sometimes splits off as its own token with no attached letter,
+    # e.g. "ARTLINE 70" read as "AR TL IN E 70" or "A4 SIZE 20 POCKETS". The
+    # line must still start with a letter (required by the first token
+    # above), so this can't turn a genuine numbers-only barcode/price row
+    # into a false "name" match.
+    rf"(?:\s(?:[A-Za-z{_CJK}][A-Za-z0-9{_CJK}\-&'\/\(\)]*|[0-9]+[A-Za-z][A-Za-z0-9\-&'\/\(\)]*|\d{{1,4}}|{_LOOSE_WORD_SEP}))*)"
     r"\s*$",
     re.IGNORECASE,
 )
@@ -87,7 +94,7 @@ _NAME_THEN_CODE = re.compile(
 # Single-line item where the "name" is a bare barcode/UPC (price-override items that
 # have no description on file): "44500982114  004450098211 F  3.98 Y"
 BARCODE_NAME_ITEM_PATTERN = re.compile(
-    rf"^(\d{{5,}})\s+.*?{_CURRENCY}(\d+[.,]\d{{2}})\s*[A-Z]{{0,2}}\s*$",
+    rf"^(\d{{5,}})\s+.*?{_CURRENCY}(\d+[.,]\d{{2}})\s*\*?\s*[A-Z]{{0,2}}\s*$",
     re.IGNORECASE,
 )
 
@@ -109,19 +116,56 @@ _NAME_WITH_RATE_SUFFIX = re.compile(
     re.IGNORECASE,
 )
 
+# Same glued name style as above, but the real charged total follows the rate
+# on the *same* line instead of a separate one — e.g. "1/4 Chic+1sd-T @17.90
+# 71.60 S" (qty×rate already multiplied out into the trailing total). Without
+# this, such a line matches neither Layout 1 (whose stricter name grammar
+# can't parse "Chic+1sd-T"'s embedded "+") nor Layout 2 (whose lookahead
+# expects the price on a following line) and the item is silently dropped.
+_NAME_WITH_RATE_AND_PRICE = re.compile(
+    rf"^((?:[A-Za-z{_CJK}][A-Za-z0-9{_CJK}\-&'\/\(\)+]*|\d+\/\d+)"
+    rf"(?:[\s+][A-Za-z0-9{_CJK}\-&'\/\(\)+]*)*)"
+    rf"\s*@\s*\d+[.,]\d{{2}}"
+    rf"\s+.*?{_CURRENCY}(\d+[.,]\d{{2}})\s*\*?\s*[A-Z]{{0,2}}\s*$",
+    re.IGNORECASE,
+)
+
 # Price at end of any line — used for multi-line item continuation lines
-# Allows 0-2 letter tax codes after price: N, T, F (US) or SR, ZR, TX (Malaysian GST)
+# Allows 0-2 letter tax codes after price: N, T, F (US) or SR, ZR, TX (Malaysian GST),
+# and an optional "*" GST-applicability flag (with or without a preceding space —
+# Vision is inconsistent about whether it glues the asterisk to the number).
 _PRICE_AT_END = re.compile(
-    rf"(\d{{1,6}}[.,]\d{{2}})\s*[A-Z]{{0,2}}\s*$",
+    rf"(\d{{1,6}}[.,]\d{{2}})\s*\*?\s*[A-Z]{{0,2}}\s*$",
     re.IGNORECASE,
 )
 
 # A line that is *nothing but* a price, e.g. "1.00 Y" — optionally with a
 # 1-2 letter tax code stuck on either side with no space (OCR sometimes glues
-# a tax-code letter directly to the number, e.g. "F3.98 Y").
+# a tax-code letter directly to the number, e.g. "F3.98 Y"). Also tolerates a
+# stray space next to the decimal point (e.g. "1 .70" for a printed "1.70") —
+# the same Vision quirk already worked around in _extract_amount's total
+# detection, here affecting a bare per-item price instead of the grand total.
 _BARE_PRICE_LINE = re.compile(
-    rf"^[A-Z]{{0,2}}\s*{_CURRENCY}(\d+[.,]\d{{2}})\s*[A-Z]{{0,2}}\s*$",
+    rf"^[A-Z]{{0,2}}\s*{_CURRENCY}(\d+\s?[.,]\s?\d{{2}})\s*\*?\s*[A-Z]{{0,2}}\s*$",
     re.IGNORECASE,
+)
+
+# A row of nothing but numbers — item#, qty, unit price, discount% — with the
+# real charged amount as the LAST one, optionally marked with a trailing "*"
+# (a common Malaysian tax-invoice GST-applicability marker) or short tax-code
+# letters, e.g. "1  2  0.50  0.00  1.00*". The item's actual description sits
+# on a following line instead of anywhere on this row (unlike every other
+# layout, which expects the name somewhere on the price's own line or the
+# reverse order) — this is the "no name at all" case, so only the price can
+# be captured here; it's deferred the same way a bare price line is. One of
+# the qty/rate/disc% columns is allowed to be a single stray letter instead
+# of a digit (e.g. "9557369305006 f 3.96 4.09 3.80*") — Vision sometimes
+# misreads a printed "1" quantity as "f"/"l"/"I" in this position; without
+# tolerating it here, the whole row falls through to the bare-barcode-name
+# pattern below and gets wrongly emitted as an item named after its own
+# barcode instead of being deferred for the real name on the next line.
+_ALL_NUMBERS_ROW = re.compile(
+    r"^(?:(?:\d+(?:[.,]\d+)?|[A-Za-z])\s+){2,}(\d+[.,]\d{2})\s*\*?\s*[A-Z]{0,2}\s*$"
 )
 
 # A line with two bare 5+ digit barcodes and nothing else — a price-override
@@ -129,10 +173,26 @@ _BARE_PRICE_LINE = re.compile(
 # it from a second (real) barcode, e.g. "4450098211, 004450098211".
 _BARE_BARCODE_NAME_LINE = re.compile(r"^(\d{5,}),?\s+\d{5,}\s*$")
 
+# A long digit-run barcode (optionally with a 1-2 letter suffix, e.g. a
+# weight-code) glued onto the end of an item name by Layout 2's name-only
+# match, e.g. "BANANAS 000000004011KF" — carries no information useful to
+# the user, so it's stripped before display.
+_TRAILING_BARCODE = re.compile(r"\s+\d{6,}[A-Za-z]{0,2}$")
+
 # Reaching this section means we're past the itemised list — any names still
 # awaiting a price are unrecoverable and must not be paired with a totals figure.
 _TOTALS_BOUNDARY = re.compile(
     r"\b(sub[\s\-]?total|total|(?:amount|amt)\s*due|balance\s*due)\b", re.IGNORECASE
+)
+
+# A tabular receipt's own column-header row (e.g. "QTY ITEM TOTAL") — contains
+# both "qty" and "item"/"description" together, unlike a real end-of-items
+# total line. Must be checked before _TOTALS_BOUNDARY, since such a header
+# often also contains the word "total" as its price-column label and would
+# otherwise be mistaken for the actual end-of-items boundary, cutting off
+# every item that follows before it's ever parsed.
+_ITEM_TABLE_HEADER = re.compile(
+    r"(?=.*\bqty\b)(?=.*\b(?:item|description)\b)", re.IGNORECASE
 )
 
 # Lines containing these words are totals/summaries/headers/footers — not items
@@ -143,11 +203,16 @@ SKIP_KEYWORDS = re.compile(
     r"website|www|http|member|loyalty|point|void|refund|exchange|"
     r"description|qty|quantity|item|price|sub\s*total|general\s*ex|sales\s*tax|"
     r"everything|on-line|online|follow\s*us|open|hour|manager|cashier|"
-    r"associate|operator|server|bill|order|no\.|ref|reg|tr#|op#|st#|te#|"
+    r"associate|operator|server|bill|order|no\.|ref|reg|"
     r"visa|mastercard|master\s*card|amex|american\s*express|debit\s*card|"
     r"credit\s*card|approval\s*code|auth(?:orization)?\s*code|eftpos|"
     r"coleslaw|chargrill|grillveg"
-    r"|(?<!\-)table)\b",
+    r"|(?<!\-)table)\b"
+    # Register/terminal codes like "ST#", "TE#", "TR#", "OP#" always end in a
+    # literal "#" — a trailing \b can never fire there (a non-word "#" followed
+    # by a non-word space has no word/non-word transition to anchor on), so
+    # these are matched separately without one.
+    r"|\b(?:tr|op|st|te)#",
     re.IGNORECASE,
 )
 
@@ -220,13 +285,83 @@ def validate_image(filename: str, file_size_bytes: int) -> None:
 
 # ─── PDF → image conversion (FR 4.2) ────────────────────────────────────────
 def _pdf_to_image_bytes(pdf_bytes: bytes) -> bytes:
-    from pdf2image import convert_from_bytes
-    images = convert_from_bytes(pdf_bytes, first_page=1, last_page=1, dpi=200)
-    if not images:
+    # PyMuPDF ships its own PDF renderer as a pip wheel — no external Poppler
+    # binary needed, unlike pdf2image (important since this runs on whatever
+    # machine happens to host the Flask backend, not just the dev's own PC).
+    import fitz
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    if doc.page_count == 0:
         raise OcrValidationError("Could not extract a page from the PDF.")
-    buf = io.BytesIO()
-    images[0].save(buf, format="PNG")
-    return buf.getvalue()
+    page = doc.load_page(0)
+    pix = page.get_pixmap(dpi=200)
+    return pix.tobytes("png")
+
+
+# Vision's own fullTextAnnotation.text groups words by *paragraph block*
+# (e.g. every item name in one block, every price in a separate block to its
+# right) rather than by visual row — so a tabular "QTY ITEM ... PRICE" receipt
+# layout comes back with all names first, then all prices, instead of each
+# row's name and price adjacent to each other the way a human reads it.
+# Rebuilding the text from symbol-level bounding boxes — clustering by actual
+# Y-position into rows, then sorting left-to-right within each row — recovers
+# the natural reading order regardless of how Vision internally grouped its
+# blocks.
+#
+# Whether to insert a space between two adjacent symbols in a row is decided
+# by the actual horizontal *pixel gap* between them, not Vision's per-symbol
+# detectedBreak flag — that flag turned out to be inconsistently present (real
+# spaces between plainly separate words like "DELIVERY" and "CHG" often came
+# back with no break marked at all), whereas the geometric gap between glued
+# characters like "Chic" and "+" in "Chic+1sd-T" is reliably much smaller than
+# the gap between genuinely separate words. Falls back to Vision's own text if
+# a response has no symbol boxes.
+def _reconstruct_reading_order(full_text_annotation: dict) -> str:
+    symbols = []  # (y_center, x_left, x_right, height, text)
+    for page in full_text_annotation.get("pages", []):
+        for block in page.get("blocks", []):
+            for paragraph in block.get("paragraphs", []):
+                for word in paragraph.get("words", []):
+                    for symbol in word.get("symbols", []):
+                        vertices = symbol.get("boundingBox", {}).get("vertices", [])
+                        if len(vertices) < 4:
+                            continue
+                        text = symbol.get("text", "")
+                        if not text:
+                            continue
+                        ys = [v.get("y", 0) for v in vertices]
+                        xs = [v.get("x", 0) for v in vertices]
+                        symbols.append((
+                            sum(ys) / len(ys), min(xs), max(xs),
+                            max(ys) - min(ys) or 1, text,
+                        ))
+
+    if not symbols:
+        return ""
+
+    symbols.sort(key=lambda s: s[0])  # top to bottom by vertical center
+
+    rows: list[list[tuple]] = []
+    for s in symbols:
+        if rows:
+            row_y = sum(r[0] for r in rows[-1]) / len(rows[-1])
+            row_h = sum(r[3] for r in rows[-1]) / len(rows[-1])
+            if abs(s[0] - row_y) <= row_h * 0.6:
+                rows[-1].append(s)
+                continue
+        rows.append([s])
+
+    lines = []
+    for row in rows:
+        row.sort(key=lambda s: s[1])  # left to right
+        parts = [row[0][4]]
+        for prev, cur in zip(row, row[1:]):
+            gap = cur[1] - prev[2]
+            char_height = (prev[3] + cur[3]) / 2
+            if gap > char_height * 0.25:
+                parts.append(" ")
+            parts.append(cur[4])
+        lines.append("".join(parts))
+    return "\n".join(lines)
 
 
 # ─── Stage 2: Text Extraction via Google Cloud Vision API ───────────────────
@@ -255,7 +390,12 @@ def extract_text(image_bytes: bytes) -> str:
         body = e.read().decode(errors="replace")
         raise OcrExtractionError(f"Google Vision API error {e.code}: {body}")
 
-    text = result["responses"][0].get("fullTextAnnotation", {}).get("text", "")
+    full_text_annotation = result["responses"][0].get("fullTextAnnotation", {})
+    text = _reconstruct_reading_order(full_text_annotation)
+    if not text or not text.strip():
+        # No word-box data in this response for some reason — fall back to
+        # Vision's own best-guess ordering rather than failing outright.
+        text = full_text_annotation.get("text", "")
     if not text or not text.strip():
         raise OcrExtractionError(
             "No text detected — image may be too blurry, faded, or crumpled. "
@@ -318,9 +458,29 @@ def _extract_amount(raw_text: str) -> float | None:
 
     _ROUNDING = re.compile(r"\brounding\b|抹零|四舍五入", re.IGNORECASE)
 
+    # Malaysian GST/SST tax invoices commonly print a breakdown table after
+    # the real grand total (e.g. "GST SUMMARY" / tax code / amount / tax
+    # columns), which has its own "TOTAL" row for that table's own amount+tax
+    # subtotal — a *different* number from the receipt's actual total. Since
+    # this table sits nearer the bottom, scanning bottom-up would otherwise
+    # reach it before the real total and return the wrong figure. Skip the
+    # entire section once its heading is seen.
+    _TAX_BREAKDOWN_HEADER = re.compile(r"\b(?:gst|tax)\s*summary\b", re.IGNORECASE)
+    tax_breakdown_idx = next(
+        (i for i, ln in enumerate(lines) if _TAX_BREAKDOWN_HEADER.search(ln)), None
+    )
+
+    # Vision sometimes introduces a stray space between the decimal point and
+    # the cents digits (e.g. "TOTAL 5. 11" for a printed "5.11") — tolerate it
+    # here specifically rather than loosening the shared AMOUNT_PATTERN used
+    # elsewhere, since that would risk false positives in line-item parsing.
+    _AMOUNT_LOOSE = re.compile(rf"{_CURRENCY}(\d+[.,]\s?\d{{2}})", re.IGNORECASE)
+
     # Scan from bottom upward — grand total is near the end; column-header
     # "TOTAL" is near the top and will only be reached if no real total found.
     for i in range(len(lines) - 1, -1, -1):
+        if tax_breakdown_idx is not None and i >= tax_breakdown_idx:
+            continue
         line = lines[i]
         if _TOTAL_LINE.match(line) and not _TOTAL_EXCLUDE.search(line):
             check_lines = [line] + lines[i + 1: i + 4]
@@ -330,14 +490,22 @@ def _extract_amount(raw_text: str) -> float | None:
             )
             if rounding_pos is not None:
                 for check in check_lines[rounding_pos + 1:]:
-                    m = AMOUNT_PATTERN.search(check)
+                    if _TOTAL_EXCLUDE.search(check):
+                        continue
+                    m = _AMOUNT_LOOSE.search(check)
                     if m:
-                        return float(m.group(1).replace(",", "."))
-            # No rounding: take first amount on total line or next 2 lines
+                        return float(m.group(1).replace(" ", "").replace(",", "."))
+            # No rounding: take first amount on total line or next 2 lines —
+            # re-checking _TOTAL_EXCLUDE on each is what stops a "CASH TEND
+            # 11.00" or "CHANGE DUE 5.89" line (checked only as a fallback
+            # when the total line's own amount fails to parse) from being
+            # mistaken for the grand total.
             for check in check_lines[:3]:
-                m = AMOUNT_PATTERN.search(check)
+                if _TOTAL_EXCLUDE.search(check):
+                    continue
+                m = _AMOUNT_LOOSE.search(check)
                 if m:
-                    return float(m.group(1).replace(",", "."))
+                    return float(m.group(1).replace(" ", "").replace(",", "."))
 
     # Fallback: largest amount in the receipt
     matches = AMOUNT_PATTERN.findall(raw_text)
@@ -358,17 +526,35 @@ def _extract_date(raw_text: str) -> date | None:
     return None
 
 
+
+# Each word must start with a capital letter (or a CJK character, which has no
+# case) — genuine stylised brand names are capitalised ("Walmart", "Nando's",
+# "McDonald's"), whereas plain lowercase filler sentences that happen to be
+# short ("formerly known as", "thank you") are not, and must never be mistaken
+# for one.
 _VENDOR_WORD_LINE = re.compile(
-    rf"^[A-Za-z{_CJK}][A-Za-z{_CJK}'&\-]*(\s[A-Za-z{_CJK}][A-Za-z{_CJK}'&\-]*){{0,2}}$"
+    rf"^[A-Z{_CJK}][A-Za-z{_CJK}'&\-]*(\s[A-Z{_CJK}][A-Za-z{_CJK}'&\-]*){{0,2}}$"
 )
 
 
 _BHD_LINE = re.compile(r"\bbhd\b|\bberhad\b", re.IGNORECASE)
 
+# Malaysian tax invoices for franchised outlets are required to print the
+# holding company's registered name (e.g. "Gerbang Alaf Restaurants Sdn Bhd")
+# alongside a disclosure of the actual consumer-facing brand it trades as
+# ("Licensee of McDonald's", "trading as X") — the disclosed brand is what a
+# customer actually recognises and should win over the legal entity name.
+_BRAND_DISCLOSURE = re.compile(
+    r"(?:licensee of|trading as|t/a)\s+(.+)", re.IGNORECASE
+)
+
 
 def _extract_vendor(lines: list[str]) -> str | None:
     """
-    Heuristic: prefer ALL CAPS lines in the first 5 lines (store names are
+    Heuristic: first checks for a "Licensee of X" / "trading as X" brand
+    disclosure line (common on Malaysian franchise tax invoices), since that
+    names the actual consumer-facing brand rather than the legal entity.
+    Otherwise prefers ALL CAPS lines in the first 5 lines (store names are
     usually all-caps). Falls back to a short mixed-case word/phrase line
     (e.g. a stylised logo like "Walmart") in the first 8 lines, then to the
     first non-digit line. Lines with '#'/':'/'*' (IDs, transaction numbers,
@@ -381,6 +567,13 @@ def _extract_vendor(lines: list[str]) -> str | None:
     tagline like "PERI-PERI CHICKEN" printed directly below the logo that
     would otherwise satisfy the plain ALL-CAPS check first.
     """
+    for line in lines[:15]:
+        m = _BRAND_DISCLOSURE.search(line)
+        if m:
+            candidate = m.group(1).strip().rstrip(".,")
+            if candidate and not _is_noise_line(candidate):
+                return candidate
+
     window = lines[:10]
     if any(_BHD_LINE.search(ln) for ln in window):
         for idx, line in enumerate(lines[:5]):
@@ -436,14 +629,25 @@ def _extract_line_items(raw_text: str) -> list[dict]:
     pending_names: list[str] = []
     pending_prices: list[float] = []
     past_totals = False
+    # Set once the table's own "QTY ITEM ... TOTAL" column-header row is seen —
+    # a stronger, earlier signal that we're inside the itemised list than
+    # waiting for the first item to already have been emitted (which never
+    # happens if that very first item has a leading quantity digit needing to
+    # be stripped first — a chicken-and-egg deadlock without this flag).
+    seen_header = False
     # A bare 1-3 digit line just before an item's name (e.g. Nando's printing
     # "4" on its own line above "1/4 Chic+1sd-T") is that item's quantity —
     # captured here and consumed by whichever item is emitted next.
     pending_qty: int | None = None
 
-    def _emit(name: str, price: float) -> None:
+    def _emit(name: str, price: float, line_qty: int | None = None) -> None:
         nonlocal pending_qty
-        qty = pending_qty if pending_qty is not None else 1
+        # A quantity glued to this exact line (line_qty) always wins over an
+        # older standalone pending_qty from a prior line — see the qty-prefix
+        # stripping comment below for why the fresher one takes precedence.
+        qty = line_qty if line_qty is not None else (
+            pending_qty if pending_qty is not None else 1
+        )
         pending_qty = None
         items.append({"item_name": name, "price": price, "quantity": qty})
 
@@ -461,7 +665,19 @@ def _extract_line_items(raw_text: str) -> list[dict]:
             i += 1
             continue
         if not line or _is_noise_line(line) or _MASKED_ACCOUNT_NUMBER.match(line):
-            if line and _TOTALS_BOUNDARY.search(line):
+            if line and _ITEM_TABLE_HEADER.search(line):
+                # Anything queued before the item table itself started (e.g. a
+                # letterhead/address line that coincidentally parsed as a
+                # "name" while scanning through the receipt's header block)
+                # is guaranteed to be pre-item-table noise, never a real
+                # item — left uncleared, it would sit in the queue and get
+                # wrongly claimed by the first genuine bare price line inside
+                # the table.
+                pending_names.clear()
+                pending_prices.clear()
+                pending_qty = None
+                seen_header = True
+            elif line and _TOTALS_BOUNDARY.search(line):
                 # Past the itemised list now — any names/prices still waiting
                 # are unrecoverable; don't let them pair with a totals figure.
                 pending_names.clear()
@@ -475,19 +691,62 @@ def _extract_line_items(raw_text: str) -> list[dict]:
         # name instead of printing it on its own line above (e.g. Nando's
         # "3 1/4 Chic+1sd-T @17.90" vs. the usual "3" / "1/4 Chic+1sd-T @17.90"
         # split across two lines) — peel it off so the name underneath is
-        # still recognisable by the layouts below. Only once we're past the
-        # header (an item has already matched normally), same caution as the
-        # deferred-name/price queues use, to avoid misreading a header line's
-        # leading number (e.g. "4 NANDOS3") as a quantity+name pair. Not
-        # gated on pending_qty being unset: a stray unconsumed qty line just
-        # before this one (e.g. a dropped "1/4-M" spice-level line sitting
-        # between them) shouldn't block the fresher, more relevant number
-        # glued directly to this name from taking over.
-        if items:
-            qty_prefix = re.match(r"^(\d{1,3})\s+([A-Za-z\d].*)$", line)
-            if qty_prefix:
-                pending_qty = int(qty_prefix.group(1))
-                line = qty_prefix.group(2)
+        # still recognisable by the layouts below. Kept in a line-scoped
+        # `line_qty` rather than written into the persisting `pending_qty`:
+        # this line's own number belongs only to whatever gets emitted from
+        # *this* line, and must never leak forward onto some later, unrelated
+        # item if this candidate doesn't pan out — e.g. a store address line
+        # like "951 Avenida Pico" would otherwise attach quantity 951 to
+        # whatever real item is emitted next. Not gated on items already
+        # having been emitted — a receipt whose very first item line has a
+        # leading quantity digit (e.g. "2 M SpicyDeluxe") would otherwise
+        # never strip it, never match any layout, and so never emit that
+        # first item, permanently keeping this gate closed. Header lines with
+        # a leading number (e.g. "4 NANDOS3 76 SYAFIQ 2") are already safe
+        # without this gate: stripping "4 " just leaves "NANDOS3 76 SYAFIQ 2",
+        # which still fails every layout's name pattern (a bare "76" token
+        # breaks the name-continuation rules), so nothing false gets emitted.
+        qty_prefix = re.match(r"^(\d{1,3})\s+([A-Za-z\d].*)$", line)
+        line_qty = int(qty_prefix.group(1)) if qty_prefix else None
+        if qty_prefix:
+            line = qty_prefix.group(2)
+
+        # A leading "-" or "•" bullet marker on an item-description line (e.g.
+        # "-CARBON PAPER" printed below its own price row) — stripped so the
+        # name-matching layouts below, which all require a letter as the
+        # actual first character, can recognise it.
+        bullet_prefix = re.match(r"^[-•]\s*([A-Za-z].*)$", line)
+        if bullet_prefix:
+            line = bullet_prefix.group(1)
+
+        # A nameless "item#/qty/rate/disc%/amount" row (see _ALL_NUMBERS_ROW) —
+        # the description is always on the very next line for this layout, so
+        # buffer the price for it specifically rather than handing it to
+        # pending_names' oldest entry — that queue can already hold unrelated
+        # stray candidates (e.g. an address line that broke its own lookahead
+        # on a noise line before ever reaching here), and this row's price
+        # belongs to the item immediately following it, not to whichever name
+        # happened to be queued first.
+        an = _ALL_NUMBERS_ROW.match(line)
+        if an:
+            price = float(an.group(1).replace(",", "."))
+            if price > 0 and not past_totals:
+                pending_prices.append(price)
+            i += 1
+            continue
+
+        # Layout 1a: name+rate+realprice all on one line (e.g. "1/4 Chic+1sd-T
+        # @17.90 71.60 S") — checked before the rate-marker exclusion below,
+        # since this *is* the real charged total, just sharing a line with the
+        # per-unit rate rather than sitting on a separate one.
+        rm = _NAME_WITH_RATE_AND_PRICE.match(line)
+        if rm:
+            name = rm.group(1).strip()
+            price = float(rm.group(2).replace(",", "."))
+            if name and price > 0 and 3 <= len(name) <= 40:
+                _emit(name, price, line_qty)
+            i += 1
+            continue
 
         # Layout 1: single-line match. Skipped for lines carrying a rate marker
         # (@, lb, kg, for) — regex backtracking would otherwise shrink the name
@@ -503,7 +762,7 @@ def _extract_line_items(raw_text: str) -> list[dict]:
             # TX) that Malaysia prints directly before the amount, e.g.
             # "SR 106.90" — without this, "SR" itself gets treated as an item.
             if name and price > 0 and 3 <= len(name) <= 40:
-                _emit(name, price)
+                _emit(name, price, line_qty)
             i += 1
             continue
 
@@ -513,7 +772,7 @@ def _extract_line_items(raw_text: str) -> list[dict]:
             name = bm.group(1).strip()
             price = float(bm.group(2).replace(",", "."))
             if price > 0:
-                _emit(name, price)
+                _emit(name, price, line_qty)
             i += 1
             continue
 
@@ -523,8 +782,38 @@ def _extract_line_items(raw_text: str) -> list[dict]:
         # ahead for, not the rate itself.
         no = _NAME_ONLY.match(line) or _NAME_WITH_RATE_SUFFIX.match(line)
         if no:
-            name = no.group(1).strip()
+            name = _TRAILING_BARCODE.sub("", no.group(1).strip())
             if 3 <= len(name) <= 40:
+                # An already-buffered bare price (inverted "numbers-row-then-
+                # name" layout, e.g. Malaysian tax invoices printing the
+                # code/qty/price row before the item's own description) was
+                # deferred specifically for whichever name comes next — claim
+                # it immediately rather than risk the forward lookahead below
+                # finding a *different*, later item's price first and stealing
+                # it before this name ever gets its rightful match.
+                if pending_prices:
+                    price = pending_prices.pop(0)
+                    full_name = name
+                    consumed = 1
+                    if i + 1 < len(lines):
+                        cont = lines[i + 1].strip()
+                        # A plain continuation line — no bullet marker, no
+                        # leading digits — right after a just-claimed name is
+                        # this same item's description wrapping onto a second
+                        # physical line (e.g. "-CBEA4SIZE 20 POCKETS
+                        # REFILLABLENEW" / "CLEAR HOLDER"), not a new item:
+                        # every genuine item's own description in this
+                        # "numbers-row-then-name" layout is bullet-prefixed,
+                        # so its absence is the tell. Left unstitched, the
+                        # orphaned fragment would itself match as a "name"
+                        # next and steal whatever price/lookahead comes after.
+                        if (cont and not re.match(r"^[-•\d]", cont)
+                                and _NAME_ONLY.match(cont)):
+                            full_name = f"{full_name} {cont}"
+                            consumed = 2
+                    _emit(full_name, price, line_qty)
+                    i += consumed
+                    continue
                 price_found = False
                 broke_on_name = False
                 for j in range(i + 1, min(i + 5, len(lines))):
@@ -541,15 +830,43 @@ def _extract_line_items(raw_text: str) -> list[dict]:
                     if ahead_name and len(ahead_name.group(1)) >= 3:
                         broke_on_name = True
                         break
+                    # Stop if this line is actually a *different* item's own
+                    # complete "qty + name + price" row (e.g. "1 M GrilChicBgr
+                    # 12.50") rather than a bare price continuation for the
+                    # pending name — otherwise that item's price gets stolen
+                    # here and the item itself is skipped over entirely when
+                    # the outer loop reaches it. Strip a possible leading qty
+                    # digit first, the same way the outer loop does.
+                    ahead_unqtied = re.sub(r"^\d{1,3}\s+", "", ahead)
+                    if (not _QTY_CALC_LINE.search(ahead_unqtied)
+                            and LINE_ITEM_PATTERN.match(ahead_unqtied)):
+                        broke_on_name = True
+                        break
                     # Weight/quantity lines (e.g. "1.75 lb @ 1 lb/0.54") carry a
                     # unit price, not the charged total — keep looking past them.
+                    # But some formats (e.g. Walmart's "0.41 lb @ 1 lb /0.49
+                    # 0.20 N") print the real charged total on this SAME line,
+                    # right after the rate. Three decimal numbers on one line
+                    # (weight, rate, total) rather than the usual two (weight,
+                    # rate alone with the total on a separate later line) is
+                    # the tell — grab the trailing one in that case instead of
+                    # skipping past the item's only chance at a price.
                     if _QTY_CALC_LINE.search(ahead):
+                        if len(re.findall(r"\d+[.,]\d{2}", ahead)) >= 3:
+                            pm = _PRICE_AT_END.search(ahead)
+                            if pm:
+                                price = float(pm.group(1).replace(",", "."))
+                                if price > 0:
+                                    _emit(name, price, line_qty)
+                                    i = j + 1
+                                    price_found = True
+                                    break
                         continue
                     pm = _PRICE_AT_END.search(ahead)
                     if pm:
                         price = float(pm.group(1).replace(",", "."))
                         if price > 0:
-                            _emit(name, price)
+                            _emit(name, price, line_qty)
                             i = j + 1
                             price_found = True
                             break
@@ -565,13 +882,9 @@ def _extract_line_items(raw_text: str) -> list[dict]:
                     if not broke_on_name:
                         if pending_prices:
                             # An earlier unclaimed bare price (inverted layout) claims it.
-                            _emit(name, pending_prices.pop(0))
-                        elif items:
-                            # Price wasn't nearby — defer and keep scanning forward
-                            # for it. Only once we're past the header (i.e. an item
-                            # has already matched normally) — otherwise store-name/
-                            # address lines that superficially fit this pattern get
-                            # queued ahead of real items.
+                            _emit(name, pending_prices.pop(0), line_qty)
+                        else:
+                            # Price wasn't nearby — defer and keep scanning forward for it.
                             pending_names.append(name)
                     i += 1
             else:
@@ -591,22 +904,21 @@ def _extract_line_items(raw_text: str) -> list[dict]:
             if pm:
                 price = float(pm.group(1).replace(",", "."))
                 if name and price > 0 and 3 <= len(name) <= 40:
-                    _emit(name, price)
+                    _emit(name, price, line_qty)
                 i += 2
                 continue
             if name and 3 <= len(name) <= 40:
                 if pending_prices:
-                    _emit(name, pending_prices.pop(0))
+                    _emit(name, pending_prices.pop(0), line_qty)
                     i += 1
                     continue
-                if items:
-                    pending_names.append(name)
-                    i += 1
-                    continue
+                pending_names.append(name)
+                i += 1
+                continue
 
         # Layout 4a: bare barcode pair with no price (misread price-override item)
         bn = _BARE_BARCODE_NAME_LINE.match(line)
-        if bn and items:
+        if bn:
             pending_names.append(bn.group(1))
             i += 1
             continue
@@ -616,7 +928,7 @@ def _extract_line_items(raw_text: str) -> list[dict]:
         # appeared yet (inverted layouts print the price before the name).
         bp = _BARE_PRICE_LINE.match(line)
         if bp:
-            price = float(bp.group(1).replace(",", "."))
+            price = float(bp.group(1).replace(",", ".").replace(" ", ""))
             if price > 0:
                 if pending_names:
                     _emit(pending_names.pop(0), price)
@@ -698,5 +1010,7 @@ def process_receipt(filename: str, file_size_bytes: int, image_bytes: bytes) -> 
         "line_items": line_items_with_categories,       # FR 4.6, 4.7, 4.8, 4.9
         "suggested_category_id": receipt_category["category_id"],
         "suggested_category_name": receipt_category["category_name"],
+        "suggested_category_confidence": receipt_category["confidence"],
+        "date_confidence": "high" if parsed["date"] else "low",
         "warranty": warranty_info,
     }

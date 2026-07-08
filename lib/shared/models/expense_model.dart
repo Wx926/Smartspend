@@ -14,6 +14,7 @@ class ExpenseModel {
   final String source; // 'manual' | 'ocr' | 'voice' — how this record was created
   final String? merchantName; // set when source is 'ocr'/'voice'
   final String? batchId; // shared by every line item from the same receipt scan
+  final String? receiptImageUrl; // Supabase Storage public URL for the scanned receipt photo
 
   const ExpenseModel({
     required this.id,
@@ -31,6 +32,7 @@ class ExpenseModel {
     this.source = 'manual',
     this.merchantName,
     this.batchId,
+    this.receiptImageUrl,
   });
 
   factory ExpenseModel.fromJson(Map<String, dynamic> json) {
@@ -50,6 +52,7 @@ class ExpenseModel {
       source: json['source'] as String? ?? 'manual',
       merchantName: json['merchant_name'] as String?,
       batchId: json['batch_id'] as String?,
+      receiptImageUrl: json['receipt_image_url'] as String?,
     );
   }
 
@@ -70,6 +73,7 @@ class ExpenseModel {
       'source': source,
       if (merchantName != null) 'merchant_name': merchantName,
       if (batchId != null) 'batch_id': batchId,
+      if (receiptImageUrl != null) 'receipt_image_url': receiptImageUrl,
     };
   }
 
@@ -85,6 +89,7 @@ class ExpenseModel {
     String? source,
     String? merchantName,
     String? batchId,
+    String? receiptImageUrl,
   }) {
     return ExpenseModel(
       id: id,
@@ -102,6 +107,7 @@ class ExpenseModel {
       source: source ?? this.source,
       merchantName: merchantName ?? this.merchantName,
       batchId: batchId ?? this.batchId,
+      receiptImageUrl: receiptImageUrl ?? this.receiptImageUrl,
     );
   }
 }

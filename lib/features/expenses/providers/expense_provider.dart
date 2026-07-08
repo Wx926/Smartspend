@@ -75,6 +75,7 @@ class ExpenseProvider extends ChangeNotifier {
     String source = 'manual',
     String? merchantName,
     String? batchId,
+    String? receiptImageUrl,
   }) async {
     final expense = ExpenseModel(
       id: _uuid.v4(),
@@ -92,6 +93,7 @@ class ExpenseProvider extends ChangeNotifier {
       source: source,
       merchantName: merchantName,
       batchId: batchId,
+      receiptImageUrl: receiptImageUrl,
     );
     // Optimistic: insert locally and return immediately — don't block on network
     _expenses.insert(0, expense);
