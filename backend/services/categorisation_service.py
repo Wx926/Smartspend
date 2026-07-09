@@ -14,12 +14,26 @@ from utils.supabase_client import get_category_id
 # Keyword -> category name. Add more keywords as you test with real receipts/voice.
 CATEGORY_KEYWORDS: dict[str, list[str]] = {
     "Food & Dining": [
-        "restaurant", "cafe", "kopitiam", "mamak", "nasi", "food",
+        "restaurant", "cafe", "cuisine", "kopitiam", "mamak", "nasi", "food",
         "mcdonald", "kfc", "starbucks", "pizza", "burger", "char",
         "kopi", "makan", "lunch", "dinner", "breakfast", "bakery",
         "teh", "tarik", "roti", "canai", "lemak", "mee", "laksa",
         "curry", "rice", "ayam", "ikan", "sup", "bihun", "kuey",
         "dim sum", "wonton", "sushi", "tom yam", "satay", "rendang",
+        # Chinese-language menu/vendor terms (Malaysian Chinese-medium
+        # receipts print item names with no romanisation at all, e.g.
+        # "冬菇肉碎老鼠粉（小）" / "加鸡蛋" — none of the romanised keywords
+        # above ever match that text).
+        "鸡蛋", "老鼠粉", "冬菇", "餐厅", "茶餐厅", "小炒", "煮炒", "海鲜",
+        "点心",
+        # Japanese-cuisine menu terms (e.g. "Salmon Teriyaki Don")
+        "salmon", "teriyaki", "teryaki", "sashimi", "tempura", "udon",
+        "ramen", "bento", "katsu", "yakitori", "onigiri",
+        # Meat/seafood menu terms not already covered by "ayam"/"ikan"/
+        # "chicken" above (e.g. "Smoked Duck Don"). "crab" is handled via
+        # WORD_BOUNDARY_KEYWORDS below since it's also a substring of
+        # unrelated words like "scrabble".
+        "duck", "beef", "pork", "mutton", "lamb", "prawn", "squid", "crab",
         # F&B chain brand names (same pattern as mcdonald/kfc/starbucks above)
         "nando", "chic", "chicken", "grill", "chargrill", "coleslaw",
         "wingstop", "subway", "domino", "texas chicken",
@@ -72,7 +86,7 @@ CATEGORY_KEYWORDS: dict[str, list[str]] = {
 # receipt text (e.g. "mall" inside the size "Small" — "Small Cone"/"Small
 # Fries" would otherwise be miscategorised as Shopping on almost every fast-
 # food receipt) and must require real word boundaries instead.
-WORD_BOUNDARY_KEYWORDS = {"mall"}
+WORD_BOUNDARY_KEYWORDS = {"mall", "crab"}
 
 DEFAULT_CATEGORY = "Others"
 

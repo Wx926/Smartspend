@@ -41,8 +41,10 @@ _CURRENCY = r"(?:RM|MYR|USD|SGD|GBP|\$|£|€|¥)?\s*"
 # printed in Mandarin (esp. Chinese-Malaysian restaurants/vendors), and Chinese
 # item names carry no spaces between characters, so they must be admitted into
 # the same name-matching character classes as Latin letters, not handled as a
-# separate special case.
-_CJK = r"一-鿿㐀-䶿"
+# separate special case. Full-width parentheses are included too (e.g. a size
+# marker like "（小）" for "(Small)") — the ASCII "()" already allowed
+# elsewhere in these patterns doesn't cover their full-width equivalents.
+_CJK = r"一-鿿㐀-䶿（）"
 
 # A standalone "-" (space-hyphen-space, a stylistic word separator like
 # "Naughty Spare Rib - Full Slab") or a "+"/"/"-joined size descriptor like
@@ -164,8 +166,18 @@ _BARE_PRICE_LINE = re.compile(
 # tolerating it here, the whole row falls through to the bare-barcode-name
 # pattern below and gets wrongly emitted as an item named after its own
 # barcode instead of being deferred for the real name on the next line.
+# The leading "item#" column is also allowed to be a short alphanumeric SKU
+# code with a hyphen (e.g. "TP-24"), not just a plain digit barcode — without
+# this, a row like "TP-24 5 1.32 0.00 6.60 *" fails to match at all, its price
+# is never buffered, and the following name's forward lookahead then wrongly
+# steals the *next* item's price instead. That code alternative requires at
+# least one digit in it (unlike a plain barcode, which can be pure digits on
+# its own) — without that requirement it would also match an ordinary
+# name+price single-line item like "FRAP 001200010451 F 5.48 N", silently
+# swallowing the real name "FRAP" as if it were a headerless numbers-row.
 _ALL_NUMBERS_ROW = re.compile(
-    r"^(?:(?:\d+(?:[.,]\d+)?|[A-Za-z])\s+){2,}(\d+[.,]\d{2})\s*\*?\s*[A-Z]{0,2}\s*$"
+    r"^(?:\d+(?:[.,]\d+)?|[A-Za-z\-]{0,4}\d[A-Za-z0-9\-]{0,6})\s+"
+    r"(?:(?:\d+(?:[.,]\d+)?|[A-Za-z])\s+){1,}(\d+[.,]\d{2})\s*\*?\s*[A-Z]{0,2}\s*$"
 )
 
 # A line with two bare 5+ digit barcodes and nothing else — a price-override
@@ -711,11 +723,17 @@ def _extract_line_items(raw_text: str) -> list[dict]:
         if qty_prefix:
             line = qty_prefix.group(2)
 
-        # A leading "-" or "•" bullet marker on an item-description line (e.g.
-        # "-CARBON PAPER" printed below its own price row) — stripped so the
-        # name-matching layouts below, which all require a letter as the
-        # actual first character, can recognise it.
-        bullet_prefix = re.match(r"^[-•]\s*([A-Za-z].*)$", line)
+        # A leading "-"/"•" bullet, "*" add-on marker (Chinese receipts prefix
+        # a modifier line like "* 加鸡蛋" this way), or "N." menu-numbering
+        # prefix (e.g. "1.冬菇肉碎老鼠粉（小）") on an item-description line —
+        # stripped so the name-matching layouts below, which all require a
+        # letter or CJK character as the actual first character, can
+        # recognise it. A space is tolerated between the digit and the period
+        # (Vision sometimes prints "1 ." instead of "1." when the CJK text
+        # immediately after it needs its own spacing).
+        bullet_prefix = re.match(
+            rf"^(?:[-•*]|\d{{1,2}}\s*\.)\s*([A-Za-z{_CJK}].*)$", line
+        )
         if bullet_prefix:
             line = bullet_prefix.group(1)
 
@@ -974,6 +992,21 @@ def process_receipt(filename: str, file_size_bytes: int, image_bytes: bytes) -> 
 
     raw_text = extract_text(image_bytes)
     parsed = parse_receipt_fields(raw_text)
+
+    # Vision succeeds at "finding text" on ANY text-heavy photo — a
+    # screenshot of an unrelated app screen, a document, a poster — not just
+    # actual receipts, so a clean OCR pass alone doesn't mean this was a
+    # receipt. Every genuine receipt in testing always yields at least a
+    # date (Malaysian receipts always print one) or a line item; a photo
+    # with neither is almost certainly not a receipt at all rather than just
+    # a hard-to-read one, so it's rejected here instead of silently handing
+    # back a plausible-looking but meaningless result (e.g. a stray "RM
+    # 12.50" from unrelated UI text getting treated as the total).
+    if parsed["date"] is None and not parsed["line_items"]:
+        raise OcrExtractionError(
+            "This doesn't look like a receipt — no date or items were "
+            "found. Please retake the photo or choose a clearer image."
+        )
 
     receipt_date = parsed.pop("_date_obj") or date.today()
     warranty_info = detect_warranty(raw_text, receipt_date)
