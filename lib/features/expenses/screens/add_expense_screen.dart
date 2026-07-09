@@ -112,8 +112,10 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
             name: loc.name,
             emoji: '📍',
             locationId: loc.id,
-            suggestedCategoryName: loc.categoryHint,
+            suggestedCategoryId: loc.categoryIds.firstOrNull,
             distanceMeters: dist,
+            latitude: loc.latitude,
+            longitude: loc.longitude,
           ),
         );
       }
@@ -137,8 +139,10 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
         _LocationCandidate(
           name: p.name,
           emoji: p.emoji,
-          suggestedCategoryName: OsmService.toExpenseCategory(p.category),
+          suggestedCategoryId: OsmService.toExpenseCategoryId(p.category),
           distanceMeters: dist,
+          latitude: p.latitude,
+          longitude: p.longitude,
         ),
       );
     }
@@ -149,7 +153,24 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
       return;
     }
     candidates.sort((a, b) => a.distanceMeters.compareTo(b.distanceMeters));
-    final nearest = candidates.take(_maxCandidates).toList();
+
+    // A saved location in range should always lead the list — the user
+    // already curated it (name + category), so it's more likely correct
+    // than a same-distance OSM point. Without this, a cluster of unrelated
+    // OSM places (e.g. several shops right at a mall entrance) can crowd the
+    // saved venue itself out of the top _maxCandidates entirely. Whatever
+    // remains — other saved locations and OSM places alike — still fills
+    // the rest of the list nearest-first, same as before.
+    final savedCandidates = candidates
+        .where((c) => c.locationId != null)
+        .toList();
+    final ordered = savedCandidates.isEmpty
+        ? candidates
+        : [
+            savedCandidates.first,
+            ...candidates.where((c) => c != savedCandidates.first),
+          ];
+    final nearest = ordered.take(_maxCandidates).toList();
 
     setState(() {
       _locationCandidates = nearest;
@@ -185,14 +206,9 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
       }
     }
 
-    if (suggestion == null && candidate.suggestedCategoryName != null) {
-      final hint = candidate.suggestedCategoryName!.toLowerCase();
+    if (suggestion == null && candidate.suggestedCategoryId != null) {
       suggestion = cats
-          .where(
-            (c) =>
-                c.name.toLowerCase().contains(hint) ||
-                hint.contains(c.name.toLowerCase()),
-          )
+          .where((c) => c.id == candidate.suggestedCategoryId)
           .firstOrNull;
     }
 
@@ -349,9 +365,32 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
       final expProvider = context.read<ExpenseProvider>();
       final sgProvider = context.read<SavingsGoalProvider>();
       final bp = context.read<BudgetProvider>();
-      final activeLocationId = _isIncome
-          ? null
-          : _selectedLocationCandidate?.locationId;
+      final candidate = _selectedLocationCandidate;
+
+      // A candidate picked from the live OSM lookup (not one of the user's
+      // saved locations) has no locationId to attach — without this it would
+      // vanish the moment the expense is saved, with no way to see it again
+      // on Edit. Promote it into a real saved location on the spot, the same
+      // as if the user had gone through "Add Location" themselves, so it
+      // gets a real id, shows up in Nearby, and picks up tracking/alerts for
+      // free going forward.
+      String? activeLocationId;
+      if (_isIncome || candidate == null) {
+        activeLocationId = null;
+      } else if (candidate.locationId != null) {
+        activeLocationId = candidate.locationId;
+      } else {
+        final saved = await context.read<LocationProvider>().addLocation(
+          userId: userId,
+          name: candidate.name,
+          latitude: candidate.latitude,
+          longitude: candidate.longitude,
+          categoryIds: candidate.suggestedCategoryId != null
+              ? [candidate.suggestedCategoryId!]
+              : const [],
+        );
+        activeLocationId = saved.id;
+      }
 
       if (_isEdit) {
         await expProvider.updateExpense(
@@ -1046,15 +1085,19 @@ class _LocationCandidate {
   final String name;
   final String emoji;
   final String? locationId;
-  final String? suggestedCategoryName;
+  final String? suggestedCategoryId;
   final double distanceMeters;
+  final double latitude;
+  final double longitude;
 
   const _LocationCandidate({
     required this.name,
     required this.emoji,
     this.locationId,
-    this.suggestedCategoryName,
+    this.suggestedCategoryId,
     required this.distanceMeters,
+    required this.latitude,
+    required this.longitude,
   });
 }
 

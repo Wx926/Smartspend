@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import '../providers/wallet_provider.dart';
+import '../../../features/auth/providers/auth_provider.dart';
 import '../../../features/expenses/providers/expense_provider.dart';
 import '../../../shared/models/wallet_model.dart';
 import '../../../shared/theme/app_colors.dart';
@@ -72,23 +73,26 @@ class _WalletScreenState extends State<WalletScreen> {
                                 size: 22,
                               ),
                             ),
-                            const Icon(Icons.account_balance_wallet_outlined,
-                                color: Colors.white70, size: 22),
+                            const Icon(
+                              Icons.account_balance_wallet_outlined,
+                              color: Colors.white70,
+                              size: 22,
+                            ),
                           ],
                         ),
                         const SizedBox(height: 12),
-                        const Text('Wallet',
-                            style: TextStyle(
-                                color: Colors.white70, fontSize: 13)),
+                        const Text(
+                          'Wallet',
+                          style: TextStyle(color: Colors.white70, fontSize: 13),
+                        ),
                         const SizedBox(height: 2),
-                        const Text('Net Asset',
-                            style: TextStyle(
-                                color: Colors.white60, fontSize: 12)),
+                        const Text(
+                          'Net Asset',
+                          style: TextStyle(color: Colors.white60, fontSize: 12),
+                        ),
                         const SizedBox(height: 4),
                         Text(
-                          wp.hidden
-                              ? 'RM ****'
-                              : 'RM ${fmt.format(net)}',
+                          wp.hidden ? 'RM ****' : 'RM ${fmt.format(net)}',
                           style: TextStyle(
                             color: Colors.white,
                             fontSize: 32,
@@ -96,17 +100,22 @@ class _WalletScreenState extends State<WalletScreen> {
                           ),
                         ),
                         const SizedBox(height: 12),
-                        Row(children: [
-                          _HeaderStat(
+                        Row(
+                          children: [
+                            _HeaderStat(
                               label: 'Asset',
-                              value: _mask('RM ${fmt.format(asset)}',
-                                  wp.hidden)),
-                          const SizedBox(width: 24),
-                          _HeaderStat(
+                              value: _mask(
+                                'RM ${fmt.format(asset)}',
+                                wp.hidden,
+                              ),
+                            ),
+                            const SizedBox(width: 24),
+                            _HeaderStat(
                               label: 'Debt',
-                              value:
-                                  _mask('RM ${fmt.format(debt)}', wp.hidden)),
-                        ]),
+                              value: _mask('RM ${fmt.format(debt)}', wp.hidden),
+                            ),
+                          ],
+                        ),
                       ],
                     ),
                   ),
@@ -119,51 +128,59 @@ class _WalletScreenState extends State<WalletScreen> {
           SliverPadding(
             padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
             sliver: SliverList(
-              delegate: SliverChildBuilderDelegate(
-                (_, i) {
-                  final wallet = wp.wallets[i];
-                  final balance = wp.walletBalance(wallet.id, all);
-                  final color =
-                      Color(int.parse('FF${wallet.colorHex}', radix: 16));
-                  return Dismissible(
-                    key: Key(wallet.id),
-                    direction: wallet.isDefault
-                        ? DismissDirection.none
-                        : DismissDirection.endToStart,
-                    background: Container(
-                      alignment: Alignment.centerRight,
-                      padding: const EdgeInsets.only(right: 20),
-                      margin: const EdgeInsets.only(bottom: 12),
-                      decoration: BoxDecoration(
-                        color: AppColors.budgetRed,
-                        borderRadius: BorderRadius.circular(14),
-                      ),
-                      child: const Icon(Icons.delete, color: Colors.white),
+              delegate: SliverChildBuilderDelegate((_, i) {
+                final wallet = wp.wallets[i];
+                final balance = wp.walletBalance(wallet.id, all);
+                final color = Color(
+                  int.parse('FF${wallet.colorHex}', radix: 16),
+                );
+                return Dismissible(
+                  key: Key(wallet.id),
+                  direction: wallet.isDefault
+                      ? DismissDirection.none
+                      : DismissDirection.endToStart,
+                  background: Container(
+                    alignment: Alignment.centerRight,
+                    padding: const EdgeInsets.only(right: 20),
+                    margin: const EdgeInsets.only(bottom: 12),
+                    decoration: BoxDecoration(
+                      color: AppColors.budgetRed,
+                      borderRadius: BorderRadius.circular(14),
                     ),
-                    confirmDismiss: (_) => showDialog<bool>(
-                      context: context,
-                      builder: (_) => AlertDialog(
-                        title: const Text('Delete Wallet'),
-                        content: Text(
-                            'Delete "${wallet.name}"? All transactions will be moved to Default Account.'),
-                        actions: [
-                          TextButton(
-                              onPressed: () => Navigator.pop(context, false),
-                              child: const Text('Cancel')),
-                          TextButton(
-                              onPressed: () => Navigator.pop(context, true),
-                              child: const Text('Delete',
-                                  style:
-                                      TextStyle(color: AppColors.budgetRed))),
-                        ],
+                    child: const Icon(Icons.delete, color: Colors.white),
+                  ),
+                  confirmDismiss: (_) => showDialog<bool>(
+                    context: context,
+                    builder: (_) => AlertDialog(
+                      title: const Text('Delete Wallet'),
+                      content: Text(
+                        'Delete "${wallet.name}"? All transactions will be moved to Default Account.',
                       ),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.pop(context, false),
+                          child: const Text('Cancel'),
+                        ),
+                        TextButton(
+                          onPressed: () => Navigator.pop(context, true),
+                          child: const Text(
+                            'Delete',
+                            style: TextStyle(color: AppColors.budgetRed),
+                          ),
+                        ),
+                      ],
                     ),
-                    onDismissed: (_) async {
-                      await context.read<WalletProvider>().deleteWallet(wallet.id);
-                      if (context.mounted) {
-                        await context.read<ExpenseProvider>().load();
-                      }
-                    },
+                  ),
+                  onDismissed: (_) async {
+                    await context.read<WalletProvider>().deleteWallet(
+                      wallet.id,
+                    );
+                    if (context.mounted) {
+                      await context.read<ExpenseProvider>().load();
+                    }
+                  },
+                  child: GestureDetector(
+                    onTap: () => _showWalletActions(wallet),
                     child: Container(
                       margin: const EdgeInsets.only(bottom: 12),
                       padding: const EdgeInsets.all(16),
@@ -172,69 +189,102 @@ class _WalletScreenState extends State<WalletScreen> {
                         borderRadius: BorderRadius.circular(14),
                         boxShadow: [
                           BoxShadow(
-                              color: Colors.black.withValues(alpha: 0.05),
-                              blurRadius: 6,
-                              offset: const Offset(0, 2))
+                            color: Colors.black.withValues(alpha: 0.05),
+                            blurRadius: 6,
+                            offset: const Offset(0, 2),
+                          ),
                         ],
                       ),
-                      child: Row(children: [
-                        Container(
-                          width: 44,
-                          height: 44,
-                          decoration: BoxDecoration(
-                            color: color.withValues(alpha: 0.15),
-                            borderRadius: BorderRadius.circular(12),
+                      child: Row(
+                        children: [
+                          Container(
+                            width: 44,
+                            height: 44,
+                            decoration: BoxDecoration(
+                              color: color.withValues(alpha: 0.15),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Center(
+                              child: Text(
+                                wallet.icon,
+                                style: const TextStyle(fontSize: 22),
+                              ),
+                            ),
                           ),
-                          child: Center(
-                            child: Text(wallet.icon,
-                                style: const TextStyle(fontSize: 22)),
-                          ),
-                        ),
-                        const SizedBox(width: 14),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(wallet.name,
+                          const SizedBox(width: 14),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  wallet.name,
                                   style: const TextStyle(
-                                      fontWeight: FontWeight.w600,
-                                      fontSize: 15)),
+                                    fontWeight: FontWeight.w600,
+                                    fontSize: 15,
+                                  ),
+                                ),
+                                Row(
+                                  children: [
+                                    Text(
+                                      wallet.isDefault ? 'Default' : 'MYR',
+                                      style: const TextStyle(
+                                        color: AppColors.textSecondary,
+                                        fontSize: 12,
+                                      ),
+                                    ),
+                                    if (wallet.id ==
+                                        (wp.preferredWalletId ??
+                                            'default_account')) ...[
+                                      const SizedBox(width: 6),
+                                      const Icon(
+                                        Icons.star,
+                                        size: 12,
+                                        color: Colors.amber,
+                                      ),
+                                      const Text(
+                                        ' Preferred',
+                                        style: TextStyle(
+                                          color: Colors.amber,
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                      ),
+                                    ],
+                                  ],
+                                ),
+                              ],
+                            ),
+                          ),
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.end,
+                            children: [
                               Text(
-                                wallet.isDefault ? 'Default' : 'MYR',
+                                wp.hidden
+                                    ? 'RM ****'
+                                    : 'RM ${fmt.format(balance)}',
+                                style: TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 15,
+                                  color: balance >= 0
+                                      ? AppColors.textPrimary
+                                      : AppColors.budgetRed,
+                                ),
+                              ),
+                              Text(
+                                'MYR (1.0000)',
                                 style: const TextStyle(
-                                    color: AppColors.textSecondary,
-                                    fontSize: 12),
+                                  color: AppColors.textSecondary,
+                                  fontSize: 11,
+                                ),
                               ),
                             ],
                           ),
-                        ),
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.end,
-                          children: [
-                            Text(
-                              wp.hidden
-                                  ? 'RM ****'
-                                  : 'RM ${fmt.format(balance)}',
-                              style: TextStyle(
-                                fontWeight: FontWeight.bold,
-                                fontSize: 15,
-                                color: balance >= 0
-                                    ? AppColors.textPrimary
-                                    : AppColors.budgetRed,
-                              ),
-                            ),
-                            Text('MYR (1.0000)',
-                                style: const TextStyle(
-                                    color: AppColors.textSecondary,
-                                    fontSize: 11)),
-                          ],
-                        ),
-                      ]),
+                        ],
+                      ),
                     ),
-                  );
-                },
-                childCount: wp.wallets.length,
-              ),
+                  ),
+                );
+              }, childCount: wp.wallets.length),
             ),
           ),
 
@@ -250,19 +300,23 @@ class _WalletScreenState extends State<WalletScreen> {
                     color: Colors.white,
                     borderRadius: BorderRadius.circular(14),
                     border: Border.all(
-                        color: AppColors.primary.withValues(alpha: 0.4),
-                        width: 1.5),
+                      color: AppColors.primary.withValues(alpha: 0.4),
+                      width: 1.5,
+                    ),
                   ),
                   child: const Row(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
                       Icon(Icons.add, color: AppColors.primary, size: 20),
                       SizedBox(width: 8),
-                      Text('Add Wallet',
-                          style: TextStyle(
-                              color: AppColors.primary,
-                              fontWeight: FontWeight.w600,
-                              fontSize: 14)),
+                      Text(
+                        'Add Wallet',
+                        style: TextStyle(
+                          color: AppColors.primary,
+                          fontWeight: FontWeight.w600,
+                          fontSize: 14,
+                        ),
+                      ),
                     ],
                   ),
                 ),
@@ -292,38 +346,65 @@ class _WalletScreenState extends State<WalletScreen> {
     ];
 
     final colors = [
-      '3B82F6', '27AE60', 'F39C12', 'E74C3C',
-      '8E44AD', '2980B9', '003087', 'F7C700',
-      'E2001A', 'FF6B35', 'EE4D2D', '00B14F',
+      '3B82F6',
+      '27AE60',
+      'F39C12',
+      'E74C3C',
+      '8E44AD',
+      '2980B9',
+      '003087',
+      'F7C700',
+      'E2001A',
+      'FF6B35',
+      'EE4D2D',
+      '00B14F',
     ];
 
     final iconSuggestions = [
-      '💳', '💵', '🏦', '📱', '🛍️', '🟢',
-      '⚡', '💰', '🪙', '💎', '🏧', '📲',
+      '💳',
+      '💵',
+      '🏦',
+      '📱',
+      '🛍️',
+      '🟢',
+      '⚡',
+      '💰',
+      '🪙',
+      '💎',
+      '🏧',
+      '📲',
     ];
 
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setSheet) => Padding(
           padding: EdgeInsets.fromLTRB(
-              24, 24, 24, MediaQuery.of(ctx).viewInsets.bottom + 24),
+            24,
+            24,
+            24,
+            MediaQuery.of(ctx).viewInsets.bottom + 24,
+          ),
           child: SingleChildScrollView(
             child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text('Add Wallet',
-                    style:
-                        TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                const Text(
+                  'Add Wallet',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                ),
                 const SizedBox(height: 16),
 
                 // Quick templates
-                const Text('Quick add',
-                    style: TextStyle(fontWeight: FontWeight.w500)),
+                const Text(
+                  'Quick add',
+                  style: TextStyle(fontWeight: FontWeight.w500),
+                ),
                 const SizedBox(height: 8),
                 Wrap(
                   spacing: 8,
@@ -338,19 +419,28 @@ class _WalletScreenState extends State<WalletScreen> {
                       }),
                       child: Container(
                         padding: const EdgeInsets.symmetric(
-                            horizontal: 12, vertical: 6),
+                          horizontal: 12,
+                          vertical: 6,
+                        ),
                         decoration: BoxDecoration(
                           color: Colors.grey.shade100,
                           borderRadius: BorderRadius.circular(20),
                           border: Border.all(color: Colors.grey.shade300),
                         ),
-                        child: Row(mainAxisSize: MainAxisSize.min, children: [
-                          Text(t['icon']!,
-                              style: const TextStyle(fontSize: 15)),
-                          const SizedBox(width: 6),
-                          Text(t['name']!,
-                              style: const TextStyle(fontSize: 13)),
-                        ]),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              t['icon']!,
+                              style: const TextStyle(fontSize: 15),
+                            ),
+                            const SizedBox(width: 6),
+                            Text(
+                              t['name']!,
+                              style: const TextStyle(fontSize: 13),
+                            ),
+                          ],
+                        ),
                       ),
                     );
                   }).toList(),
@@ -359,14 +449,15 @@ class _WalletScreenState extends State<WalletScreen> {
 
                 TextField(
                   controller: nameCtrl,
-                  decoration:
-                      const InputDecoration(labelText: 'Wallet name'),
+                  decoration: const InputDecoration(labelText: 'Wallet name'),
                 ),
                 const SizedBox(height: 16),
 
                 // Icon
-                const Text('Icon',
-                    style: TextStyle(fontWeight: FontWeight.w500)),
+                const Text(
+                  'Icon',
+                  style: TextStyle(fontWeight: FontWeight.w500),
+                ),
                 const SizedBox(height: 8),
                 TextField(
                   controller: iconCtrl,
@@ -377,9 +468,12 @@ class _WalletScreenState extends State<WalletScreen> {
                     helperText: 'Type any emoji from your keyboard',
                     helperStyle: const TextStyle(fontSize: 11),
                     contentPadding: const EdgeInsets.symmetric(
-                        vertical: 10, horizontal: 12),
+                      vertical: 10,
+                      horizontal: 12,
+                    ),
                     border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(8)),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
                   ),
                   onChanged: (val) {
                     final t = val.trim();
@@ -406,13 +500,15 @@ class _WalletScreenState extends State<WalletScreen> {
                               : Colors.grey.shade100,
                           borderRadius: BorderRadius.circular(8),
                           border: sel
-                              ? Border.all(
-                                  color: AppColors.primary, width: 2)
+                              ? Border.all(color: AppColors.primary, width: 2)
                               : null,
                         ),
                         child: Center(
-                            child: Text(icon,
-                                style: const TextStyle(fontSize: 20))),
+                          child: Text(
+                            icon,
+                            style: const TextStyle(fontSize: 20),
+                          ),
+                        ),
                       ),
                     );
                   }).toList(),
@@ -420,8 +516,10 @@ class _WalletScreenState extends State<WalletScreen> {
                 const SizedBox(height: 16),
 
                 // Color
-                const Text('Colour',
-                    style: TextStyle(fontWeight: FontWeight.w500)),
+                const Text(
+                  'Colour',
+                  style: TextStyle(fontWeight: FontWeight.w500),
+                ),
                 const SizedBox(height: 8),
                 Wrap(
                   spacing: 8,
@@ -438,8 +536,7 @@ class _WalletScreenState extends State<WalletScreen> {
                           color: color,
                           shape: BoxShape.circle,
                           border: sel
-                              ? Border.all(
-                                  color: Colors.black54, width: 3)
+                              ? Border.all(color: Colors.black54, width: 3)
                               : null,
                         ),
                       ),
@@ -473,6 +570,260 @@ class _WalletScreenState extends State<WalletScreen> {
       ),
     );
   }
+
+  void _showWalletActions(WalletModel wallet) {
+    final wp = context.read<WalletProvider>();
+    final isPreferred =
+        wallet.id == (wp.preferredWalletId ?? 'default_account');
+
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 8),
+            ListTile(
+              leading: Text(wallet.icon, style: const TextStyle(fontSize: 22)),
+              title: Text(
+                wallet.name,
+                style: const TextStyle(fontWeight: FontWeight.w600),
+              ),
+            ),
+            const Divider(height: 1),
+            ListTile(
+              leading: const Icon(Icons.swap_horiz, color: AppColors.primary),
+              title: const Text('Transfer Money'),
+              onTap: () {
+                Navigator.pop(ctx);
+                _showTransferSheet(initialFrom: wallet);
+              },
+            ),
+            ListTile(
+              leading: Icon(
+                isPreferred ? Icons.star : Icons.star_border,
+                color: isPreferred ? Colors.amber : AppColors.textSecondary,
+              ),
+              title: Text(
+                isPreferred ? 'Preferred Wallet' : 'Set as Preferred Wallet',
+              ),
+              subtitle: const Text('Auto-selected when adding a new record'),
+              onTap: isPreferred
+                  ? null
+                  : () async {
+                      await context.read<WalletProvider>().setPreferredWallet(
+                        wallet.id,
+                      );
+                      if (ctx.mounted) Navigator.pop(ctx);
+                    },
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showTransferSheet({WalletModel? initialFrom}) {
+    final wp = context.read<WalletProvider>();
+    if (wp.wallets.length < 2) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Add another wallet first to transfer between wallets'),
+        ),
+      );
+      return;
+    }
+
+    WalletModel fromWallet = initialFrom ?? wp.wallets.first;
+    WalletModel toWallet = wp.wallets.firstWhere((w) => w.id != fromWallet.id);
+    final amountCtrl = TextEditingController();
+    final noteCtrl = TextEditingController();
+    bool saving = false;
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheet) {
+          final others = wp.wallets
+              .where((w) => w.id != fromWallet.id)
+              .toList();
+          if (!others.any((w) => w.id == toWallet.id)) {
+            toWallet = others.first;
+          }
+          return Padding(
+            padding: EdgeInsets.fromLTRB(
+              24,
+              24,
+              24,
+              MediaQuery.of(ctx).viewInsets.bottom + 24,
+            ),
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Transfer Money',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 16),
+                  const Text(
+                    'From',
+                    style: TextStyle(fontWeight: FontWeight.w500),
+                  ),
+                  const SizedBox(height: 8),
+                  DropdownButtonFormField<WalletModel>(
+                    initialValue: fromWallet,
+                    decoration: InputDecoration(
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                    ),
+                    items: wp.wallets
+                        .map(
+                          (w) => DropdownMenuItem(
+                            value: w,
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(w.icon),
+                                const SizedBox(width: 8),
+                                Text(w.name),
+                              ],
+                            ),
+                          ),
+                        )
+                        .toList(),
+                    onChanged: (v) => setSheet(() => fromWallet = v!),
+                  ),
+                  const SizedBox(height: 16),
+                  const Text(
+                    'To',
+                    style: TextStyle(fontWeight: FontWeight.w500),
+                  ),
+                  const SizedBox(height: 8),
+                  DropdownButtonFormField<WalletModel>(
+                    initialValue: toWallet,
+                    decoration: InputDecoration(
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                    ),
+                    items: others
+                        .map(
+                          (w) => DropdownMenuItem(
+                            value: w,
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(w.icon),
+                                const SizedBox(width: 8),
+                                Text(w.name),
+                              ],
+                            ),
+                          ),
+                        )
+                        .toList(),
+                    onChanged: (v) => setSheet(() => toWallet = v!),
+                  ),
+                  const SizedBox(height: 16),
+                  TextField(
+                    controller: amountCtrl,
+                    keyboardType: const TextInputType.numberWithOptions(
+                      decimal: true,
+                    ),
+                    decoration: const InputDecoration(
+                      labelText: 'Amount (RM)',
+                      prefixText: 'RM ',
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  TextField(
+                    controller: noteCtrl,
+                    decoration: const InputDecoration(
+                      labelText: 'Note (optional)',
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton(
+                      onPressed: saving
+                          ? null
+                          : () async {
+                              final amount = double.tryParse(amountCtrl.text);
+                              if (amount == null || amount <= 0) {
+                                ScaffoldMessenger.of(ctx).showSnackBar(
+                                  const SnackBar(
+                                    content: Text('Enter a valid amount'),
+                                  ),
+                                );
+                                return;
+                              }
+                              if (fromWallet.id == toWallet.id) {
+                                ScaffoldMessenger.of(ctx).showSnackBar(
+                                  const SnackBar(
+                                    content: Text(
+                                      'Choose two different wallets',
+                                    ),
+                                  ),
+                                );
+                                return;
+                              }
+                              setSheet(() => saving = true);
+                              try {
+                                final userId = context
+                                    .read<AuthProvider>()
+                                    .userId;
+                                await context.read<WalletProvider>().transfer(
+                                  userId: userId,
+                                  fromWalletId: fromWallet.id,
+                                  toWalletId: toWallet.id,
+                                  amount: amount,
+                                  expenseProvider: context
+                                      .read<ExpenseProvider>(),
+                                  note: noteCtrl.text.trim(),
+                                );
+                                if (ctx.mounted) Navigator.pop(ctx);
+                              } catch (e) {
+                                setSheet(() => saving = false);
+                                if (ctx.mounted) {
+                                  ScaffoldMessenger.of(ctx).showSnackBar(
+                                    SnackBar(
+                                      content: Text('Transfer failed: $e'),
+                                    ),
+                                  );
+                                }
+                              }
+                            },
+                      child: saving
+                          ? const SizedBox(
+                              height: 20,
+                              width: 20,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.white,
+                              ),
+                            )
+                          : const Text('Transfer'),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
 }
 
 class _HeaderStat extends StatelessWidget {
@@ -482,15 +833,17 @@ class _HeaderStat extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(label,
-              style: const TextStyle(color: Colors.white60, fontSize: 11)),
-          Text(value,
-              style: const TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.w600,
-                  fontSize: 13)),
-        ],
-      );
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Text(label, style: const TextStyle(color: Colors.white60, fontSize: 11)),
+      Text(
+        value,
+        style: const TextStyle(
+          color: Colors.white,
+          fontWeight: FontWeight.w600,
+          fontSize: 13,
+        ),
+      ),
+    ],
+  );
 }

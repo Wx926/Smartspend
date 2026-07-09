@@ -1,4 +1,6 @@
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import '../providers/location_provider.dart';
@@ -7,6 +9,7 @@ import '../services/osm_service.dart';
 import '../../../features/auth/providers/auth_provider.dart';
 import '../../../features/budget/providers/budget_provider.dart';
 import '../../../shared/models/budget_model.dart';
+import '../../../shared/models/category_model.dart';
 import '../../../shared/models/location_model.dart';
 import '../../../shared/theme/app_colors.dart';
 
@@ -74,6 +77,45 @@ class _LocationScreenState extends State<LocationScreen> {
     );
   }
 
+  // Radius (much wider than the 100m geofence match) for showing other
+  // saved spots on the radar as context — e.g. a cafe next to the mall
+  // you're confirmed at, or another venue a few streets over. Purely
+  // informational, doesn't affect which location is actually matched or
+  // which one gets alerts, so it's fine to be generous.
+  static const double _otherNearbyRadiusMeters = 1000;
+  static const int _maxOtherNearby = 3;
+
+  /// Up to [_maxOtherNearby] other saved locations near [center], nearest
+  /// first, each paired with its compass bearing from [center] for
+  /// positioning on the radar.
+  List<(LocationModel, double)> _nearestOthers(
+    LocationModel center,
+    List<LocationModel> all,
+  ) {
+    final others =
+        all
+            .where((l) => l.id != center.id)
+            .map((l) {
+              final dist = Geolocator.distanceBetween(
+                center.latitude,
+                center.longitude,
+                l.latitude,
+                l.longitude,
+              );
+              final bearing = Geolocator.bearingBetween(
+                center.latitude,
+                center.longitude,
+                l.latitude,
+                l.longitude,
+              );
+              return (l, dist, bearing);
+            })
+            .where((t) => t.$2 <= _otherNearbyRadiusMeters)
+            .toList()
+          ..sort((a, b) => a.$2.compareTo(b.$2));
+    return others.take(_maxOtherNearby).map((t) => (t.$1, t.$3)).toList();
+  }
+
   // ── Nearby view — shown when user is at a known location ──────────────────
   Widget _buildNearbyView(
     BuildContext context,
@@ -83,6 +125,7 @@ class _LocationScreenState extends State<LocationScreen> {
   ) {
     final fmt = NumberFormat('#,##0.00', 'en_MY');
     final userId = context.read<AuthProvider>().userId;
+    final otherNearby = _nearestOthers(loc, lp.locations);
 
     return Column(
       children: [
@@ -204,6 +247,15 @@ class _LocationScreenState extends State<LocationScreen> {
                               ],
                             ),
                           ),
+                          // Other saved spots nearby, placed on successive
+                          // rings (nearest = innermost) at their real
+                          // compass bearing from the confirmed location.
+                          for (int i = 0; i < otherNearby.length; i++)
+                            ..._buildOtherLocationDot(
+                              otherNearby[i].$1,
+                              otherNearby[i].$2,
+                              ring: i + 1,
+                            ),
                         ],
                       ),
                     ),
@@ -547,6 +599,62 @@ class _LocationScreenState extends State<LocationScreen> {
       builder: (ctx) => _AddLocationSheet(userId: userId),
     );
   }
+
+  /// A small dot + name label for another nearby saved location, placed on
+  /// the [ring]-th radar ring (matches _RadarPainter's 200x120 rings, 1-3)
+  /// at [bearing] degrees from the confirmed location at the center.
+  List<Widget> _buildOtherLocationDot(
+    LocationModel other,
+    double bearing, {
+    required int ring,
+  }) {
+    const centerX = 100.0, centerY = 60.0;
+    final rx = 100 * ring / 3;
+    final ry = 60 * ring / 3;
+    final bearingRad = bearing * math.pi / 180;
+    final dx = rx * math.sin(bearingRad);
+    final dy = -ry * math.cos(bearingRad);
+    const color = Color(
+      0xFFFFA726,
+    ); // orange — distinct from the green "you are here" dot
+
+    return [
+      Positioned(
+        left: centerX + dx - 5,
+        top: centerY + dy - 5,
+        child: Container(
+          width: 10,
+          height: 10,
+          decoration: const BoxDecoration(
+            color: color,
+            shape: BoxShape.circle,
+            border: Border.fromBorderSide(
+              BorderSide(color: Colors.white, width: 1.5),
+            ),
+          ),
+        ),
+      ),
+      Positioned(
+        left: (centerX + dx - 40).clamp(0, 200 - 80).toDouble(),
+        top: centerY + dy + (dy >= 0 ? 8 : -20),
+        child: SizedBox(
+          width: 80,
+          child: Text(
+            other.name,
+            textAlign: TextAlign.center,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 9,
+              fontWeight: FontWeight.w600,
+              shadows: [Shadow(color: Colors.black45, blurRadius: 3)],
+            ),
+          ),
+        ),
+      ),
+    ];
+  }
 }
 
 class _AddLocationSheet extends StatefulWidget {
@@ -598,7 +706,7 @@ class _AddLocationSheetState extends State<_AddLocationSheet> {
     String name, {
     double? lat,
     double? lon,
-    String? categoryHint,
+    List<String> categoryIds = const [],
   }) async {
     if (name.trim().isEmpty) return;
     // Capture before Navigator.pop unmounts this widget
@@ -623,8 +731,15 @@ class _AddLocationSheetState extends State<_AddLocationSheet> {
       name: name.trim(),
       latitude: saveLat,
       longitude: saveLon,
-      categoryHint: categoryHint,
+      categoryIds: categoryIds,
     );
+
+    // A brand-new location has never been confirmed, so it wouldn't show
+    // the radar preview until the next natural dwell (or a manual refresh)
+    // — force one now so it appears immediately if the user is there.
+    if (lp.isTracking) {
+      await lp.refresh(widget.userId);
+    }
 
     messenger.showSnackBar(
       SnackBar(
@@ -742,7 +857,7 @@ class _AddLocationSheetState extends State<_AddLocationSheet> {
                       p.name,
                       lat: p.latitude,
                       lon: p.longitude,
-                      categoryHint: OsmService.toExpenseCategory(p.category),
+                      categoryIds: [OsmService.toExpenseCategoryId(p.category)],
                     ),
                   );
                 },
@@ -783,136 +898,509 @@ class _LocationTile extends StatelessWidget {
   const _LocationTile({required this.location});
 
   @override
-  Widget build(BuildContext context) => Dismissible(
-    key: Key(location.id),
-    direction: DismissDirection.endToStart,
-    background: Container(
-      alignment: Alignment.centerRight,
-      padding: const EdgeInsets.only(right: 20),
-      margin: const EdgeInsets.only(bottom: 8),
-      decoration: BoxDecoration(
-        color: AppColors.budgetRed,
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: const Icon(Icons.delete, color: Colors.white),
-    ),
-    confirmDismiss: (_) => showDialog<bool>(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('Remove Location'),
-        content: Text(
-          'Remove "${location.name}"? The app will no longer detect this spot.',
+  Widget build(BuildContext context) {
+    final cats = context.watch<BudgetProvider>().categories;
+    return Dismissible(
+      key: Key(location.id),
+      direction: DismissDirection.endToStart,
+      background: Container(
+        alignment: Alignment.centerRight,
+        padding: const EdgeInsets.only(right: 20),
+        margin: const EdgeInsets.only(bottom: 8),
+        decoration: BoxDecoration(
+          color: AppColors.budgetRed,
+          borderRadius: BorderRadius.circular(12),
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
+        child: const Icon(Icons.delete, color: Colors.white),
+      ),
+      confirmDismiss: (_) => showDialog<bool>(
+        context: context,
+        builder: (_) => AlertDialog(
+          title: const Text('Remove Location'),
+          content: Text(
+            'Remove "${location.name}"? The app will no longer detect this spot.',
           ),
-          TextButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text(
-              'Remove',
-              style: TextStyle(color: AppColors.budgetRed),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel'),
             ),
-          ),
-        ],
-      ),
-    ),
-    onDismissed: (_) =>
-        context.read<LocationProvider>().deleteLocation(location.id),
-    child: Card(
-      margin: const EdgeInsets.only(bottom: 8),
-      child: ListTile(
-        leading: CircleAvatar(
-          backgroundColor: AppColors.primarySurface,
-          child: const Icon(Icons.location_on, color: AppColors.primary),
-        ),
-        title: Row(
-          children: [
-            Flexible(
-              child: Text(
-                location.name,
-                style: const TextStyle(fontWeight: FontWeight.w600),
-                overflow: TextOverflow.ellipsis,
+            TextButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text(
+                'Remove',
+                style: TextStyle(color: AppColors.budgetRed),
               ),
             ),
-            if (location.isRoutine) ...[
-              const SizedBox(width: 6),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                decoration: BoxDecoration(
-                  color: AppColors.primarySurface,
-                  borderRadius: BorderRadius.circular(6),
+          ],
+        ),
+      ),
+      onDismissed: (_) =>
+          context.read<LocationProvider>().deleteLocation(location.id),
+      child: Card(
+        margin: const EdgeInsets.only(bottom: 8),
+        child: ListTile(
+          leading: CircleAvatar(
+            backgroundColor: AppColors.primarySurface,
+            child: const Icon(Icons.location_on, color: AppColors.primary),
+          ),
+          title: Row(
+            children: [
+              Flexible(
+                child: Text(
+                  location.name,
+                  style: const TextStyle(fontWeight: FontWeight.w600),
+                  overflow: TextOverflow.ellipsis,
                 ),
-                child: const Text(
-                  'Routine',
-                  style: TextStyle(
-                    color: AppColors.primary,
-                    fontSize: 10,
-                    fontWeight: FontWeight.bold,
+              ),
+              if (location.effectiveIsRoutine) ...[
+                const SizedBox(width: 6),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 6,
+                    vertical: 2,
+                  ),
+                  decoration: BoxDecoration(
+                    color: AppColors.primarySurface,
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Text(
+                    location.routineOverride == true ? 'Home/Work' : 'Routine',
+                    style: const TextStyle(
+                      color: AppColors.primary,
+                      fontSize: 10,
+                      fontWeight: FontWeight.bold,
+                    ),
                   ),
                 ),
+              ],
+            ],
+          ),
+          subtitle: Text(
+            location.address ??
+                '${location.latitude.toStringAsFixed(4)}, ${location.longitude.toStringAsFixed(4)}',
+            style: const TextStyle(
+              fontSize: 12,
+              color: AppColors.textSecondary,
+            ),
+          ),
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                '${location.visitCount} visits',
+                style: const TextStyle(
+                  color: AppColors.textSecondary,
+                  fontSize: 12,
+                ),
+              ),
+              const SizedBox(width: 4),
+              IconButton(
+                icon: const Icon(
+                  Icons.more_vert,
+                  color: AppColors.textSecondary,
+                  size: 20,
+                ),
+                tooltip: 'Location settings',
+                onPressed: () => _showLocationSettings(context, location, cats),
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(),
+              ),
+              IconButton(
+                icon: const Icon(
+                  Icons.delete_outline,
+                  color: AppColors.budgetRed,
+                  size: 20,
+                ),
+                onPressed: () async {
+                  final confirm = await showDialog<bool>(
+                    context: context,
+                    builder: (_) => AlertDialog(
+                      title: const Text('Remove Location'),
+                      content: Text(
+                        'Remove "${location.name}"? The app will no longer detect this spot.',
+                      ),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.pop(context, false),
+                          child: const Text('Cancel'),
+                        ),
+                        TextButton(
+                          onPressed: () => Navigator.pop(context, true),
+                          child: const Text(
+                            'Remove',
+                            style: TextStyle(color: AppColors.budgetRed),
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                  if (confirm == true && context.mounted) {
+                    context.read<LocationProvider>().deleteLocation(
+                      location.id,
+                    );
+                  }
+                },
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(),
               ),
             ],
-          ],
+          ),
         ),
-        subtitle: Text(
-          location.address ??
-              '${location.latitude.toStringAsFixed(4)}, ${location.longitude.toStringAsFixed(4)}',
-          style: const TextStyle(fontSize: 12, color: AppColors.textSecondary),
-        ),
-        trailing: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              '${location.visitCount} visits',
-              style: const TextStyle(
-                color: AppColors.textSecondary,
-                fontSize: 12,
-              ),
-            ),
-            const SizedBox(width: 4),
-            IconButton(
-              icon: const Icon(
-                Icons.delete_outline,
-                color: AppColors.budgetRed,
-                size: 20,
-              ),
-              onPressed: () async {
-                final confirm = await showDialog<bool>(
-                  context: context,
-                  builder: (_) => AlertDialog(
-                    title: const Text('Remove Location'),
-                    content: Text(
-                      'Remove "${location.name}"? The app will no longer detect this spot.',
-                    ),
-                    actions: [
-                      TextButton(
-                        onPressed: () => Navigator.pop(context, false),
-                        child: const Text('Cancel'),
-                      ),
-                      TextButton(
-                        onPressed: () => Navigator.pop(context, true),
-                        child: const Text(
-                          'Remove',
-                          style: TextStyle(color: AppColors.budgetRed),
+      ),
+    );
+  }
+
+  // Locations saved via "enter manually" have no category, so Algorithm 3
+  // can never tell which budget is relevant here — let the user assign one
+  // (or several — a mall can be both Shopping and Food) after the fact.
+  // Uses the user's actual categories (defaults + custom, e.g. "gym"), not
+  // a fixed list, and stays editable even for system-suggested categories.
+  void _showLocationSettings(
+    BuildContext context,
+    LocationModel location,
+    List<CategoryModel> allCategories,
+  ) {
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) {
+        final categoryNames = location.categoryIds
+            .map((id) => allCategories.where((c) => c.id == id).firstOrNull)
+            .whereType<CategoryModel>()
+            .toList();
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 20, 20, 20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Location Settings',
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  location.name,
+                  style: const TextStyle(
+                    color: AppColors.textSecondary,
+                    fontSize: 13,
+                  ),
+                ),
+                const SizedBox(height: 20),
+                Row(
+                  children: [
+                    const Expanded(
+                      child: Text(
+                        'Category',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w600,
+                          fontSize: 14,
                         ),
                       ),
-                    ],
+                    ),
+                    TextButton.icon(
+                      onPressed: () {
+                        Navigator.pop(ctx);
+                        _showCategoryPicker(context, location, allCategories);
+                      },
+                      icon: const Icon(Icons.edit_outlined, size: 16),
+                      label: const Text('Edit'),
+                      style: TextButton.styleFrom(
+                        padding: EdgeInsets.zero,
+                        minimumSize: const Size(0, 0),
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                if (categoryNames.isEmpty)
+                  const Text(
+                    'No category set — alerts can\'t run here yet.',
+                    style: TextStyle(fontSize: 13, color: AppColors.budgetRed),
+                  )
+                else
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 6,
+                    children: categoryNames.map((c) {
+                      return Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 6,
+                        ),
+                        decoration: BoxDecoration(
+                          color: AppColors.primary.withValues(alpha: 0.1),
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(c.icon, style: const TextStyle(fontSize: 13)),
+                            const SizedBox(width: 4),
+                            Text(
+                              c.name,
+                              style: const TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                                color: AppColors.primary,
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                    }).toList(),
                   ),
-                );
-                if (confirm == true && context.mounted) {
-                  context.read<LocationProvider>().deleteLocation(location.id);
-                }
-              },
-              padding: EdgeInsets.zero,
-              constraints: const BoxConstraints(),
+                const SizedBox(height: 24),
+                const Text(
+                  'Alert behavior',
+                  style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
+                ),
+                const SizedBox(height: 8),
+                _RoutineOptionTile(
+                  icon: Icons.auto_awesome,
+                  title: 'Auto-detect (default)',
+                  subtitle: 'Learn from visit patterns automatically',
+                  selected: location.routineOverride == null,
+                  onTap: () {
+                    context.read<LocationProvider>().setRoutineOverride(
+                      location.id,
+                      null,
+                    );
+                    Navigator.pop(ctx);
+                  },
+                ),
+                _RoutineOptionTile(
+                  icon: Icons.home_outlined,
+                  title: 'Mark as Home/Work',
+                  subtitle: 'Mute alerts here, always',
+                  selected: location.routineOverride == true,
+                  onTap: () {
+                    context.read<LocationProvider>().setRoutineOverride(
+                      location.id,
+                      true,
+                    );
+                    Navigator.pop(ctx);
+                  },
+                ),
+                _RoutineOptionTile(
+                  icon: Icons.notifications_active_outlined,
+                  title: 'Always alert here',
+                  subtitle: 'Never treat as routine',
+                  selected: location.routineOverride == false,
+                  onTap: () {
+                    context.read<LocationProvider>().setRoutineOverride(
+                      location.id,
+                      false,
+                    );
+                    Navigator.pop(ctx);
+                  },
+                ),
+              ],
             ),
+          ),
+        );
+      },
+    );
+  }
+
+  void _showCategoryPicker(
+    BuildContext context,
+    LocationModel location,
+    List<CategoryModel> categories,
+  ) {
+    final selected = Set<String>.from(location.categoryIds);
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheetState) => SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 20, 20, 20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Categories for ${location.name}',
+                  style: const TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 16,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                const Text(
+                  'Pick every category relevant here — a mall might be both Shopping and Food.',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: AppColors.textSecondary,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: categories.map((c) {
+                    final isSelected = selected.contains(c.id);
+                    return GestureDetector(
+                      onTap: () => setSheetState(() {
+                        if (isSelected) {
+                          selected.remove(c.id);
+                        } else {
+                          selected.add(c.id);
+                        }
+                      }),
+                      child: AnimatedContainer(
+                        duration: const Duration(milliseconds: 150),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 14,
+                          vertical: 9,
+                        ),
+                        decoration: BoxDecoration(
+                          color: isSelected
+                              ? AppColors.primary.withValues(alpha: 0.12)
+                              : Colors.white,
+                          borderRadius: BorderRadius.circular(24),
+                          border: Border.all(
+                            color: isSelected
+                                ? AppColors.primary
+                                : const Color(0xFFE0E0E0),
+                            width: isSelected ? 2 : 1,
+                          ),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(c.icon, style: const TextStyle(fontSize: 15)),
+                            const SizedBox(width: 6),
+                            Text(
+                              c.name,
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: isSelected
+                                    ? FontWeight.w600
+                                    : FontWeight.normal,
+                              ),
+                            ),
+                            if (isSelected) ...[
+                              const SizedBox(width: 4),
+                              const Icon(
+                                Icons.check_circle,
+                                size: 16,
+                                color: AppColors.primary,
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                    );
+                  }).toList(),
+                ),
+                const SizedBox(height: 20),
+                ElevatedButton(
+                  onPressed: () {
+                    context.read<LocationProvider>().setCategoryIds(
+                      location.id,
+                      selected.toList(),
+                    );
+                    Navigator.pop(ctx);
+                  },
+                  style: ElevatedButton.styleFrom(
+                    minimumSize: const Size.fromHeight(48),
+                  ),
+                  child: const Text('Done'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _RoutineOptionTile extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _RoutineOptionTile({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      borderRadius: BorderRadius.circular(12),
+      onTap: onTap,
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        decoration: BoxDecoration(
+          color: selected
+              ? AppColors.primary.withValues(alpha: 0.08)
+              : Colors.white,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: selected ? AppColors.primary : const Color(0xFFE0E0E0),
+            width: selected ? 2 : 1,
+          ),
+        ),
+        child: Row(
+          children: [
+            Icon(
+              icon,
+              color: selected ? AppColors.primary : AppColors.textSecondary,
+              size: 20,
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      fontSize: 14,
+                      color: selected
+                          ? AppColors.primary
+                          : AppColors.textPrimary,
+                    ),
+                  ),
+                  Text(
+                    subtitle,
+                    style: const TextStyle(
+                      fontSize: 11,
+                      color: AppColors.textSecondary,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            if (selected)
+              const Icon(
+                Icons.check_circle,
+                color: AppColors.primary,
+                size: 18,
+              ),
           ],
         ),
       ),
-    ),
-  );
+    );
+  }
 }
 
 // Radar rings painter

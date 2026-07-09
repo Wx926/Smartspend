@@ -20,31 +20,36 @@ class ExpenseProvider extends ChangeNotifier {
       .where((e) => e.date.month == month && e.date.year == year)
       .toList();
 
-  /// Only expense records excluding savings_transfer — used for budget calculations.
+  /// Only expense records excluding savings_transfer/wallet_transfer — used for budget calculations.
   List<ExpenseModel> expensesForMonth(int month, int year) => _expenses
-      .where((e) =>
-          e.date.month == month &&
-          e.date.year == year &&
-          e.type == 'expense' &&
-          e.categoryId != 'savings_transfer')
+      .where(
+        (e) =>
+            e.date.month == month &&
+            e.date.year == year &&
+            e.type == 'expense' &&
+            e.categoryId != 'savings_transfer' &&
+            e.categoryId != 'wallet_transfer',
+      )
       .toList();
 
   /// Only income records — used for income display.
   List<ExpenseModel> incomeForMonth(int month, int year) => _expenses
-      .where((e) =>
-          e.date.month == month &&
-          e.date.year == year &&
-          e.type == 'income')
+      .where(
+        (e) =>
+            e.date.month == month && e.date.year == year && e.type == 'income',
+      )
       .toList();
 
   /// Balance for a specific wallet (income - expense for that walletId).
   /// Excludes records with walletId='savings_goal' (goal-funded purchases).
   double walletBalance(String walletId) {
     final relevant = _expenses.where((r) => r.walletId == walletId);
-    final income =
-        relevant.where((r) => r.type == 'income').fold(0.0, (s, r) => s + r.amount);
-    final expense =
-        relevant.where((r) => r.type == 'expense').fold(0.0, (s, r) => s + r.amount);
+    final income = relevant
+        .where((r) => r.type == 'income')
+        .fold(0.0, (s, r) => s + r.amount);
+    final expense = relevant
+        .where((r) => r.type == 'expense')
+        .fold(0.0, (s, r) => s + r.amount);
     return income - expense;
   }
 
@@ -97,14 +102,17 @@ class ExpenseProvider extends ChangeNotifier {
     _expenses.insert(0, expense);
     notifyListeners();
     // Sync to Supabase in background
-    _service.addExpense(expense).then((saved) {
-      final idx = _expenses.indexWhere((e) => e.id == expense.id);
-      if (idx != -1) _expenses[idx] = saved;
-      notifyListeners();
-    }).catchError((_) {
-      _expenses.removeWhere((e) => e.id == expense.id);
-      notifyListeners();
-    });
+    _service
+        .addExpense(expense)
+        .then((saved) {
+          final idx = _expenses.indexWhere((e) => e.id == expense.id);
+          if (idx != -1) _expenses[idx] = saved;
+          notifyListeners();
+        })
+        .catchError((_) {
+          _expenses.removeWhere((e) => e.id == expense.id);
+          notifyListeners();
+        });
     return expense;
   }
 
@@ -113,14 +121,17 @@ class ExpenseProvider extends ChangeNotifier {
     final previous = idx != -1 ? _expenses[idx] : null;
     if (idx != -1) _expenses[idx] = updated;
     notifyListeners();
-    _service.updateExpense(updated).then((saved) {
-      final i = _expenses.indexWhere((e) => e.id == saved.id);
-      if (i != -1) _expenses[i] = saved;
-      notifyListeners();
-    }).catchError((_) {
-      if (previous != null && idx != -1) _expenses[idx] = previous;
-      notifyListeners();
-    });
+    _service
+        .updateExpense(updated)
+        .then((saved) {
+          final i = _expenses.indexWhere((e) => e.id == saved.id);
+          if (i != -1) _expenses[i] = saved;
+          notifyListeners();
+        })
+        .catchError((_) {
+          if (previous != null && idx != -1) _expenses[idx] = previous;
+          notifyListeners();
+        });
   }
 
   Future<void> deleteExpense(String id) async {

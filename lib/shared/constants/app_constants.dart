@@ -13,15 +13,17 @@ class AppConstants {
 
   // Location tracking (Algorithm 1)
   static const double geofenceRadiusMeters = 100.0;
-  static const int dwellTimeMinutes = 15;
+  static const int dwellTimeMinutes = 1;
   static const int locationIntervalSeconds = 30;
 
   // Budget alert thresholds (Algorithm 2 & 3)
   static const double yellowThreshold = 0.80;
   static const double redThreshold = 1.00;
 
-  // Alert cooldown - don't spam same category within 24 hours
-  static const int alertCooldownHours = 24;
+  // Algorithm 3 Step 1/7: per-venue cooldown between repeat alerts, and a
+  // hard daily cap so a long stay at one place can't spam indefinitely.
+  static const int alertCooldownHours = 2;
+  static const int maxAlertsPerVenuePerDay = 100;
 
   static const String appName = 'SmartSpend';
 

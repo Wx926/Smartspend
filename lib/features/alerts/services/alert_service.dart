@@ -4,10 +4,14 @@ import 'package:uuid/uuid.dart';
 import '../../../shared/constants/app_constants.dart';
 import '../../../shared/models/alert_log_model.dart';
 import '../../../shared/models/budget_model.dart';
+import '../../../shared/models/category_model.dart';
 import '../../../shared/models/expense_model.dart';
 import '../../../shared/models/location_model.dart';
 import '../../../shared/services/gemini_service.dart';
 import '../../../shared/services/local_storage_service.dart';
+import '../../../shared/services/navigation_service.dart';
+import '../../budget/services/budget_service.dart';
+import '../../expenses/services/expense_service.dart';
 
 /// Algorithm 3: Smart Alert Trigger.
 ///
@@ -27,19 +31,6 @@ class AlertService {
   bool _notificationsInitialised = false;
   int _notifId = 0;
 
-  // Step 2: which budget categories are relevant at each type of venue.
-  // A venue's categoryHint (set when it was saved) selects this list; a
-  // mall checks both Shopping and Entertainment, a restaurant checks only
-  // Food, etc. Unlisted hints just check their own name.
-  static const Map<String, List<String>> _venueRelevantCategories = {
-    'Food': ['Food'],
-    'Shopping': ['Shopping', 'Entertainment'],
-    'Entertainment': ['Entertainment', 'Shopping'],
-    'Transport': ['Transport'],
-    'Health': ['Health'],
-    'Utilities': ['Utilities'],
-  };
-
   Future<void> initNotifications() async {
     if (_notificationsInitialised) return;
     const androidSettings = AndroidInitializationSettings(
@@ -48,8 +39,24 @@ class AlertService {
     const iosSettings = DarwinInitializationSettings();
     await _notifications.initialize(
       const InitializationSettings(android: androidSettings, iOS: iosSettings),
+      onDidReceiveNotificationResponse: _onNotificationTap,
     );
     _notificationsInitialised = true;
+
+    // Android 13+ requires this runtime permission — declaring it in the
+    // manifest alone isn't enough. Without this, every notification the app
+    // tries to send is silently dropped by the OS, with no error anywhere
+    // in the app's own logs.
+    await _notifications
+        .resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin
+        >()
+        ?.requestNotificationsPermission();
+    await _notifications
+        .resolvePlatformSpecificImplementation<
+          IOSFlutterLocalNotificationsPlugin
+        >()
+        ?.requestPermissions(alert: true, badge: true, sound: true);
   }
 
   Future<List<AlertLogModel>> getAlerts() async => _store.getAlerts();
@@ -58,16 +65,55 @@ class AlertService {
 
   Future<void> markAllRead() => _store.markAllAlertsRead();
 
+  /// Gathers categories/budgets/expenses itself (all plain singletons, no
+  /// BuildContext/Provider needed) and runs [evaluateVenueVisit]. This is
+  /// the entry point the background location service calls — it has no
+  /// widget tree to read Providers from — and is also the single source of
+  /// truth so the foreground app doesn't need its own duplicate wiring.
+  Future<void> checkVenueAndAlert(String userId, LocationModel venue) async {
+    try {
+      final categories = _store.getCategories();
+      final now = DateTime.now();
+      final budgets = await BudgetService.instance.getBudgets(
+        now.month,
+        now.year,
+      );
+      final expenses = await ExpenseService.instance.getExpenses();
+      final allStatuses = BudgetService.instance.computeBudgetStatuses(
+        budgets: budgets,
+        categories: categories,
+        expenses: expenses,
+        forMonth: now,
+      );
+      final venueExpenses = expenses
+          .where((e) => e.locationId == venue.id)
+          .toList();
+
+      await evaluateVenueVisit(
+        userId: userId,
+        venue: venue,
+        categories: categories,
+        allStatuses: allStatuses,
+        venueExpenses: venueExpenses,
+      );
+    } catch (_) {
+      // Background isolate has no UI to surface this to — a transient
+      // network failure here just means this poll cycle's check is skipped;
+      // the next one retries.
+    }
+  }
+
   /// Core algorithm: called once a venue visit is confirmed (dwelled 15min,
   /// or manually force-refreshed) by Algorithm 1. Does nothing for routine
   /// venues (Algorithm 1 Step 3) or venues still in cooldown (Step 1).
   Future<void> evaluateVenueVisit({
     required String userId,
     required LocationModel venue,
+    required List<CategoryModel> categories,
     required List<BudgetStatus> allStatuses,
     required List<ExpenseModel> venueExpenses,
   }) async {
-    if (venue.isRoutine) return;
+    if (venue.effectiveIsRoutine) return;
 
     // Step 1: per-venue cooldown.
     final last = _store.getLastAlertForLocation(venue.id);
@@ -76,16 +122,64 @@ class AlertService {
       if (hoursSince < AppConstants.alertCooldownHours) return;
     }
 
-    // Step 2: only the categories relevant to this venue's type.
-    final relevantNames =
-        _venueRelevantCategories[venue.categoryHint] ??
-        (venue.categoryHint != null ? [venue.categoryHint!] : const []);
-    final relevant = relevantNames.isEmpty
-        ? const <BudgetStatus>[]
-        : allStatuses
-              .where((s) => relevantNames.contains(s.categoryName))
-              .toList();
-    if (relevant.isEmpty) return;
+    // Step 7: hard daily cap — even with the cooldown, a very long stay
+    // shouldn't produce unlimited repeat alerts for the same venue.
+    final sentToday = _store.countAlertsForLocationSince(
+      venue.id,
+      DateTime.now().subtract(const Duration(hours: 24)),
+    );
+    if (sentToday >= AppConstants.maxAlertsPerVenuePerDay) return;
+
+    // Step 2: the categories the user (or the OSM place-type guess) has
+    // actually assigned to this venue — a mall can be tagged with several.
+    if (venue.categoryIds.isEmpty) {
+      // No category set at all (e.g. saved via "enter manually") — nothing
+      // to check, but say so instead of staying silently unexplained.
+      final title = '📍 ${venue.name}';
+      const message =
+          'No category set for this venue, so spending alerts can\'t run here yet. '
+          'Set one from the Nearby screen\'s saved locations list.';
+      final alert = AlertLogModel(
+        id: _uuid.v4(),
+        userId: userId,
+        type: 'location',
+        title: title,
+        message: message,
+        locationId: venue.id,
+        createdAt: DateTime.now(),
+      );
+      await _store.insertAlert(alert);
+      await _pushNotification(title, message, const Color(0xFF1976D2));
+      return;
+    }
+
+    final relevant = allStatuses
+        .where((s) => venue.categoryIds.contains(s.budget.categoryId))
+        .toList();
+
+    if (relevant.isEmpty) {
+      // Recognizable spending categories, but no budget set for any of them
+      // yet — nudge the user instead of staying completely silent.
+      final categoryNames = venue.categoryIds
+          .map((id) => categories.where((c) => c.id == id).firstOrNull?.name)
+          .whereType<String>()
+          .toList();
+      final title = '📍 ${venue.name}';
+      final message =
+          'No ${categoryNames.join('/')} budget set yet. Set one to get spending warnings here.';
+      final alert = AlertLogModel(
+        id: _uuid.v4(),
+        userId: userId,
+        type: 'location',
+        title: title,
+        message: message,
+        locationId: venue.id,
+        createdAt: DateTime.now(),
+      );
+      await _store.insertAlert(alert);
+      await _pushNotification(title, message, const Color(0xFF1976D2));
+      return;
+    }
 
     // Worst severity among the relevant categories decides the overall tier.
     final worst = relevant.reduce(
@@ -105,7 +199,7 @@ class AlertService {
             (s) =>
                 '${s.categoryName}: RM ${s.remaining.toStringAsFixed(2)} left',
           )
-          .join(' · ');
+          .join('\n');
     } else {
       // Step 4-5: Caution/Critical — ask Gemini for a contextual warning.
       type = worst.severity == AlertSeverity.red ? 'red' : 'yellow';
@@ -147,7 +241,7 @@ class AlertService {
     );
 
     await _store.insertAlert(alert);
-    await _pushNotification(title, message, worst.severity);
+    await _pushNotification(title, message, _severityColor(worst.severity));
   }
 
   int _severityRank(AlertSeverity s) => switch (s) {
@@ -162,16 +256,13 @@ class AlertService {
     AlertSeverity.red => 'Critical',
   };
 
-  Future<void> _pushNotification(
-    String title,
-    String body,
-    AlertSeverity severity,
-  ) async {
-    final color = switch (severity) {
-      AlertSeverity.green => const Color(0xFF2ECC71),
-      AlertSeverity.yellow => const Color(0xFFF39C12),
-      AlertSeverity.red => const Color(0xFFE74C3C),
-    };
+  Color _severityColor(AlertSeverity s) => switch (s) {
+    AlertSeverity.green => const Color(0xFF2ECC71),
+    AlertSeverity.yellow => const Color(0xFFF39C12),
+    AlertSeverity.red => const Color(0xFFE74C3C),
+  };
+
+  Future<void> _pushNotification(String title, String body, Color color) async {
     await _notifications.show(
       _notifId++,
       title,
@@ -184,9 +275,35 @@ class AlertService {
           importance: Importance.high,
           priority: Priority.high,
           color: color,
+          styleInformation: BigTextStyleInformation(body, contentTitle: title),
+          actions: const [
+            AndroidNotificationAction(
+              'record_spending',
+              'Record Spending',
+              showsUserInterface: true,
+            ),
+            AndroidNotificationAction(
+              'view_details',
+              'View Details',
+              showsUserInterface: true,
+            ),
+          ],
         ),
         iOS: const DarwinNotificationDetails(),
       ),
     );
+  }
+
+  /// Routes a notification tap — whether on the body or on one of the two
+  /// action buttons — since this runs outside the widget tree and has no
+  /// BuildContext of its own to navigate with.
+  void _onNotificationTap(NotificationResponse response) {
+    final nav = navigatorKey.currentState;
+    if (nav == null) return;
+    if (response.actionId == 'record_spending') {
+      nav.pushNamed('/add-expense');
+    } else {
+      nav.pushNamed('/alerts');
+    }
   }
 }

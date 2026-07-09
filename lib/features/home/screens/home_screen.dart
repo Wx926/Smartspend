@@ -1,13 +1,10 @@
-import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
-import '../../../features/alerts/services/alert_service.dart';
 import '../../../features/auth/providers/auth_provider.dart';
 import '../../../features/budget/providers/budget_provider.dart';
 import '../../../features/expenses/providers/expense_provider.dart';
 import '../../../features/location/providers/location_provider.dart';
-import '../../../features/location/services/location_service.dart';
 import '../../../features/savings_goals/providers/savings_goal_provider.dart';
 import '../../../features/wallet/providers/wallet_provider.dart';
 import '../../../shared/models/budget_model.dart';
@@ -29,44 +26,10 @@ class _HomeScreenState extends State<HomeScreen> {
   DateTime _txEnd = DateTime.now();
   String _filterLabel = 'This Month';
 
-  StreamSubscription<LocationEvent>? _locationEventSub;
-
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) => _load());
-    _locationEventSub = context.read<LocationProvider>().locationEvents.listen(
-      _onLocationEvent,
-    );
-  }
-
-  @override
-  void dispose() {
-    _locationEventSub?.cancel();
-    super.dispose();
-  }
-
-  // Algorithm 3 entry point: fires once per confirmed (dwelled 15min, or
-  // manually refreshed), non-routine venue visit — never on the repeated
-  // "dwell" updates or on leaving.
-  Future<void> _onLocationEvent(LocationEvent event) async {
-    if (event.type != LocationEventType.entered) return;
-    final venue = event.location;
-    if (venue == null || venue.isRoutine) return;
-
-    final bp = context.read<BudgetProvider>();
-    final ep = context.read<ExpenseProvider>();
-    final auth = context.read<AuthProvider>();
-    final venueExpenses = ep.expenses
-        .where((e) => e.locationId == venue.id)
-        .toList();
-
-    await AlertService.instance.evaluateVenueVisit(
-      userId: auth.userId,
-      venue: venue,
-      allStatuses: bp.statuses,
-      venueExpenses: venueExpenses,
-    );
   }
 
   Future<void> _load() async {

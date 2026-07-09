@@ -28,7 +28,7 @@ class LocationService {
   /// Request permission and start polling every
   /// [AppConstants.locationIntervalSeconds] seconds.
   Future<bool> startTracking(String userId) async {
-    final permission = await _requestPermission();
+    final permission = await requestPermission();
     if (!permission) return false;
 
     _timer?.cancel();
@@ -51,7 +51,10 @@ class LocationService {
   /// [AppConstants.dwellTimeMinutes] to pass.
   Future<void> forcePoll(String userId) => _poll(userId, forced: true);
 
-  Future<bool> _requestPermission() async {
+  /// Public so the foreground UI (which has a live Activity to show the OS
+  /// permission dialog) can request it before handing tracking off to the
+  /// background service, which has no Activity of its own to prompt from.
+  Future<bool> requestPermission() async {
     bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
     if (!serviceEnabled) return false;
 
@@ -78,7 +81,10 @@ class LocationService {
 
       final knownLocations = _store.getLocations();
       LocationModel? matched;
+      double matchedDist = double.infinity;
 
+      // Closest match wins, not the first one found — two saved spots can
+      // easily be within range of each other (e.g. a cafe next to a mall).
       for (final loc in knownLocations) {
         final dist = Geolocator.distanceBetween(
           position.latitude,
@@ -86,9 +92,9 @@ class LocationService {
           loc.latitude,
           loc.longitude,
         );
-        if (dist <= AppConstants.geofenceRadiusMeters) {
+        if (dist <= AppConstants.geofenceRadiusMeters && dist < matchedDist) {
           matched = loc;
-          break;
+          matchedDist = dist;
         }
       }
 
@@ -193,7 +199,7 @@ class LocationService {
     String? address,
     required double latitude,
     required double longitude,
-    String? categoryHint,
+    List<String> categoryIds = const [],
   }) async {
     final loc = LocationModel(
       id: _uuid.v4(),
@@ -202,7 +208,7 @@ class LocationService {
       address: address,
       latitude: latitude,
       longitude: longitude,
-      categoryHint: categoryHint,
+      categoryIds: categoryIds,
       createdAt: DateTime.now(),
     );
     return _store.upsertLocation(loc);

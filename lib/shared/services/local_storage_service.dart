@@ -23,6 +23,7 @@ class LocalStorageService {
   static const _keyDeviceId = 'ss_device_id';
   static const _keyCustomCategories = 'ss_custom_categories';
   static const _keyWallets = 'ss_wallets';
+  static const _keyPreferredWallet = 'ss_preferred_wallet_id';
   static const _keyNotificationsEnabled = 'ss_notifications_enabled';
   static const _keyTrackingEnabled = 'ss_tracking_enabled';
   static const _keyRecentReceipts = 'ss_recent_receipts';
@@ -36,6 +37,7 @@ class LocalStorageService {
   // visit-count threshold.
   static const int _routineMinVisits = 5;
   static const int _routineHourWindow = 4;
+  static const int _routineMinDistinctDays = 7;
 
   static final WalletModel _defaultWallet = WalletModel(
     id: 'default_account',
@@ -193,6 +195,13 @@ class LocalStorageService {
     await _saveCustomWallets(all);
   }
 
+  /// The wallet the user has chosen to auto-select when adding a new record.
+  String? get preferredWalletId => _prefs?.getString(_keyPreferredWallet);
+
+  Future<void> setPreferredWalletId(String id) async {
+    await _prefs?.setString(_keyPreferredWallet, id);
+  }
+
   /// Moves all records from [fromId] wallet to [toId] wallet.
   Future<void> reassignWallet(String fromId, String toId) async {
     final all = _loadExpenses();
@@ -341,20 +350,53 @@ class LocalStorageService {
         address: loc.address,
         latitude: loc.latitude,
         longitude: loc.longitude,
-        categoryHint: loc.categoryHint,
+        categoryIds: loc.categoryIds,
         visitCount: loc.visitCount + 1,
         isRoutine: _isRoutinePattern(getLocationHistory(locationId)),
+        routineOverride: loc.routineOverride,
         createdAt: loc.createdAt,
       );
     }
     await _saveLocations(all);
   }
 
-  /// Algorithm 1 Step 3: routine if visited often enough and consistently
-  /// around the same time of day (e.g. every visit between 8am–12pm),
-  /// rather than at scattered, unpredictable hours.
+  /// User correction for Algorithm 1 Step 3 when auto-detection gets it
+  /// wrong — pass null to go back to trusting the auto-detected pattern.
+  Future<void> setRoutineOverride(String locationId, bool? override) async {
+    final all = _loadLocations();
+    final idx = all.indexWhere((l) => l.id == locationId);
+    if (idx >= 0) all[idx] = all[idx].copyWithRoutineOverride(override);
+    await _saveLocations(all);
+  }
+
+  /// Locations saved via "enter manually" never get a category — without
+  /// one, Algorithm 3 has no relevant budget to check and can't alert at
+  /// all here. Lets the user assign one (or several — a mall can be both
+  /// Shopping and Food) after the fact.
+  Future<void> setCategoryIds(
+    String locationId,
+    List<String> categoryIds,
+  ) async {
+    final all = _loadLocations();
+    final idx = all.indexWhere((l) => l.id == locationId);
+    if (idx >= 0) all[idx] = all[idx].copyWithCategoryIds(categoryIds);
+    await _saveLocations(all);
+  }
+
+  /// Algorithm 1 Step 3: routine if visited often enough, on enough
+  /// different days (so a handful of same-day re-visits — like testing —
+  /// can't trigger it), and consistently around the same time of day (e.g.
+  /// every visit between 8am–12pm) rather than at scattered hours.
   bool _isRoutinePattern(List<LocationHistoryModel> history) {
     if (history.length < _routineMinVisits) return false;
+
+    final distinctDays = history
+        .map(
+          (h) => DateTime(h.arrivedAt.year, h.arrivedAt.month, h.arrivedAt.day),
+        )
+        .toSet();
+    if (distinctDays.length < _routineMinDistinctDays) return false;
+
     final hours = history.map((h) => h.arrivedAt.hour).toList()..sort();
     return (hours.last - hours.first) <= _routineHourWindow;
   }
@@ -463,6 +505,14 @@ class LocalStorageService {
         _loadAlerts().where((a) => a.locationId == locationId).toList()
           ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
     return alerts.isEmpty ? null : alerts.first;
+  }
+
+  /// Algorithm 3 Step 7: how many alerts this venue has already sent within
+  /// [window] — used to enforce the daily cap on top of the cooldown.
+  int countAlertsForLocationSince(String locationId, DateTime since) {
+    return _loadAlerts()
+        .where((a) => a.locationId == locationId && a.createdAt.isAfter(since))
+        .length;
   }
 
   Future<AlertLogModel> insertAlert(AlertLogModel alert) async {

@@ -12,7 +12,9 @@ class ExpenseService {
   Future<List<ExpenseModel>> getExpenses({int? month, int? year}) async {
     final all = _local.getExpenses();
     if (month != null && year != null) {
-      return all.where((e) => e.date.month == month && e.date.year == year).toList();
+      return all
+          .where((e) => e.date.month == month && e.date.year == year)
+          .toList();
     }
     return all;
   }
@@ -30,11 +32,15 @@ class ExpenseService {
   }
 
   Future<void> _syncInsert(ExpenseModel e) async {
-    try { await _supabase.insertExpense(e); } catch (_) {}
+    try {
+      await _supabase.insertExpense(e);
+    } catch (_) {}
   }
 
   Future<void> _syncUpdate(ExpenseModel e) async {
-    try { await _supabase.updateExpense(e); } catch (_) {}
+    try {
+      await _supabase.updateExpense(e);
+    } catch (_) {}
   }
 
   Future<void> deleteExpense(String id) async {
@@ -43,12 +49,18 @@ class ExpenseService {
   }
 
   Map<String, double> getCategoryTotals(
-      List<ExpenseModel> expenses, int month, int year) {
+    List<ExpenseModel> expenses,
+    int month,
+    int year,
+  ) {
     final filtered = expenses
-        .where((e) =>
-            e.date.month == month &&
-            e.date.year == year &&
-            e.categoryId != 'savings_transfer')
+        .where(
+          (e) =>
+              e.date.month == month &&
+              e.date.year == year &&
+              e.categoryId != 'savings_transfer' &&
+              e.categoryId != 'wallet_transfer',
+        )
         .toList();
     final totals = <String, double>{};
     for (final e in filtered) {
