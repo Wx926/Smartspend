@@ -86,4 +86,13 @@ class BudgetStatus {
 
   double get remaining => budget.amount - spent;
   bool get isOverBudget => spent > budget.amount;
+
+  /// Algorithm 2 Step 5: at the current daily burn rate, how many days
+  /// until the remaining budget runs out. Null if already exhausted or
+  /// burn rate is zero (nothing spent yet, so no rate to project from).
+  double? get daysUntilDepletion {
+    if (dailyBurnRate <= 0) return null;
+    if (remaining <= 0) return 0;
+    return remaining / dailyBurnRate;
+  }
 }

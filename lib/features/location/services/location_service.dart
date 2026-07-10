@@ -28,7 +28,7 @@ class LocationService {
   /// Request permission and start polling every
   /// [AppConstants.locationIntervalSeconds] seconds.
   Future<bool> startTracking(String userId) async {
-    final permission = await _requestPermission();
+    final permission = await requestPermission();
     if (!permission) return false;
 
     _timer?.cancel();
@@ -51,7 +51,10 @@ class LocationService {
   /// [AppConstants.dwellTimeMinutes] to pass.
   Future<void> forcePoll(String userId) => _poll(userId, forced: true);
 
-  Future<bool> _requestPermission() async {
+  /// Public so the foreground UI (which has a live Activity to show the OS
+  /// permission dialog) can request it before handing tracking off to the
+  /// background service, which has no Activity of its own to prompt from.
+  Future<bool> requestPermission() async {
     bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
     if (!serviceEnabled) return false;
 
@@ -76,9 +79,15 @@ class LocationService {
         desiredAccuracy: LocationAccuracy.high,
       ).timeout(const Duration(seconds: 15));
 
+      // Pick up any saved-location/category edits made from the foreground
+      // app since this isolate's SharedPreferences cache was last refreshed.
+      await _store.reload();
       final knownLocations = _store.getLocations();
       LocationModel? matched;
+      double matchedDist = double.infinity;
 
+      // Closest match wins, not the first one found — two saved spots can
+      // easily be within range of each other (e.g. a cafe next to a mall).
       for (final loc in knownLocations) {
         final dist = Geolocator.distanceBetween(
           position.latitude,
@@ -86,9 +95,9 @@ class LocationService {
           loc.latitude,
           loc.longitude,
         );
-        if (dist <= AppConstants.geofenceRadiusMeters) {
+        if (dist <= AppConstants.geofenceRadiusMeters && dist < matchedDist) {
           matched = loc;
-          break;
+          matchedDist = dist;
         }
       }
 
@@ -101,7 +110,7 @@ class LocationService {
           _currentLocationId = matched.id;
           _arrivedAt = DateTime.now();
           _activeHistoryId = _uuid.v4();
-          _store.bufferHistory(
+          await _store.bufferHistory(
             LocationHistoryModel(
               id: _activeHistoryId!,
               userId: userId,
@@ -176,7 +185,7 @@ class LocationService {
   Future<void> _closeCurrentVisit(String userId) async {
     if (_activeHistoryId != null && _arrivedAt != null) {
       final dwell = DateTime.now().difference(_arrivedAt!).inMinutes;
-      _store.closeHistory(_activeHistoryId!, DateTime.now(), dwell);
+      await _store.closeHistory(_activeHistoryId!, DateTime.now(), dwell);
       if (_currentLocationId != null) {
         await _store.incrementVisitCount(_currentLocationId!);
       }
@@ -193,7 +202,7 @@ class LocationService {
     String? address,
     required double latitude,
     required double longitude,
-    String? categoryHint,
+    List<String> categoryIds = const [],
   }) async {
     final loc = LocationModel(
       id: _uuid.v4(),
@@ -202,7 +211,7 @@ class LocationService {
       address: address,
       latitude: latitude,
       longitude: longitude,
-      categoryHint: categoryHint,
+      categoryIds: categoryIds,
       createdAt: DateTime.now(),
     );
     return _store.upsertLocation(loc);

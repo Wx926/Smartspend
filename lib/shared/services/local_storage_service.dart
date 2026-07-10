@@ -23,11 +23,21 @@ class LocalStorageService {
   static const _keyDeviceId = 'ss_device_id';
   static const _keyCustomCategories = 'ss_custom_categories';
   static const _keyWallets = 'ss_wallets';
+  static const _keyPreferredWallet = 'ss_preferred_wallet_id';
   static const _keyNotificationsEnabled = 'ss_notifications_enabled';
   static const _keyTrackingEnabled = 'ss_tracking_enabled';
   static const _keyRecentReceipts = 'ss_recent_receipts';
   static const _keyAiCategorisation = 'ss_ai_categorisation_enabled';
+  static const _keyLocationHistory = 'ss_location_history';
   static const _maxRecentReceipts = 12;
+
+  // Algorithm 1 Step 3: a location is "routine" once it's been visited at
+  // least this many times, all arriving within a consistent hour-of-day
+  // window (e.g. always around 9am = workplace), rather than just a raw
+  // visit-count threshold.
+  static const int _routineMinVisits = 5;
+  static const int _routineHourWindow = 4;
+  static const int _routineMinDistinctDays = 7;
 
   static final WalletModel _defaultWallet = WalletModel(
     id: 'default_account',
@@ -48,6 +58,15 @@ class LocalStorageService {
     }
   }
 
+  /// Re-reads everything from disk. SharedPreferences caches its values in
+  /// memory per isolate, so the background location service — which runs in
+  /// its own isolate and started this cache once, possibly hours ago — would
+  /// otherwise never see saved-location/category edits made from the
+  /// foreground app afterward. Cheap enough to call on every poll cycle.
+  Future<void> reload() async {
+    await _prefs?.reload();
+  }
+
   String get localUserId => _prefs?.getString(_keyDeviceId) ?? 'local_user';
 
   // ── Notification preference ────────────────────────────────────────────────
@@ -57,8 +76,7 @@ class LocalStorageService {
   Future<void> setNotificationsEnabled(bool value) async =>
       _prefs?.setBool(_keyNotificationsEnabled, value);
 
-  bool get trackingEnabled =>
-      _prefs?.getBool(_keyTrackingEnabled) ?? false;
+  bool get trackingEnabled => _prefs?.getBool(_keyTrackingEnabled) ?? false;
 
   Future<void> setTrackingEnabled(bool value) async =>
       _prefs?.setBool(_keyTrackingEnabled, value);
@@ -73,25 +91,35 @@ class LocalStorageService {
   List<CategoryModel> _defaultCategories(String type) {
     if (type == 'income') {
       return AppConstants.defaultIncomeCategories
-          .map((c) => CategoryModel(
-                id: c['name']!.toLowerCase().replaceAll(' ', '_').replaceAll('-', '_'),
-                name: c['name']!,
-                icon: c['icon']!,
-                colorHex: c['color']!,
-                type: 'income',
-                isDefault: true,
-              ))
+          .map(
+            (c) => CategoryModel(
+              id: c['name']!
+                  .toLowerCase()
+                  .replaceAll(' ', '_')
+                  .replaceAll('-', '_'),
+              name: c['name']!,
+              icon: c['icon']!,
+              colorHex: c['color']!,
+              type: 'income',
+              isDefault: true,
+            ),
+          )
           .toList();
     }
     return AppConstants.defaultCategories
         .where((c) => c['type'] == type)
-        .map((c) => CategoryModel(
-              id: c['name']!.toLowerCase().replaceAll(' ', '_').replaceAll('&', 'and'),
-              name: c['name']!,
-              icon: c['icon']!,
-              colorHex: c['color']!,
-              type: c['type']!,
-            ))
+        .map(
+          (c) => CategoryModel(
+            id: c['name']!
+                .toLowerCase()
+                .replaceAll(' ', '_')
+                .replaceAll('&', 'and'),
+            name: c['name']!,
+            icon: c['icon']!,
+            colorHex: c['color']!,
+            type: c['type']!,
+          ),
+        )
         .toList();
   }
 
@@ -99,17 +127,23 @@ class LocalStorageService {
     final raw = _prefs?.getString(_keyCustomCategories);
     if (raw == null) return [];
     final list = jsonDecode(raw) as List;
-    return list.map((e) => CategoryModel.fromJson(e as Map<String, dynamic>)).toList();
+    return list
+        .map((e) => CategoryModel.fromJson(e as Map<String, dynamic>))
+        .toList();
   }
 
   Future<void> _saveCustomCategories(List<CategoryModel> cats) async {
     await _prefs?.setString(
-        _keyCustomCategories, jsonEncode(cats.map((c) => c.toJson()).toList()));
+      _keyCustomCategories,
+      jsonEncode(cats.map((c) => c.toJson()).toList()),
+    );
   }
 
   /// Returns defaults + any user-added custom categories for the given type.
   List<CategoryModel> getCategories({String type = 'expense'}) {
-    final customs = _loadCustomCategories().where((c) => c.type == type).toList();
+    final customs = _loadCustomCategories()
+        .where((c) => c.type == type)
+        .toList();
     return [..._defaultCategories(type), ...customs];
   }
 
@@ -143,12 +177,16 @@ class LocalStorageService {
     final raw = _prefs?.getString(_keyWallets);
     if (raw == null) return [];
     final list = jsonDecode(raw) as List;
-    return list.map((e) => WalletModel.fromJson(e as Map<String, dynamic>)).toList();
+    return list
+        .map((e) => WalletModel.fromJson(e as Map<String, dynamic>))
+        .toList();
   }
 
   Future<void> _saveCustomWallets(List<WalletModel> wallets) async {
     await _prefs?.setString(
-        _keyWallets, jsonEncode(wallets.map((w) => w.toJson()).toList()));
+      _keyWallets,
+      jsonEncode(wallets.map((w) => w.toJson()).toList()),
+    );
   }
 
   /// Returns [Default Account] + any user-added wallets.
@@ -164,6 +202,13 @@ class LocalStorageService {
   Future<void> deleteWallet(String id) async {
     final all = _loadCustomWallets()..removeWhere((w) => w.id == id);
     await _saveCustomWallets(all);
+  }
+
+  /// The wallet the user has chosen to auto-select when adding a new record.
+  String? get preferredWalletId => _prefs?.getString(_keyPreferredWallet);
+
+  Future<void> setPreferredWalletId(String id) async {
+    await _prefs?.setString(_keyPreferredWallet, id);
   }
 
   /// Moves all records from [fromId] wallet to [toId] wallet.
@@ -189,7 +234,9 @@ class LocalStorageService {
 
   Future<void> _saveBudgets(List<BudgetModel> budgets) async {
     await _prefs?.setString(
-        _keyBudgets, jsonEncode(budgets.map((b) => b.toJson()).toList()));
+      _keyBudgets,
+      jsonEncode(budgets.map((b) => b.toJson()).toList()),
+    );
   }
 
   List<BudgetModel> getBudgets(int month, int year) {
@@ -200,11 +247,13 @@ class LocalStorageService {
 
   Future<BudgetModel> upsertBudget(BudgetModel budget) async {
     final all = _loadBudgets();
-    final idx = all.indexWhere((b) =>
-        b.userId == budget.userId &&
-        b.categoryId == budget.categoryId &&
-        b.month == budget.month &&
-        b.year == budget.year);
+    final idx = all.indexWhere(
+      (b) =>
+          b.userId == budget.userId &&
+          b.categoryId == budget.categoryId &&
+          b.month == budget.month &&
+          b.year == budget.year,
+    );
     if (idx >= 0) {
       all[idx] = budget;
     } else {
@@ -229,7 +278,9 @@ class LocalStorageService {
 
   Future<void> _saveExpenses(List<ExpenseModel> expenses) async {
     await _prefs?.setString(
-        _keyExpenses, jsonEncode(expenses.map((e) => e.toJson()).toList()));
+      _keyExpenses,
+      jsonEncode(expenses.map((e) => e.toJson()).toList()),
+    );
   }
 
   List<ExpenseModel> getExpenses() {
@@ -257,6 +308,11 @@ class LocalStorageService {
     return expense;
   }
 
+  /// Overwrites the local expense cache wholesale — used to hydrate it from
+  /// Supabase when local storage is empty (e.g. after a reinstall wiped it).
+  Future<void> replaceExpenses(List<ExpenseModel> expenses) =>
+      _saveExpenses(expenses);
+
   Future<void> deleteExpense(String id) async {
     final all = _loadExpenses()..removeWhere((e) => e.id == id);
     await _saveExpenses(all);
@@ -272,7 +328,9 @@ class LocalStorageService {
 
   Future<void> _saveLocations(List<LocationModel> locs) async {
     await _prefs?.setString(
-        _keyLocations, jsonEncode(locs.map((l) => l.toJson()).toList()));
+      _keyLocations,
+      jsonEncode(locs.map((l) => l.toJson()).toList()),
+    );
   }
 
   List<LocationModel> getLocations() => _loadLocations();
@@ -306,13 +364,123 @@ class LocalStorageService {
         address: loc.address,
         latitude: loc.latitude,
         longitude: loc.longitude,
-        categoryHint: loc.categoryHint,
+        categoryIds: loc.categoryIds,
         visitCount: loc.visitCount + 1,
-        isRoutine: loc.visitCount + 1 >= 5,
+        isRoutine: _isRoutinePattern(getLocationHistory(locationId)),
+        routineOverride: loc.routineOverride,
         createdAt: loc.createdAt,
       );
     }
     await _saveLocations(all);
+  }
+
+  /// User correction for Algorithm 1 Step 3 when auto-detection gets it
+  /// wrong — pass null to go back to trusting the auto-detected pattern.
+  Future<void> setRoutineOverride(String locationId, bool? override) async {
+    final all = _loadLocations();
+    final idx = all.indexWhere((l) => l.id == locationId);
+    if (idx >= 0) all[idx] = all[idx].copyWithRoutineOverride(override);
+    await _saveLocations(all);
+  }
+
+  /// Locations saved via "enter manually" never get a category — without
+  /// one, Algorithm 3 has no relevant budget to check and can't alert at
+  /// all here. Lets the user assign one (or several — a mall can be both
+  /// Shopping and Food) after the fact.
+  Future<void> setCategoryIds(
+    String locationId,
+    List<String> categoryIds,
+  ) async {
+    final all = _loadLocations();
+    final idx = all.indexWhere((l) => l.id == locationId);
+    if (idx >= 0) all[idx] = all[idx].copyWithCategoryIds(categoryIds);
+    await _saveLocations(all);
+  }
+
+  /// Algorithm 1 Step 3: routine if visited often enough, on enough
+  /// different days (so a handful of same-day re-visits — like testing —
+  /// can't trigger it), and consistently around the same time of day (e.g.
+  /// every visit between 8am–12pm) rather than at scattered hours.
+  bool _isRoutinePattern(List<LocationHistoryModel> history) {
+    if (history.length < _routineMinVisits) return false;
+
+    final distinctDays = history
+        .map(
+          (h) => DateTime(h.arrivedAt.year, h.arrivedAt.month, h.arrivedAt.day),
+        )
+        .toSet();
+    if (distinctDays.length < _routineMinDistinctDays) return false;
+
+    final hours = history.map((h) => h.arrivedAt.hour).toList()..sort();
+    return (hours.last - hours.first) <= _routineHourWindow;
+  }
+
+  // ── Location visit history ───────────────────────────────────────────────
+  List<LocationHistoryModel> _loadLocationHistory() {
+    final raw = _prefs?.getString(_keyLocationHistory);
+    if (raw == null) return [];
+    final list = jsonDecode(raw) as List;
+    return list
+        .map((e) => LocationHistoryModel.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  Future<void> _saveLocationHistory(List<LocationHistoryModel> history) async {
+    await _prefs?.setString(
+      _keyLocationHistory,
+      jsonEncode(history.map((h) => h.toJson()).toList()),
+    );
+  }
+
+  /// All past visits recorded for [locationId], most recent first.
+  List<LocationHistoryModel> getLocationHistory(String locationId) {
+    final history =
+        _loadLocationHistory().where((h) => h.locationId == locationId).toList()
+          ..sort((a, b) => b.arrivedAt.compareTo(a.arrivedAt));
+    return history;
+  }
+
+  Future<void> bufferHistory(LocationHistoryModel h) async {
+    final all = _loadLocationHistory()..add(h);
+    await _saveLocationHistory(all);
+  }
+
+  Future<void> closeHistory(String id, DateTime leftAt, int dwell) async {
+    final all = _loadLocationHistory();
+    final idx = all.indexWhere((h) => h.id == id);
+    if (idx == -1) return;
+    final h = all[idx];
+    all[idx] = LocationHistoryModel(
+      id: h.id,
+      userId: h.userId,
+      locationId: h.locationId,
+      latitude: h.latitude,
+      longitude: h.longitude,
+      arrivedAt: h.arrivedAt,
+      leftAt: leftAt,
+      dwellTimeMinutes: dwell,
+      triggeredAlert: h.triggeredAlert,
+    );
+    await _saveLocationHistory(all);
+  }
+
+  Future<void> markHistoryTriggeredAlert(String historyId) async {
+    final all = _loadLocationHistory();
+    final idx = all.indexWhere((h) => h.id == historyId);
+    if (idx == -1) return;
+    final h = all[idx];
+    all[idx] = LocationHistoryModel(
+      id: h.id,
+      userId: h.userId,
+      locationId: h.locationId,
+      latitude: h.latitude,
+      longitude: h.longitude,
+      arrivedAt: h.arrivedAt,
+      leftAt: h.leftAt,
+      dwellTimeMinutes: h.dwellTimeMinutes,
+      triggeredAlert: true,
+    );
+    await _saveLocationHistory(all);
   }
 
   // ── Alerts ─────────────────────────────────────────────────────────────────
@@ -325,7 +493,9 @@ class LocalStorageService {
 
   Future<void> _saveAlerts(List<AlertLogModel> alerts) async {
     await _prefs?.setString(
-        _keyAlerts, jsonEncode(alerts.map((a) => a.toJson()).toList()));
+      _keyAlerts,
+      jsonEncode(alerts.map((a) => a.toJson()).toList()),
+    );
   }
 
   List<AlertLogModel> getAlerts() {
@@ -335,11 +505,28 @@ class LocalStorageService {
   }
 
   AlertLogModel? getLastAlertForCategory(String categoryId) {
-    final alerts = _loadAlerts()
-        .where((a) => a.categoryId == categoryId)
-        .toList()
-      ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    final alerts =
+        _loadAlerts().where((a) => a.categoryId == categoryId).toList()
+          ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
     return alerts.isEmpty ? null : alerts.first;
+  }
+
+  /// Algorithm 3 Step 1: cooldown is per-venue, not per-category — visiting
+  /// two different malls within the cooldown window should each get their
+  /// own alert rather than the second one being suppressed by the first.
+  AlertLogModel? getLastAlertForLocation(String locationId) {
+    final alerts =
+        _loadAlerts().where((a) => a.locationId == locationId).toList()
+          ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    return alerts.isEmpty ? null : alerts.first;
+  }
+
+  /// Algorithm 3 Step 7: how many alerts this venue has already sent within
+  /// [window] — used to enforce the daily cap on top of the cooldown.
+  int countAlertsForLocationSince(String locationId, DateTime since) {
+    return _loadAlerts()
+        .where((a) => a.locationId == locationId && a.createdAt.isAfter(since))
+        .length;
   }
 
   Future<AlertLogModel> insertAlert(AlertLogModel alert) async {
@@ -359,16 +546,6 @@ class LocalStorageService {
   Future<void> markAllAlertsRead() async {
     final all = _loadAlerts().map((a) => a.markRead()).toList();
     await _saveAlerts(all);
-  }
-
-  // ── Location history (in-memory only for session) ──────────────────────────
-  final List<LocationHistoryModel> _historyBuffer = [];
-
-  void bufferHistory(LocationHistoryModel h) => _historyBuffer.add(h);
-
-  void closeHistory(String id, DateTime leftAt, int dwell) {
-    final idx = _historyBuffer.indexWhere((h) => h.id == id);
-    if (idx >= 0) _historyBuffer.removeAt(idx);
   }
 
   // ── Recent receipts (custom picker "Recents" section) ──────────────────────

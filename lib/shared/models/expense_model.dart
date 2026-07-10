@@ -6,6 +6,10 @@ class ExpenseModel {
   final String description;
   final DateTime date;
   final String? locationId;
+  // A snapshot of the place name at the time this record was made, kept even
+  // when the user declines to save it as a permanent location (or later
+  // deletes that saved location) — so the visit still shows up in history.
+  final String? locationName;
   final DateTime createdAt;
   final DateTime updatedAt;
   final String type; // 'expense' or 'income'
@@ -24,6 +28,7 @@ class ExpenseModel {
     required this.description,
     required this.date,
     this.locationId,
+    this.locationName,
     required this.createdAt,
     required this.updatedAt,
     this.type = 'expense',
@@ -44,6 +49,7 @@ class ExpenseModel {
       description: json['description'] as String? ?? '',
       date: DateTime.parse(json['date'] as String),
       locationId: json['location_id'] as String?,
+      locationName: json['location_name'] as String?,
       createdAt: DateTime.parse(json['created_at'] as String),
       updatedAt: DateTime.parse(json['updated_at'] as String),
       type: json['type'] as String? ?? 'expense',
@@ -65,6 +71,7 @@ class ExpenseModel {
       'description': description,
       'date': date.toIso8601String().substring(0, 10),
       if (locationId != null) 'location_id': locationId,
+      if (locationName != null) 'location_name': locationName,
       'created_at': createdAt.toIso8601String(),
       'updated_at': updatedAt.toIso8601String(),
       'type': type,
@@ -83,6 +90,7 @@ class ExpenseModel {
     String? description,
     DateTime? date,
     String? locationId,
+    String? locationName,
     String? type,
     String? walletId,
     String? savingsGoalId,
@@ -99,6 +107,7 @@ class ExpenseModel {
       description: description ?? this.description,
       date: date ?? this.date,
       locationId: locationId ?? this.locationId,
+      locationName: locationName ?? this.locationName,
       createdAt: createdAt,
       updatedAt: DateTime.now(),
       type: type ?? this.type,

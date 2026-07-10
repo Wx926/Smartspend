@@ -294,9 +294,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
               icon: Icons.timer_outlined,
               iconColor: const Color(0xFF8B5CF6),
               iconBg: const Color(0xFFF5F3FF),
-              title: 'Alert cooldown',
-              subtitle: '2 hours between alerts per venue',
-              onTap: () {},
+              title: 'Alerts',
+              subtitle: 'View your budget and location alert history',
+              onTap: () => Navigator.pushNamed(context, '/alerts'),
             ),
           ]),
 

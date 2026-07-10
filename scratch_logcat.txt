@@ -1,0 +1,50 @@
+--------- beginning of main
+07-10 16:16:13.971 23978 23978 W dumpsys : Thread Pool max thread count is 0. Cannot cache binder as linkToDeath cannot be implemented. serviceName: package
+07-10 16:16:14.037  1139  1346 D SatelliteController: iisInCarrierRoamingNbIotNtn: satellite is disabled
+07-10 16:16:14.094   753  1553 W AS.PlaybackActivityMon: No piid assigned for invalid/internal port id 15
+07-10 16:16:14.097   592   697 D AudioFlinger: mixer(0x7f9ae844f770) throttle end: throttle time(25)
+07-10 16:16:14.117 14771 14771 I artd    : GetBestInfo: odex next to the dex file (/data/app/~~caS1Yxbsm7h-0oreqpt3ug==/com.google.android.gms-sTIofXh0NJOwSXIqXAKOmw==/oat/x86_64/base.odex) is kOatUpToDate with filter 'speed-profile' executable 'false'
+07-10 16:16:14.119 14771 14771 I artd    : GetBestInfo: odex next to the dex file (/data/app/~~caS1Yxbsm7h-0oreqpt3ug==/com.google.android.gms-sTIofXh0NJOwSXIqXAKOmw==/oat/x86_64/split_AdsDynamite_installtime.odex) is kOatUpToDate with filter 'speed' executable 'false'
+07-10 16:16:14.122 14771 14773 I artd    : GetBestInfo: odex next to the dex file (/data/app/~~caS1Yxbsm7h-0oreqpt3ug==/com.google.android.gms-sTIofXh0NJOwSXIqXAKOmw==/oat/x86_64/split_CronetDynamite_installtime.odex) is kOatUpToDate with filter 'speed' executable 'false'
+07-10 16:16:14.123 14771 14773 I artd    : GetBestInfo: odex next to the dex file (/data/app/~~caS1Yxbsm7h-0oreqpt3ug==/com.google.android.gms-sTIofXh0NJOwSXIqXAKOmw==/oat/x86_64/split_DynamiteLoader_installtime.odex) is kOatUpToDate with filter 'speed' executable 'false'
+07-10 16:16:14.125 14771 14771 I artd    : GetBestInfo: odex next to the dex file (/data/app/~~caS1Yxbsm7h-0oreqpt3ug==/com.google.android.gms-sTIofXh0NJOwSXIqXAKOmw==/oat/x86_64/split_DynamiteModulesA_installtime.odex) is kOatUpToDate with filter 'speed' executable 'false'
+07-10 16:16:14.132 14771 14771 I artd    : GetBestInfo: odex next to the dex file (/data/app/~~caS1Yxbsm7h-0oreqpt3ug==/com.google.android.gms-sTIofXh0NJOwSXIqXAKOmw==/oat/x86_64/split_DynamiteModulesC_installtime.odex) is kOatUpToDate with filter 'speed' executable 'false'
+07-10 16:16:14.134 14771 14771 I artd    : GetBestInfo: odex next to the dex file (/data/app/~~caS1Yxbsm7h-0oreqpt3ug==/com.google.android.gms-sTIofXh0NJOwSXIqXAKOmw==/oat/x86_64/split_GoogleCertificates_installtime.odex) is kOatUpToDate with filter 'speed' executable 'false'
+07-10 16:16:14.140 14771 14771 I artd    : GetBestInfo: odex next to the dex file (/data/app/~~caS1Yxbsm7h-0oreqpt3ug==/com.google.android.gms-sTIofXh0NJOwSXIqXAKOmw==/oat/x86_64/split_MapsDynamite_installtime.odex) is kOatUpToDate with filter 'speed' executable 'false'
+07-10 16:16:14.142 14771 14771 I artd    : GetBestInfo: odex next to the dex file (/data/app/~~caS1Yxbsm7h-0oreqpt3ug==/com.google.android.gms-sTIofXh0NJOwSXIqXAKOmw==/oat/x86_64/split_MeasurementDynamite_installtime.odex) is kOatUpToDate with filter 'speed' executable 'false'
+07-10 16:16:14.145 14771 14773 I artd    : GetBestInfo: odex next to the dex file (/data/app/~~caS1Yxbsm7h-0oreqpt3ug==/com.google.android.gms-sTIofXh0NJOwSXIqXAKOmw==/oat/x86_64/split_all_locale_splits.odex) is kOatUpToDate with filter 'speed' executable 'false'
+07-10 16:16:14.149 14771 14773 I artd    : GetBestInfo: /data/user_de/0/com.google.android.gms/app_chimera/m/00000011/dl-MlkitBarcodeUi.optional_262434100800.apk has no usable artifacts
+07-10 16:16:14.155 14771 14773 I artd    : GetBestInfo: /data/user_de/0/com.google.android.gms/app_chimera/m/00000013/dl-PlayCloudSearch.optional_262434100000.apk has no usable artifacts
+07-10 16:16:14.155 14771 14773 I artd    : GetBestInfo: /data/user_de/0/com.google.android.gms/app_chimera/m/00000001/CronetDynamite.apk has no usable artifacts
+07-10 16:16:14.155 14771 14773 I artd    : GetBestInfo: /data/user_de/0/com.google.android.gms/app_chimera/m/00000002/DynamiteLoader.apk has no usable artifacts
+07-10 16:16:14.156 14771 14773 I artd    : GetBestInfo: /data/user_de/0/com.google.android.gms/app_chimera/m/00000005/GoogleCertificates.apk has no usable artifacts
+07-10 16:16:14.162 14771 14773 I artd    : GetBestInfo: /data/user_de/0/com.google.android.gms/app_chimera/m/00000015/dl-MlkitOcrCommon.optional_262434100800.apk has no usable artifacts
+07-10 16:16:14.166 14771 14773 I artd    : GetBestInfo: /data/user_de/0/com.google.android.gms/app_chimera/m/00000010/dl-Appsearch.optional_262434100800.apk has no usable artifacts
+07-10 16:16:14.169 14771 14773 I artd    : GetBestInfo: /data/user_de/0/com.google.android.gms/app_chimera/m/0000000c/dl-TfliteDynamiteDynamite.integ_260580502100800.apk has no usable artifacts
+07-10 16:16:14.171 14771 14771 I artd    : GetBestInfo: /data/user_de/0/com.google.android.gms/app_chimera/m/00000016/dl-IdentityCredentialsPlatform.optional_262434100800.apk has no usable artifacts
+07-10 16:16:14.175  1296 23925 I FusedLocation: stationary throttling disengaged [CONTEXT service_id=6 ]
+07-10 16:16:14.175 14771 14771 I artd    : GetBestInfo: /data/user_de/0/com.google.android.gms/app_chimera/m/00000014/dl-VisionOcr.optional_262434100000.apk has no usable artifacts
+07-10 16:16:14.180 14771 14771 I artd    : GetBestInfo: /data/user_de/0/com.google.android.gms/app_chimera/m/0000000a/dl-MlkitBarcodeUi.optional_250834100800.apk has no usable artifacts
+07-10 16:16:14.181 14771 14771 I artd    : GetBestInfo: /data/user_de/0/com.google.android.gms/app_chimera/m/00000009/dl-Appsearch.optional_250834100800.apk has no usable artifacts
+07-10 16:16:14.183 14771 14771 I artd    : GetBestInfo: vdex next to the dex file (/data/user/0/com.google.android.gms/app_dg_cache/2D99CBA6A39F2F168E16C57CE03BE321DE0F5FA7/oat/x86_64/the.vdex) is kOatUpToDate with filter 'verify' executable 'false'
+07-10 16:16:14.186 14771 14771 I artd    : GetBestInfo: vdex next to the dex file (/data/user/0/com.google.android.gms/app_dg_cache/3D2AD091D37F7A88AE2B230CE960DC92BD1E9E50/oat/x86_64/the.vdex) is kOatUpToDate with filter 'verify' executable 'false'
+07-10 16:16:14.187 14771 14771 W artd    : Could not get dex checksums for location /data/app/~~Bw05V7ZGP4DGsGAlT81_ZQ==/com.android.vending-Wfre9O6jLCGk95CZMykeVQ==/base.apk, fd=-1
+07-10 16:16:14.194  1296 23926 I FusedOrientationManager: Registering orientation client. [CONTEXT service_id=6 ]
+07-10 16:16:14.230  1046 23994 D android.hardware.gnss-service.ranchu: GnssHwConn:workerThread:70
+07-10 16:16:14.253  1296  2195 I ActivityScheduler: nextTriggerTime: 19577634, in 153926ms, detectorType: 39, FULL_TYPE alarmWindowMillis: 1666
+07-10 16:16:14.263  1296  2195 W Settings: Setting airplane_mode_on has moved from android.provider.Settings.System to android.provider.Settings.Global, returning read-only value.
+07-10 16:16:14.265   753   771 I system_server: Background concurrent mark compact GC freed 24MB AllocSpace bytes, 6(120KB) LOS objects, 41% free, 33MB/57MB, paused 1.682ms,2.033ms total 161.183ms
+07-10 16:16:14.276  1296 23989 W SystemServiceRegistry: No service published for: wifirtt
+07-10 16:16:14.626  1046 23994 D android.hardware.gnss-service.ranchu: GnssHwListener:consume:87 sz=64
+07-10 16:16:14.633  1046 23994 D android.hardware.gnss-service.ranchu: GnssHwListener:consume:87 sz=64
+07-10 16:16:14.633  1046 23994 D android.hardware.gnss-service.ranchu: Gnss:onGnssLocationCb:311
+07-10 16:16:14.633  1046 23994 D android.hardware.gnss-service.ranchu: Gnss:onGnssLocationCb:321
+07-10 16:16:15.485  1296  1296 D BoundBrokerSvc: onUnbind: Intent { act=com.google.android.gms.common.telemetry.service.START dat=chimera-action:/... xflg=0x4 cmp=com.google.android.gms/.chimera.PersistentApiService }
+07-10 16:16:15.627  1046 23994 D android.hardware.gnss-service.ranchu: GnssHwListener:consume:87 sz=64
+07-10 16:16:15.633  1046 23994 D android.hardware.gnss-service.ranchu: GnssHwListener:consume:87 sz=64
+07-10 16:16:15.633  1046 23994 D android.hardware.gnss-service.ranchu: Gnss:onGnssLocationCb:311
+07-10 16:16:15.633  1046 23994 D android.hardware.gnss-service.ranchu: Gnss:onGnssLocationCb:321
+07-10 16:16:16.628  1046 23994 D android.hardware.gnss-service.ranchu: GnssHwListener:consume:87 sz=64
+07-10 16:16:16.646  1046 23994 D android.hardware.gnss-service.ranchu: GnssHwListener:consume:87 sz=64
+07-10 16:16:16.646  1046 23994 D android.hardware.gnss-service.ranchu: Gnss:onGnssLocationCb:311
+07-10 16:16:16.646  1046 23994 D android.hardware.gnss-service.ranchu: Gnss:onGnssLocationCb:321

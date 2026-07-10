@@ -113,8 +113,10 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
             name: loc.name,
             emoji: '📍',
             locationId: loc.id,
-            suggestedCategoryName: loc.categoryHint,
+            suggestedCategoryId: loc.categoryIds.firstOrNull,
             distanceMeters: dist,
+            latitude: loc.latitude,
+            longitude: loc.longitude,
           ),
         );
       }
@@ -138,8 +140,10 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
         _LocationCandidate(
           name: p.name,
           emoji: p.emoji,
-          suggestedCategoryName: OsmService.toExpenseCategory(p.category),
+          suggestedCategoryId: OsmService.toExpenseCategoryId(p.category),
           distanceMeters: dist,
+          latitude: p.latitude,
+          longitude: p.longitude,
         ),
       );
     }
@@ -150,7 +154,24 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
       return;
     }
     candidates.sort((a, b) => a.distanceMeters.compareTo(b.distanceMeters));
-    final nearest = candidates.take(_maxCandidates).toList();
+
+    // A saved location in range should always lead the list — the user
+    // already curated it (name + category), so it's more likely correct
+    // than a same-distance OSM point. Without this, a cluster of unrelated
+    // OSM places (e.g. several shops right at a mall entrance) can crowd the
+    // saved venue itself out of the top _maxCandidates entirely. Whatever
+    // remains — other saved locations and OSM places alike — still fills
+    // the rest of the list nearest-first, same as before.
+    final savedCandidates = candidates
+        .where((c) => c.locationId != null)
+        .toList();
+    final ordered = savedCandidates.isEmpty
+        ? candidates
+        : [
+            savedCandidates.first,
+            ...candidates.where((c) => c != savedCandidates.first),
+          ];
+    final nearest = ordered.take(_maxCandidates).toList();
 
     setState(() {
       _locationCandidates = nearest;
@@ -186,14 +207,9 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
       }
     }
 
-    if (suggestion == null && candidate.suggestedCategoryName != null) {
-      final hint = candidate.suggestedCategoryName!.toLowerCase();
+    if (suggestion == null && candidate.suggestedCategoryId != null) {
       suggestion = cats
-          .where(
-            (c) =>
-                c.name.toLowerCase().contains(hint) ||
-                hint.contains(c.name.toLowerCase()),
-          )
+          .where((c) => c.id == candidate.suggestedCategoryId)
           .firstOrNull;
     }
 
@@ -350,10 +366,23 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
       final expProvider = context.read<ExpenseProvider>();
       final sgProvider = context.read<SavingsGoalProvider>();
       final bp = context.read<BudgetProvider>();
-      final activeLocationId = _isIncome
+      final candidate = _selectedLocationCandidate;
+      // Only an already-saved location has a locationId to attach directly.
+      // A candidate from the live OSM lookup stays unattached for now — the
+      // user gets asked whether to save it as a real location *after* the
+      // expense itself is safely recorded (see below), rather than that
+      // happening silently on every pick.
+      final activeLocationId = (_isIncome || candidate == null)
           ? null
-          : _selectedLocationCandidate?.locationId;
+          : candidate.locationId;
+      // Kept regardless of whether the place is (or becomes) a saved
+      // location, so the visit still shows up in history even if the user
+      // says "Not now" below, or later deletes the saved location.
+      final activeLocationName = (_isIncome || candidate == null)
+          ? null
+          : candidate.name;
 
+      ExpenseModel? savedExpense;
       if (_isEdit) {
         await expProvider.updateExpense(
           widget.existingExpense!.copyWith(
@@ -366,7 +395,7 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
         );
       } else if (_selectedGoal != null) {
         // Spending from a savings goal — use special walletId, deduct from goal
-        await expProvider.addExpense(
+        savedExpense = await expProvider.addExpense(
           userId: userId,
           categoryId: _selectedCategory!.id,
           amount: amount,
@@ -376,6 +405,7 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
           walletId: 'savings_goal',
           savingsGoalId: _selectedGoal!.id,
           locationId: activeLocationId,
+          locationName: activeLocationName,
         );
         final newAmount = _selectedGoal!.currentAmount - amount;
         await sgProvider.update(
@@ -385,7 +415,7 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
           ),
         );
       } else {
-        await expProvider.addExpense(
+        savedExpense = await expProvider.addExpense(
           userId: userId,
           categoryId: _selectedCategory!.id,
           amount: amount,
@@ -394,6 +424,7 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
           type: _type,
           walletId: _selectedWallet?.id ?? 'default_account',
           locationId: activeLocationId,
+          locationName: activeLocationName,
         );
       }
 
@@ -404,8 +435,53 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
             DateTime.now().year,
           ),
         );
-        Navigator.pop(context);
       }
+
+      // The expense is safely recorded — now, only if it was placed at an
+      // unsaved OSM candidate, ask whether to keep this location for next
+      // time. Never automatic: a "No" here just means this one record has
+      // no attached location, same as picking nothing at all.
+      if (mounted && savedExpense != null && candidate?.locationId == null) {
+        final place = candidate;
+        if (place != null) {
+          final shouldSave = await showDialog<bool>(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              title: const Text('Save this location?'),
+              content: Text(
+                'Save "${place.name}" so SmartSpend recognizes it next time '
+                'and can give you spending alerts here.',
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx, false),
+                  child: const Text('Not now'),
+                ),
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx, true),
+                  child: const Text('Save'),
+                ),
+              ],
+            ),
+          );
+          if (shouldSave == true && mounted) {
+            final newLoc = await context.read<LocationProvider>().addLocation(
+              userId: userId,
+              name: place.name,
+              latitude: place.latitude,
+              longitude: place.longitude,
+              categoryIds: place.suggestedCategoryId != null
+                  ? [place.suggestedCategoryId!]
+                  : const [],
+            );
+            await expProvider.updateExpense(
+              savedExpense.copyWith(locationId: newLoc.id),
+            );
+          }
+        }
+      }
+
+      if (mounted) Navigator.pop(context);
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -418,11 +494,15 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
     final lp = context.watch<LocationProvider>();
     // When editing, show the location the record was originally saved with,
     // not wherever the device happens to be right now.
+    // Prefer the live saved-location name (picks up renames); fall back to
+    // the snapshot taken when the record was made — covers both an unsaved
+    // OSM pick and a saved location that's since been deleted.
     final displayLocationName = _isEdit
-        ? lp.locations
-              .where((l) => l.id == widget.existingExpense!.locationId)
-              .firstOrNull
-              ?.name
+        ? (lp.locations
+                  .where((l) => l.id == widget.existingExpense!.locationId)
+                  .firstOrNull
+                  ?.name ??
+              widget.existingExpense!.locationName)
         : _selectedLocationCandidate?.name;
     final cats = _isIncome ? bp.incomeCategories : bp.categories;
     final accentColor = _isIncome ? AppColors.budgetGreen : AppColors.primary;
@@ -1046,15 +1126,19 @@ class _LocationCandidate {
   final String name;
   final String emoji;
   final String? locationId;
-  final String? suggestedCategoryName;
+  final String? suggestedCategoryId;
   final double distanceMeters;
+  final double latitude;
+  final double longitude;
 
   const _LocationCandidate({
     required this.name,
     required this.emoji,
     this.locationId,
-    this.suggestedCategoryName,
+    this.suggestedCategoryId,
     required this.distanceMeters,
+    required this.latitude,
+    required this.longitude,
   });
 }
 

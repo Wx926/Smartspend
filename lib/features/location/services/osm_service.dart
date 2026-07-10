@@ -130,8 +130,8 @@ out center;
     }
   }
 
-  /// Maps an OSM category string to an expense category name used in the app.
-  static String toExpenseCategory(String osmCategory) {
+  /// Maps an OSM category string to a default expense CategoryModel.id.
+  static String toExpenseCategoryId(String osmCategory) {
     final cat = osmCategory.toLowerCase().replaceAll(' ', '_');
     const food = {
       'restaurant',
@@ -219,13 +219,13 @@ out center;
       'townhall',
       'library',
     };
-    if (food.contains(cat)) return 'Food';
-    if (shopping.contains(cat)) return 'Shopping';
-    if (transport.contains(cat)) return 'Transport';
-    if (entertainment.contains(cat)) return 'Entertainment';
-    if (health.contains(cat)) return 'Health';
-    if (utilities.contains(cat)) return 'Utilities';
-    return 'Shopping';
+    if (food.contains(cat)) return 'food_and_dining';
+    if (shopping.contains(cat)) return 'shopping';
+    if (transport.contains(cat)) return 'transport';
+    if (entertainment.contains(cat)) return 'entertainment';
+    if (health.contains(cat)) return 'health';
+    if (utilities.contains(cat)) return 'utilities';
+    return 'shopping';
   }
 
   String _formatCategory(String raw) {

@@ -27,12 +27,11 @@ class BudgetService {
     required DateTime forMonth,
   }) {
     final now = DateTime.now();
-    final daysInMonth =
-        DateTime(forMonth.year, forMonth.month + 1, 0).day;
+    final daysInMonth = DateTime(forMonth.year, forMonth.month + 1, 0).day;
     final daysElapsed =
         (forMonth.year == now.year && forMonth.month == now.month)
-            ? now.day
-            : daysInMonth;
+        ? now.day
+        : daysInMonth;
     final daysRemaining = daysInMonth - daysElapsed;
 
     final categoryMap = {for (final c in categories) c.id: c};
@@ -44,23 +43,29 @@ class BudgetService {
       final categoryColorHex = cat?.colorHex ?? '6B7280';
 
       final spent = expenses
-          .where((e) =>
-              e.categoryId == budget.categoryId &&
-              e.date.month == forMonth.month &&
-              e.date.year == forMonth.year)
+          .where(
+            (e) =>
+                e.categoryId == budget.categoryId &&
+                e.date.month == forMonth.month &&
+                e.date.year == forMonth.year,
+          )
           .fold(0.0, (sum, e) => sum + e.amount);
 
-      final dailyBurnRate =
-          daysElapsed > 0 ? spent / daysElapsed : 0.0;
-      final projectedSpending =
-          spent + (dailyBurnRate * daysRemaining);
-      final percentUsed =
-          budget.amount > 0 ? spent / budget.amount : 0.0;
+      final dailyBurnRate = daysElapsed > 0 ? spent / daysElapsed : 0.0;
+      final projectedSpending = spent + (dailyBurnRate * daysRemaining);
+      final percentUsed = budget.amount > 0 ? spent / budget.amount : 0.0;
+      // Algorithm 2 Step 6: severity reflects the projected month-end total,
+      // not just what's been spent so far — a slow starter who's on pace to
+      // blow the budget by day 30 should be flagged before they've actually
+      // overspent.
+      final projectedPercentUsed = budget.amount > 0
+          ? projectedSpending / budget.amount
+          : 0.0;
 
       final AlertSeverity severity;
-      if (percentUsed >= AppConstants.redThreshold) {
+      if (projectedPercentUsed >= AppConstants.redThreshold) {
         severity = AlertSeverity.red;
-      } else if (percentUsed >= AppConstants.yellowThreshold) {
+      } else if (projectedPercentUsed >= AppConstants.yellowThreshold) {
         severity = AlertSeverity.yellow;
       } else {
         severity = AlertSeverity.green;
