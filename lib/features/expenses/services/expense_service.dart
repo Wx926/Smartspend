@@ -10,7 +10,23 @@ class ExpenseService {
   final _supabase = SupabaseService.instance;
 
   Future<List<ExpenseModel>> getExpenses({int? month, int? year}) async {
-    final all = _local.getExpenses();
+    var all = _local.getExpenses();
+    // Local storage is normally the source of truth, but it's wiped by an
+    // uninstall/reinstall or a fresh device — while every write is also
+    // best-effort synced to Supabase. If local is empty, treat that as a
+    // possible loss and hydrate the cache back from the cloud once.
+    if (all.isEmpty) {
+      try {
+        final cloud = await _supabase.getExpenses();
+        if (cloud.isNotEmpty) {
+          await _local.replaceExpenses(cloud);
+          all = _local.getExpenses();
+        }
+      } catch (_) {
+        // Offline, logged out, or nothing to recover — fall through with
+        // whatever local has (still empty).
+      }
+    }
     if (month != null && year != null) {
       return all
           .where((e) => e.date.month == month && e.date.year == year)

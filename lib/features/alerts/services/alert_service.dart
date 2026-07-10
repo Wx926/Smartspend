@@ -118,7 +118,8 @@ class AlertService {
     // Step 1: per-venue cooldown.
     final last = _store.getLastAlertForLocation(venue.id);
     if (last != null) {
-      final hoursSince = DateTime.now().difference(last.createdAt).inHours;
+      final hoursSince =
+          DateTime.now().difference(last.createdAt).inMinutes / 60.0;
       if (hoursSince < AppConstants.alertCooldownHours) return;
     }
 
@@ -126,7 +127,7 @@ class AlertService {
     // shouldn't produce unlimited repeat alerts for the same venue.
     final sentToday = _store.countAlertsForLocationSince(
       venue.id,
-      DateTime.now().subtract(const Duration(hours: 24)),
+      DateTime.now().subtract(const Duration(hours: 12)),
     );
     if (sentToday >= AppConstants.maxAlertsPerVenuePerDay) return;
 

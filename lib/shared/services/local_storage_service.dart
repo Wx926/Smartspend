@@ -58,6 +58,15 @@ class LocalStorageService {
     }
   }
 
+  /// Re-reads everything from disk. SharedPreferences caches its values in
+  /// memory per isolate, so the background location service — which runs in
+  /// its own isolate and started this cache once, possibly hours ago — would
+  /// otherwise never see saved-location/category edits made from the
+  /// foreground app afterward. Cheap enough to call on every poll cycle.
+  Future<void> reload() async {
+    await _prefs?.reload();
+  }
+
   String get localUserId => _prefs?.getString(_keyDeviceId) ?? 'local_user';
 
   // ── Notification preference ────────────────────────────────────────────────
@@ -298,6 +307,11 @@ class LocalStorageService {
     await _saveExpenses(all);
     return expense;
   }
+
+  /// Overwrites the local expense cache wholesale — used to hydrate it from
+  /// Supabase when local storage is empty (e.g. after a reinstall wiped it).
+  Future<void> replaceExpenses(List<ExpenseModel> expenses) =>
+      _saveExpenses(expenses);
 
   Future<void> deleteExpense(String id) async {
     final all = _loadExpenses()..removeWhere((e) => e.id == id);

@@ -55,10 +55,26 @@ CREATE TABLE expenses (
   location_id UUID,
   created_at  TIMESTAMPTZ DEFAULT NOW(),
   updated_at  TIMESTAMPTZ DEFAULT NOW(),
-  source        TEXT DEFAULT 'manual', -- 'manual' | 'ocr' | 'voice'
-  merchant_name TEXT,
-  batch_id      UUID -- groups line items saved from the same receipt scan
+  type            TEXT NOT NULL DEFAULT 'expense' CHECK (type IN ('expense', 'income')),
+  wallet_id       TEXT NOT NULL DEFAULT 'default_account',
+  savings_goal_id TEXT,
+  source          TEXT DEFAULT 'manual', -- 'manual' | 'ocr' | 'voice'
+  merchant_name   TEXT,
+  batch_id        TEXT, -- groups line items saved from the same receipt scan, or the two legs of a wallet transfer; not a UUID since transfer batch ids are timestamp-based strings
+  location_name   TEXT -- snapshot of the place name at record time, kept even if never saved as a location (or the saved location is later deleted)
 );
+
+-- MIGRATION (run this against an existing database that predates the columns
+-- above — e.g. one created before wallets/savings-goals/OCR were added):
+--
+-- ALTER TABLE expenses
+--   ADD COLUMN IF NOT EXISTS type TEXT NOT NULL DEFAULT 'expense' CHECK (type IN ('expense', 'income')),
+--   ADD COLUMN IF NOT EXISTS wallet_id TEXT NOT NULL DEFAULT 'default_account',
+--   ADD COLUMN IF NOT EXISTS savings_goal_id TEXT,
+--   ADD COLUMN IF NOT EXISTS source TEXT DEFAULT 'manual',
+--   ADD COLUMN IF NOT EXISTS merchant_name TEXT,
+--   ADD COLUMN IF NOT EXISTS batch_id TEXT,
+--   ADD COLUMN IF NOT EXISTS location_name TEXT;
 
 -- ─── Locations ───────────────────────────────────────────────────────────────
 CREATE TABLE locations (

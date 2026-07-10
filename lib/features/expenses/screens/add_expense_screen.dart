@@ -366,32 +366,22 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
       final sgProvider = context.read<SavingsGoalProvider>();
       final bp = context.read<BudgetProvider>();
       final candidate = _selectedLocationCandidate;
+      // Only an already-saved location has a locationId to attach directly.
+      // A candidate from the live OSM lookup stays unattached for now — the
+      // user gets asked whether to save it as a real location *after* the
+      // expense itself is safely recorded (see below), rather than that
+      // happening silently on every pick.
+      final activeLocationId = (_isIncome || candidate == null)
+          ? null
+          : candidate.locationId;
+      // Kept regardless of whether the place is (or becomes) a saved
+      // location, so the visit still shows up in history even if the user
+      // says "Not now" below, or later deletes the saved location.
+      final activeLocationName = (_isIncome || candidate == null)
+          ? null
+          : candidate.name;
 
-      // A candidate picked from the live OSM lookup (not one of the user's
-      // saved locations) has no locationId to attach — without this it would
-      // vanish the moment the expense is saved, with no way to see it again
-      // on Edit. Promote it into a real saved location on the spot, the same
-      // as if the user had gone through "Add Location" themselves, so it
-      // gets a real id, shows up in Nearby, and picks up tracking/alerts for
-      // free going forward.
-      String? activeLocationId;
-      if (_isIncome || candidate == null) {
-        activeLocationId = null;
-      } else if (candidate.locationId != null) {
-        activeLocationId = candidate.locationId;
-      } else {
-        final saved = await context.read<LocationProvider>().addLocation(
-          userId: userId,
-          name: candidate.name,
-          latitude: candidate.latitude,
-          longitude: candidate.longitude,
-          categoryIds: candidate.suggestedCategoryId != null
-              ? [candidate.suggestedCategoryId!]
-              : const [],
-        );
-        activeLocationId = saved.id;
-      }
-
+      ExpenseModel? savedExpense;
       if (_isEdit) {
         await expProvider.updateExpense(
           widget.existingExpense!.copyWith(
@@ -404,7 +394,7 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
         );
       } else if (_selectedGoal != null) {
         // Spending from a savings goal — use special walletId, deduct from goal
-        await expProvider.addExpense(
+        savedExpense = await expProvider.addExpense(
           userId: userId,
           categoryId: _selectedCategory!.id,
           amount: amount,
@@ -414,6 +404,7 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
           walletId: 'savings_goal',
           savingsGoalId: _selectedGoal!.id,
           locationId: activeLocationId,
+          locationName: activeLocationName,
         );
         final newAmount = _selectedGoal!.currentAmount - amount;
         await sgProvider.update(
@@ -423,7 +414,7 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
           ),
         );
       } else {
-        await expProvider.addExpense(
+        savedExpense = await expProvider.addExpense(
           userId: userId,
           categoryId: _selectedCategory!.id,
           amount: amount,
@@ -432,6 +423,7 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
           type: _type,
           walletId: _selectedWallet?.id ?? 'default_account',
           locationId: activeLocationId,
+          locationName: activeLocationName,
         );
       }
 
@@ -442,8 +434,53 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
             DateTime.now().year,
           ),
         );
-        Navigator.pop(context);
       }
+
+      // The expense is safely recorded — now, only if it was placed at an
+      // unsaved OSM candidate, ask whether to keep this location for next
+      // time. Never automatic: a "No" here just means this one record has
+      // no attached location, same as picking nothing at all.
+      if (mounted && savedExpense != null && candidate?.locationId == null) {
+        final place = candidate;
+        if (place != null) {
+          final shouldSave = await showDialog<bool>(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              title: const Text('Save this location?'),
+              content: Text(
+                'Save "${place.name}" so SmartSpend recognizes it next time '
+                'and can give you spending alerts here.',
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx, false),
+                  child: const Text('Not now'),
+                ),
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx, true),
+                  child: const Text('Save'),
+                ),
+              ],
+            ),
+          );
+          if (shouldSave == true && mounted) {
+            final newLoc = await context.read<LocationProvider>().addLocation(
+              userId: userId,
+              name: place.name,
+              latitude: place.latitude,
+              longitude: place.longitude,
+              categoryIds: place.suggestedCategoryId != null
+                  ? [place.suggestedCategoryId!]
+                  : const [],
+            );
+            await expProvider.updateExpense(
+              savedExpense.copyWith(locationId: newLoc.id),
+            );
+          }
+        }
+      }
+
+      if (mounted) Navigator.pop(context);
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -456,11 +493,15 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
     final lp = context.watch<LocationProvider>();
     // When editing, show the location the record was originally saved with,
     // not wherever the device happens to be right now.
+    // Prefer the live saved-location name (picks up renames); fall back to
+    // the snapshot taken when the record was made — covers both an unsaved
+    // OSM pick and a saved location that's since been deleted.
     final displayLocationName = _isEdit
-        ? lp.locations
-              .where((l) => l.id == widget.existingExpense!.locationId)
-              .firstOrNull
-              ?.name
+        ? (lp.locations
+                  .where((l) => l.id == widget.existingExpense!.locationId)
+                  .firstOrNull
+                  ?.name ??
+              widget.existingExpense!.locationName)
         : _selectedLocationCandidate?.name;
     final cats = _isIncome ? bp.incomeCategories : bp.categories;
     final accentColor = _isIncome ? AppColors.budgetGreen : AppColors.primary;

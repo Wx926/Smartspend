@@ -79,6 +79,9 @@ class LocationService {
         desiredAccuracy: LocationAccuracy.high,
       ).timeout(const Duration(seconds: 15));
 
+      // Pick up any saved-location/category edits made from the foreground
+      // app since this isolate's SharedPreferences cache was last refreshed.
+      await _store.reload();
       final knownLocations = _store.getLocations();
       LocationModel? matched;
       double matchedDist = double.infinity;
