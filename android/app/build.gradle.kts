@@ -21,7 +21,9 @@ android {
 
     defaultConfig {
         applicationId = "com.example.smartspend"
-        minSdk = flutter.minSdkVersion
+        // The `record` package (voice input audio capture) requires API 23+
+        // for its AAC-LC encoder.
+        minSdk = maxOf(flutter.minSdkVersion, 23)
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName

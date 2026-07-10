@@ -54,6 +54,8 @@ class OcrResult {
   List<OcrLineItem> lineItems;
   String? suggestedCategoryId;
   String? suggestedCategoryName;
+  String? suggestedCategoryConfidence; // "high" | "low"
+  String? dateConfidence; // "high" | "low"
   WarrantyInfo? warranty;
 
   OcrResult({
@@ -64,6 +66,8 @@ class OcrResult {
     required this.lineItems,
     this.suggestedCategoryId,
     this.suggestedCategoryName,
+    this.suggestedCategoryConfidence,
+    this.dateConfidence,
     this.warranty,
   });
 
@@ -80,6 +84,8 @@ class OcrResult {
       lineItems: itemsJson.map(OcrLineItem.fromJson).toList(),
       suggestedCategoryId: json['suggested_category_id'] as String?,
       suggestedCategoryName: json['suggested_category_name'] as String?,
+      suggestedCategoryConfidence: json['suggested_category_confidence'] as String?,
+      dateConfidence: json['date_confidence'] as String?,
       warranty: warrantyJson != null ? WarrantyInfo.fromJson(warrantyJson) : null,
     );
   }

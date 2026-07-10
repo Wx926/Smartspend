@@ -502,7 +502,7 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ),
 
-            // ── Scan Receipt shortcut ──────────────────────────────────────
+            // ── Quick Scan shortcut ────────────────────────────────────────
             SliverToBoxAdapter(
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
@@ -536,7 +536,7 @@ class _HomeScreenState extends State<HomeScreen> {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
-                                'Scan Receipt',
+                                'Quick Scan',
                                 style: TextStyle(
                                   fontWeight: FontWeight.w600,
                                   fontSize: 14,
@@ -544,7 +544,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                 ),
                               ),
                               Text(
-                                'Auto-extract expenses via OCR',
+                                'Jump straight to camera or gallery',
                                 style: TextStyle(
                                   fontSize: 11,
                                   color: AppColors.textSecondary,

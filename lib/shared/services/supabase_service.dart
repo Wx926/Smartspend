@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../models/budget_model.dart';
 import '../models/category_model.dart';
@@ -92,6 +93,20 @@ class SupabaseService {
 
   Future<void> deleteExpense(String expenseId) async {
     await _client.from('expenses').delete().eq('id', expenseId);
+  }
+
+  /// Uploads a scanned receipt photo/PDF to the "receipts" Storage bucket
+  /// (must exist — see supabase_storage_setup.sql) and returns its public
+  /// URL, so it can be viewed again later from Receipt History.
+  Future<String> uploadReceiptImage(File file, String batchId) async {
+    final ext = file.path.split('.').last.toLowerCase();
+    final path = '$_uid/$batchId.$ext';
+    await _client.storage.from('receipts').upload(
+          path,
+          file,
+          fileOptions: const FileOptions(upsert: true),
+        );
+    return _client.storage.from('receipts').getPublicUrl(path);
   }
 
   // ── Locations ─────────────────────────────────────────────────
