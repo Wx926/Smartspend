@@ -34,6 +34,11 @@ class GeminiService {
               'generationConfig': {
                 'maxOutputTokens': maxTokens,
                 'temperature': 0.7,
+                // Flash models "think" by default, returning the reasoning
+                // as extra response parts before the real answer. We just
+                // want a direct short reply, so turn that off — otherwise
+                // parts[0] can be a stray thinking fragment instead of text.
+                'thinkingConfig': {'thinkingBudget': 0},
               },
             }),
           )
@@ -41,7 +46,14 @@ class GeminiService {
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
-        return data['candidates'][0]['content']['parts'][0]['text'] as String;
+        final parts =
+            data['candidates']?[0]?['content']?['parts'] as List?;
+        final text = parts
+            ?.where((p) => p['thought'] != true && p['text'] != null)
+            .map((p) => p['text'] as String)
+            .join()
+            .trim();
+        if (text != null && text.isNotEmpty) return text;
       }
       return errorMessage ?? _fallbackAdvice();
     } catch (_) {

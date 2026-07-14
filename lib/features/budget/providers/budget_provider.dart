@@ -15,6 +15,7 @@ class BudgetProvider extends ChangeNotifier {
   List<CategoryModel> _categories = [];
   List<BudgetStatus> _statuses = [];
   bool _isLoading = false;
+  bool _hasLoadedOnce = false;
   String? _error;
   late DateTime _selectedMonth;
 
@@ -32,6 +33,12 @@ class BudgetProvider extends ChangeNotifier {
   List<CategoryModel> get incomeCategories => _incomeCategories;
   List<BudgetStatus> get statuses => _statuses;
   bool get isLoading => _isLoading;
+  // True once load() has completed at least once — distinct from isLoading,
+  // which starts false both before the first load call and after it. Callers
+  // that need to tell "genuinely no data" apart from "hasn't loaded yet"
+  // (e.g. the AI Advice greeting, which is built before this ever loads)
+  // should check this instead.
+  bool get hasLoadedOnce => _hasLoadedOnce;
   String? get error => _error;
   DateTime get selectedMonth => _selectedMonth;
 
@@ -58,6 +65,7 @@ class BudgetProvider extends ChangeNotifier {
       _error = e.toString();
     } finally {
       _isLoading = false;
+      _hasLoadedOnce = true;
       notifyListeners();
     }
   }

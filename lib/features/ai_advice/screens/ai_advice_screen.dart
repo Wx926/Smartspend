@@ -33,19 +33,36 @@ class _AiAdviceScreenState extends State<AiAdviceScreen> {
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _loadGreeting());
+    // This screen is built eagerly at app startup (MainShell keeps every tab
+    // alive inside an IndexedStack), so BudgetProvider is very likely still
+    // mid-load on the first frame. Listen for it to finish rather than
+    // deciding "no budgets" from a snapshot that just hasn't loaded yet.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      context.read<BudgetProvider>().addListener(_onBudgetProviderChanged);
+      _maybeLoadGreeting();
+    });
   }
 
   @override
   void dispose() {
+    context.read<BudgetProvider>().removeListener(_onBudgetProviderChanged);
     _chatController.dispose();
     _scrollController.dispose();
     super.dispose();
   }
 
-  Future<void> _loadGreeting() async {
+  void _onBudgetProviderChanged() => _maybeLoadGreeting();
+
+  Future<void> _maybeLoadGreeting() async {
     if (_loaded) return;
     final bp = context.read<BudgetProvider>();
+    // BudgetProvider.load() may not have even been called yet at this point
+    // (HomeScreen awaits expenses/wallets/savings-goals loads first) — wait
+    // for it to genuinely finish once, rather than treating a not-yet-loaded
+    // empty list as "user has no budgets".
+    if (!bp.hasLoadedOnce) return;
+
     final ep = context.read<ExpenseProvider>();
     final now = DateTime.now();
     final statuses = bp.statuses;

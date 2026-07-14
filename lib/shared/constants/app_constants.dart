@@ -9,7 +9,7 @@ class AppConstants {
       dotenv.env['OCR_BACKEND_URL'] ?? 'http://10.0.2.2:5000';
 
   static const String geminiEndpoint =
-      'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent';
+      'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent';
 
   // Location tracking (Algorithm 1)
   static const double geofenceRadiusMeters = 100.0;
