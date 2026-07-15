@@ -27,6 +27,7 @@ dependencies:
   pdfx: ^2.8.0
   path_provider: ^2.1.4
   record: ^7.1.1
+  flutter_background_service: ^5.1.0
 
 dev_dependencies:
   flutter_test:

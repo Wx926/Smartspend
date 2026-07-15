@@ -15,7 +15,11 @@ from utils.supabase_client import get_category_id
 CATEGORY_KEYWORDS: dict[str, list[str]] = {
     "Food & Dining": [
         "restaurant", "cafe", "cuisine", "kopitiam", "mamak", "nasi", "food",
-        "mcdonald", "kfc", "starbucks", "pizza", "burger", "char",
+        "mcdonald", "kfc", "starbucks", "pizza", "burger",
+        # "char" (char kway teow, char siew) is handled via
+        # WORD_BOUNDARY_KEYWORDS below since it's also a substring of
+        # unrelated words like "Charges" ("Service Charges" on an invoice).
+        "char",
         "kopi", "makan", "lunch", "dinner", "breakfast", "bakery",
         "teh", "tarik", "roti", "canai", "lemak", "mee", "laksa",
         "curry", "rice", "ayam", "ikan", "sup", "bihun", "kuey",
@@ -86,7 +90,7 @@ CATEGORY_KEYWORDS: dict[str, list[str]] = {
 # receipt text (e.g. "mall" inside the size "Small" — "Small Cone"/"Small
 # Fries" would otherwise be miscategorised as Shopping on almost every fast-
 # food receipt) and must require real word boundaries instead.
-WORD_BOUNDARY_KEYWORDS = {"mall", "crab"}
+WORD_BOUNDARY_KEYWORDS = {"mall", "crab", "char"}
 
 DEFAULT_CATEGORY = "Others"
 

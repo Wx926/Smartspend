@@ -35,6 +35,26 @@ DATE_PATTERNS = [
     r"(\d{4}[\/\-]\d{1,2}[\/\-]\d{1,2})",     # 2026-06-27
 ]
 
+# Restricted to actual month names/abbreviations (not any 3-9 letter word) —
+# an earlier looser version matched things like "Seksyen 14, 46100" (an
+# address/postcode fragment) as a false "date". Each letter allows an
+# optional stray space after it (matching e.g. "M ar" as well as "Mar") since
+# Vision sometimes splits a short word mid-way; the month/day and day/year
+# gaps are also optional whitespace, since Vision is equally inconsistent
+# about whether it prints a space there at all ("Mar 30,2026" vs "Mar30,2026").
+def _loose(word: str) -> str:
+    return r"\s?".join(re.escape(c) for c in word)
+
+
+_MONTH_TO_NUM = {
+    "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
+    "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
+}
+_MONTH_NAME = "(?:" + "|".join(_loose(abbr) for abbr in _MONTH_TO_NUM) + r")[A-Za-z]*"
+_MONTH_NAME_DATE = re.compile(
+    rf"({_MONTH_NAME})\s*(\d{{1,2}}),?\s*(\d{{4}})", re.IGNORECASE
+)
+
 _CURRENCY = r"(?:RM|MYR|USD|SGD|GBP|\$|£|€|¥)?\s*"
 
 # CJK Unicode ranges (common + extension-A) — Malaysian receipts are frequently
@@ -50,7 +70,7 @@ _CJK = r"一-鿿㐀-䶿（）"
 # "Naughty Spare Rib - Full Slab") or a "+"/"/"-joined size descriptor like
 # "1+1/2" (as in "HH Asahi 1+1/2") — neither fits a plain word token, so both
 # need their own alternative in the word-continuation groups below.
-_LOOSE_WORD_SEP = r"-|\d+(?:[+\/]\d+)+"
+_LOOSE_WORD_SEP = r"-|::|\d+(?:[+\/]\d+)+"
 
 # Single-line item: alphabetical name, optional product-code/content in middle, price at end.
 # e.g. "TEH TARIK 3.50"  →  TEH TARIK, 3.50
@@ -328,51 +348,57 @@ def _pdf_to_image_bytes(pdf_bytes: bytes) -> bytes:
 # the gap between genuinely separate words. Falls back to Vision's own text if
 # a response has no symbol boxes.
 def _reconstruct_reading_order(full_text_annotation: dict) -> str:
-    symbols = []  # (y_center, x_left, x_right, height, text)
+    # Operates on whole WORDS, not individual characters. An earlier
+    # character-level version sorted every single symbol by Y-position across
+    # the full page width before bucketing rows — on a wide, dense,
+    # multi-column receipt (letterhead + a 5-column item table), even a
+    # slight camera skew drifts Y-position enough across that width to make
+    # the greedy row-bucketing interleave characters from different physical
+    # lines, producing an unreadable single-character scramble. Words are far
+    # fewer and narrower than characters, so the same skew has much less room
+    # to drift a word's average Y off its true row — and Vision has already
+    # solved the much harder "which characters belong to the same word"
+    # problem for us, so there's no need to re-derive it from character gaps.
+    words = []  # (y_center, x_left, x_right, height, text)
     for page in full_text_annotation.get("pages", []):
         for block in page.get("blocks", []):
             for paragraph in block.get("paragraphs", []):
                 for word in paragraph.get("words", []):
-                    for symbol in word.get("symbols", []):
-                        vertices = symbol.get("boundingBox", {}).get("vertices", [])
-                        if len(vertices) < 4:
-                            continue
-                        text = symbol.get("text", "")
-                        if not text:
-                            continue
-                        ys = [v.get("y", 0) for v in vertices]
-                        xs = [v.get("x", 0) for v in vertices]
-                        symbols.append((
-                            sum(ys) / len(ys), min(xs), max(xs),
-                            max(ys) - min(ys) or 1, text,
-                        ))
+                    vertices = word.get("boundingBox", {}).get("vertices", [])
+                    if len(vertices) < 4:
+                        continue
+                    text = "".join(s.get("text", "") for s in word.get("symbols", []))
+                    if not text:
+                        continue
+                    ys = [v.get("y", 0) for v in vertices]
+                    xs = [v.get("x", 0) for v in vertices]
+                    words.append((
+                        sum(ys) / len(ys), min(xs), max(xs),
+                        max(ys) - min(ys) or 1, text,
+                    ))
 
-    if not symbols:
+    if not words:
         return ""
 
-    symbols.sort(key=lambda s: s[0])  # top to bottom by vertical center
+    words.sort(key=lambda w: w[0])  # top to bottom by vertical center
 
     rows: list[list[tuple]] = []
-    for s in symbols:
+    for w in words:
         if rows:
             row_y = sum(r[0] for r in rows[-1]) / len(rows[-1])
             row_h = sum(r[3] for r in rows[-1]) / len(rows[-1])
-            if abs(s[0] - row_y) <= row_h * 0.6:
-                rows[-1].append(s)
+            if abs(w[0] - row_y) <= row_h * 0.6:
+                rows[-1].append(w)
                 continue
-        rows.append([s])
+        rows.append([w])
 
     lines = []
     for row in rows:
-        row.sort(key=lambda s: s[1])  # left to right
-        parts = [row[0][4]]
-        for prev, cur in zip(row, row[1:]):
-            gap = cur[1] - prev[2]
-            char_height = (prev[3] + cur[3]) / 2
-            if gap > char_height * 0.25:
-                parts.append(" ")
-            parts.append(cur[4])
-        lines.append("".join(parts))
+        row.sort(key=lambda w: w[1])  # left to right
+        # Every entry here is already a distinct word per Vision's own
+        # segmentation, so — unlike the old character-level gap heuristic —
+        # a single space always belongs between consecutive words.
+        lines.append(" ".join(w[4] for w in row))
     return "\n".join(lines)
 
 
@@ -463,7 +489,7 @@ def _extract_amount(raw_text: str) -> float | None:
         re.IGNORECASE,
     )
     _TOTAL_EXCLUDE = re.compile(
-        r"\b(subtotal|sub[\s\-]total|cash|change|tax|gst|sst|qty|items?\s*sold)\b"
+        r"\b(subtotal|sub[\s\-]total|cash|change|tax|gst|sst|qty|items?\s*sold|payable)\b"
         r"|小计|现金|找零|找续|找赎|消费税|服务税|数量",
         re.IGNORECASE,
     )
@@ -487,6 +513,18 @@ def _extract_amount(raw_text: str) -> float | None:
     # here specifically rather than loosening the shared AMOUNT_PATTERN used
     # elsewhere, since that would risk false positives in line-item parsing.
     _AMOUNT_LOOSE = re.compile(rf"{_CURRENCY}(\d+[.,]\s?\d{{2}})", re.IGNORECASE)
+
+    # Some receipts' real total line gets so badly OCR-mangled (e.g. a
+    # multi-column letterhead/footer layout that interleaves unrelated text)
+    # that the "total"/"amount" label no longer sits at the start of its own
+    # line — e.g. a wrapped "TOTAL AMOUNT 539.00" surviving only as
+    # "...AL AMOUNT 539.00" glued onto an unrelated card-swipe reference
+    # number. Track the first such mid-line match as a middle-tier fallback,
+    # since it's still far more reliable than blindly taking the largest
+    # number anywhere in the receipt (which can pick up a reference number,
+    # phone number, or invoice ID with a decimal accidentally glued to it).
+    _TOTAL_KEYWORD_ANYWHERE = re.compile(r"\b(total|amount)\b", re.IGNORECASE)
+    midline_amount = None
 
     # Scan from bottom upward — grand total is near the end; column-header
     # "TOTAL" is near the top and will only be reached if no real total found.
@@ -519,6 +557,29 @@ def _extract_amount(raw_text: str) -> float | None:
                 if m:
                     return float(m.group(1).replace(" ", "").replace(",", "."))
 
+        if midline_amount is None:
+            # Check each total/amount occurrence on this line in turn, rather
+            # than excluding the whole line if it contains "tax"/"payable"
+            # ANYWHERE — reconstruction can merge unrelated content onto the
+            # same physical line (e.g. an early "Tax Details" label sharing a
+            # line with the real "...TOTAL AMOUNT 539.00" much further along,
+            # or a card-swipe reference sharing a line with an unrelated
+            # "Total ST Payable 0.00"). A whole-line check would wrongly
+            # block the first case and wrongly allow the second; checking a
+            # window right around each specific match keeps both correct.
+            for kw in _TOTAL_KEYWORD_ANYWHERE.finditer(line):
+                m = _AMOUNT_LOOSE.search(line[kw.end():])
+                if not m:
+                    continue
+                window = line[max(0, kw.start() - 20):kw.end() + m.end()]
+                if _TOTAL_EXCLUDE.search(window):
+                    continue
+                midline_amount = float(m.group(1).replace(" ", "").replace(",", "."))
+                break
+
+    if midline_amount is not None:
+        return midline_amount
+
     # Fallback: largest amount in the receipt
     matches = AMOUNT_PATTERN.findall(raw_text)
     return max(float(m.replace(",", ".")) for m in matches) if matches else None
@@ -535,6 +596,21 @@ def _extract_date(raw_text: str) -> date | None:
                     return datetime.strptime(date_str, fmt).date()
                 except ValueError:
                     continue
+
+    # Month-name dates (e.g. "Mar 30,2026") are matched and parsed separately
+    # from strptime — month/day/year are captured as distinct groups by
+    # _MONTH_NAME_DATE, so there's no single literal format string that could
+    # tolerate Vision's inconsistent spacing (see comment above that pattern).
+    match = _MONTH_NAME_DATE.search(raw_text)
+    if match:
+        month_key = re.sub(r"\s+", "", match.group(1)).lower()[:3]
+        month_num = _MONTH_TO_NUM.get(month_key)
+        if month_num:
+            try:
+                return date(int(match.group(3)), month_num, int(match.group(2)))
+            except ValueError:
+                pass
+
     return None
 
 
@@ -590,14 +666,35 @@ def _extract_vendor(lines: list[str]) -> str | None:
     if any(_BHD_LINE.search(ln) for ln in window):
         for idx, line in enumerate(lines[:5]):
             stripped = line.strip()
-            if (not re.search(r"\d{3,}", stripped)
-                    and not any(c in stripped for c in "#:*")
-                    and len(stripped) > 3
-                    and not _is_noise_line(stripped)):
-                normalised = stripped.lower()
-                rest = " ".join(window[:idx] + window[idx + 1:]).lower()
-                if normalised in rest:
-                    return stripped
+            if (any(c in stripped for c in "#:*")
+                    or len(stripped) <= 3
+                    or _is_noise_line(stripped)):
+                continue
+            # A line that itself names the registered company ("X Sdn Bhd")
+            # is strong enough evidence on its own — a nearby legally-
+            # required registration number on the same line (e.g. "(541512-
+            # U)") must not disqualify it via the digit-run check below,
+            # which exists to filter out unrelated ID/phone-number lines
+            # instead. Without this, that disqualification let a short
+            # digit-free address fragment ("Selangor U13, Shah Alam") win by
+            # default through a looser fallback further down.
+            if _BHD_LINE.search(stripped):
+                # A company name never legitimately starts with a lowercase
+                # word — that's always a stray fragment of unrelated text
+                # (e.g. an address block wrapping into the same reconstructed
+                # line as "TMT Lot L1-012 ... Technology Sdn Bhd", leaving a
+                # leading "ent " left over from "ment" elsewhere). Trim any
+                # such leading run before returning.
+                words = stripped.split()
+                while len(words) > 1 and words[0][:1].islower():
+                    words.pop(0)
+                return " ".join(words)
+            if re.search(r"\d{3,}", stripped):
+                continue
+            normalised = stripped.lower()
+            rest = " ".join(window[:idx] + window[idx + 1:]).lower()
+            if normalised in rest:
+                return stripped
 
     for line in lines[:5]:
         if (not re.search(r"\d{3,}", line)
@@ -665,7 +762,23 @@ def _extract_line_items(raw_text: str) -> list[dict]:
 
     # Strip printer formatting tags (e.g. <i>, <b>) that Google Vision reads literally
     _TAG = re.compile(r"<[^>]*>")
-    lines = [_TAG.sub("", ln).rstrip() for ln in raw_text.splitlines()]
+    # On some Malaysian tax-invoice layouts, the item table's own column
+    # headers ("QTY Tax Code", "U. PRICE DISC (%) AMOUNT") end up reconstructed
+    # onto the SAME line as a wrapped item description instead of their own
+    # standalone header row (a long description spans more physical lines
+    # than the numeric columns beside it, so the header ends up Y-aligned
+    # with the description's middle rather than its top). These are
+    # unambiguous multi-word column labels that never legitimately appear
+    # inside real item text, so strip them out before layout matching rather
+    # than let them derail name/price pairing.
+    _EMBEDDED_HEADER_FRAGMENTS = re.compile(
+        r"\bQTY\s+Tax\s*Code\b|\bU\.?\s*PRICE\s+DISC\s*\(\s*%\s*\)\s*(?:AMOUNT\b)?",
+        re.IGNORECASE,
+    )
+    lines = [
+        re.sub(r"\s{2,}", " ", _EMBEDDED_HEADER_FRAGMENTS.sub(" ", _TAG.sub("", ln))).rstrip()
+        for ln in raw_text.splitlines()
+    ]
     i = 0
     while i < len(lines):
         line = lines[i].strip()
@@ -854,10 +967,20 @@ def _extract_line_items(raw_text: str) -> list[dict]:
                     # pending name — otherwise that item's price gets stolen
                     # here and the item itself is skipped over entirely when
                     # the outer loop reaches it. Strip a possible leading qty
-                    # digit first, the same way the outer loop does.
+                    # digit first, the same way the outer loop does. Same
+                    # 3-char minimum as every other name-emission check in
+                    # this file — LINE_ITEM_PATTERN's non-greedy middle
+                    # wildcard will happily match straight through a messy
+                    # continuation line (e.g. a serial-number line like
+                    # "SN # : S5GXNU0WC15502 ... SR 499.00") and capture just
+                    # "SN" as a "name", wrongly treating the pending item's
+                    # own price line as if a whole new item had started and
+                    # dropping the pending item entirely.
                     ahead_unqtied = re.sub(r"^\d{1,3}\s+", "", ahead)
+                    ahead_item_match = LINE_ITEM_PATTERN.match(ahead_unqtied)
                     if (not _QTY_CALC_LINE.search(ahead_unqtied)
-                            and LINE_ITEM_PATTERN.match(ahead_unqtied)):
+                            and ahead_item_match
+                            and len(ahead_item_match.group(1).strip()) >= 3):
                         broke_on_name = True
                         break
                     # Weight/quantity lines (e.g. "1.75 lb @ 1 lb/0.54") carry a
