@@ -75,6 +75,12 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
   // and OSM node placement are rarely pinpoint-exact, so a tight radius
   // makes real nearby places (like a cafe next to a saved venue) miss.
   static const double _candidateRadiusMeters = 150;
+  // Wider than _candidateRadiusMeters: this only bounds the OSM/Overpass
+  // query, not saved-venue matching, so it can be generous without risking
+  // false "arrived" matches. Matches the default radius used by the Nearby
+  // Locations screen (OsmService.nearbyPlaces), so both surfaces suggest a
+  // comparable number of nearby places.
+  static const int _osmSearchRadiusMeters = 500;
   static const int _maxCandidates = 6;
 
   /// Gathers every place within range of the current position — both
@@ -126,7 +132,7 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
     final places = await OsmService.instance.nearbyPlaces(
       pos.latitude,
       pos.longitude,
-      radiusMeters: _candidateRadiusMeters.round(),
+      radiusMeters: _osmSearchRadiusMeters,
     );
     for (final p in places) {
       if (savedNames.contains(p.name.toLowerCase())) continue;

@@ -16,13 +16,14 @@ class GeminiService {
       return errorMessage ?? _fallbackAdvice();
     }
     try {
-      final uri = Uri.parse(
-        '${AppConstants.geminiEndpoint}?key=${AppConstants.geminiApiKey}',
-      );
+      final uri = Uri.parse(AppConstants.geminiEndpoint);
       final response = await http
           .post(
             uri,
-            headers: {'Content-Type': 'application/json'},
+            headers: {
+              'Content-Type': 'application/json',
+              'x-goog-api-key': AppConstants.geminiApiKey,
+            },
             body: jsonEncode({
               'contents': [
                 {

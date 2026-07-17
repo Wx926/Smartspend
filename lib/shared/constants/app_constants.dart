@@ -22,7 +22,7 @@ class AppConstants {
 
   // Algorithm 3 Step 1/7: per-venue cooldown between repeat alerts, and a
   // hard daily cap so a long stay at one place can't spam indefinitely.
-  static const double alertCooldownHours = 0.025;
+  static const double alertCooldownHours = 0.1;
   static const int maxAlertsPerVenuePerDay = 100;
 
   static const String appName = 'SmartSpend';

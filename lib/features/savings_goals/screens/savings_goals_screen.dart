@@ -898,7 +898,7 @@ class _SavingsGoalsScreenState extends State<SavingsGoalsScreen> {
                         DateTime.now().add(const Duration(days: 30)),
                     firstDate: DateTime.now(),
                     lastDate:
-                        DateTime.now().add(const Duration(days: 3650)),
+                        DateTime.now().add(const Duration(days: 365 * 80)),
                   );
                   if (picked != null) {
                     setSheetState(() => deadline = picked);
