@@ -4,8 +4,39 @@ import 'package:provider/provider.dart';
 import '../../../features/budget/providers/budget_provider.dart';
 import '../../../features/expenses/providers/expense_provider.dart';
 import '../../../shared/models/budget_model.dart';
+import '../../../shared/models/category_model.dart';
+import '../../../shared/models/expense_model.dart';
 import '../../../shared/services/gemini_service.dart';
 import '../../../shared/theme/app_colors.dart';
+
+const _transferCategoryIds = {'savings_transfer', 'wallet_transfer'};
+
+String _categoryNameFor(String categoryId, List<CategoryModel> categories) {
+  if (_transferCategoryIds.contains(categoryId)) return 'transfer';
+  return categories
+      .firstWhere(
+        (c) => c.id == categoryId,
+        orElse: () => CategoryModel(
+          id: categoryId,
+          name: categoryId,
+          icon: '',
+          colorHex: '',
+          type: 'expense',
+        ),
+      )
+      .name;
+}
+
+/// One line per transaction so the AI can answer date/item-specific
+/// questions instead of only seeing month-level totals.
+String _formatTransactionLine(ExpenseModel e, List<CategoryModel> categories) {
+  final categoryName = _categoryNameFor(e.categoryId, categories);
+  final label = e.description.isNotEmpty
+      ? e.description
+      : (e.merchantName ?? categoryName);
+  final sign = e.type == 'income' ? '+' : '-';
+  return '- ${DateFormat('MMM d').format(e.date)}: $label ($categoryName), $sign RM ${e.amount.toStringAsFixed(2)}';
+}
 
 class _ChatMessage {
   final String text;
@@ -72,8 +103,9 @@ class _AiAdviceScreenState extends State<AiAdviceScreen> {
     if (statuses.isNotEmpty) {
       final topStatus = statuses.reduce((a, b) => a.spent > b.spent ? a : b);
       final insight = await GeminiService.instance.getMonthlySummaryInsight(
-        totalSpent: ep.forMonth(now.month, now.year).fold(0.0, (s, e) => s + e.amount),
+        totalSpent: ep.expensesForMonth(now.month, now.year).fold(0.0, (s, e) => s + e.amount),
         totalBudget: bp.totalBudget,
+        totalIncome: ep.incomeForMonth(now.month, now.year).fold(0.0, (s, e) => s + e.amount),
         topCategory: topStatus.categoryName,
         topCategorySpent: topStatus.spent,
         month: DateFormat('MMMM yyyy').format(now),
@@ -97,7 +129,19 @@ class _AiAdviceScreenState extends State<AiAdviceScreen> {
     final ep = context.read<ExpenseProvider>();
     final now = DateTime.now();
     final totalSpent =
-        ep.forMonth(now.month, now.year).fold(0.0, (s, e) => s + e.amount);
+        ep.expensesForMonth(now.month, now.year).fold(0.0, (s, e) => s + e.amount);
+    final totalIncome =
+        ep.incomeForMonth(now.month, now.year).fold(0.0, (s, e) => s + e.amount);
+    final daysInMonth = DateTime(now.year, now.month + 1, 0).day;
+    final monthTxns = ep.forMonth(now.month, now.year)
+      ..sort((a, b) => b.date.compareTo(a.date));
+    final totalTransfers = monthTxns
+        .where((e) => _transferCategoryIds.contains(e.categoryId))
+        .fold(0.0, (s, e) => s + e.amount);
+    final transactionLines = monthTxns
+        .take(200)
+        .map((e) => _formatTransactionLine(e, bp.categories))
+        .toList();
 
     setState(() {
       _messages.add(_ChatMessage(text: text, isUser: true));
@@ -115,7 +159,12 @@ class _AiAdviceScreenState extends State<AiAdviceScreen> {
       question: text,
       totalSpent: totalSpent,
       totalBudget: bp.totalBudget,
+      totalIncome: totalIncome,
+      totalTransfers: totalTransfers,
+      daysElapsedInMonth: now.day,
+      daysInMonth: daysInMonth,
       categoryBreakdown: categoryBreakdown,
+      transactions: transactionLines,
       month: DateFormat('MMMM yyyy').format(now),
     );
 

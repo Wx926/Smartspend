@@ -1,15 +1,18 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:uuid/uuid.dart';
 import '../../../shared/models/category_model.dart';
 import '../../../shared/theme/app_colors.dart';
+import '../../../features/auth/providers/auth_provider.dart';
 import '../../../features/budget/providers/budget_provider.dart';
+
+const _uuid = Uuid();
 
 class ManageCategoriesScreen extends StatefulWidget {
   const ManageCategoriesScreen({super.key});
 
   @override
-  State<ManageCategoriesScreen> createState() =>
-      _ManageCategoriesScreenState();
+  State<ManageCategoriesScreen> createState() => _ManageCategoriesScreenState();
 }
 
 class _ManageCategoriesScreenState extends State<ManageCategoriesScreen>
@@ -66,8 +69,10 @@ class _ManageCategoriesScreenState extends State<ManageCategoriesScreen>
   Widget _categoryList(List<CategoryModel> cats) {
     if (cats.isEmpty) {
       return const Center(
-        child: Text('No categories',
-            style: TextStyle(color: AppColors.textSecondary)),
+        child: Text(
+          'No categories',
+          style: TextStyle(color: AppColors.textSecondary),
+        ),
       );
     }
     return ListView.separated(
@@ -94,18 +99,27 @@ class _ManageCategoriesScreenState extends State<ManageCategoriesScreen>
                 child: Text(cat.icon, style: const TextStyle(fontSize: 20)),
               ),
             ),
-            title: Text(cat.name,
-                style: const TextStyle(fontWeight: FontWeight.w500)),
+            title: Text(
+              cat.name,
+              style: const TextStyle(fontWeight: FontWeight.w500),
+            ),
             subtitle: cat.isDefault
-                ? const Text('Default',
+                ? const Text(
+                    'Default',
                     style: TextStyle(
-                        color: AppColors.textSecondary, fontSize: 12))
+                      color: AppColors.textSecondary,
+                      fontSize: 12,
+                    ),
+                  )
                 : null,
             trailing: cat.isDefault
                 ? null
                 : IconButton(
-                    icon: const Icon(Icons.delete_outline,
-                        color: Colors.red, size: 20),
+                    icon: const Icon(
+                      Icons.delete_outline,
+                      color: Colors.red,
+                      size: 20,
+                    ),
                     onPressed: () => _confirmDelete(cat),
                   ),
           ),
@@ -122,12 +136,40 @@ class _ManageCategoriesScreenState extends State<ManageCategoriesScreen>
     String selectedType = _tabs.index == 0 ? 'expense' : 'income';
 
     final expenseIconSuggestions = [
-      '💡', '🏠', '🚀', '🎯', '💎', '🛒', '✈️', '📱',
-      '🎮', '📚', '💪', '🍕', '☕', '🎁', '🚌', '⚡',
+      '💡',
+      '🏠',
+      '🚀',
+      '🎯',
+      '💎',
+      '🛒',
+      '✈️',
+      '📱',
+      '🎮',
+      '📚',
+      '💪',
+      '🍕',
+      '☕',
+      '🎁',
+      '🚌',
+      '⚡',
     ];
     final incomeIconSuggestions = [
-      '💼', '💻', '📈', '🎁', '🤝', '💵', '🏦', '⭐',
-      '🎓', '🏆', '💹', '🌟', '💰', '📊', '🔑', '⚡',
+      '💼',
+      '💻',
+      '📈',
+      '🎁',
+      '🤝',
+      '💵',
+      '🏦',
+      '⭐',
+      '🎓',
+      '🏆',
+      '💹',
+      '🌟',
+      '💰',
+      '📊',
+      '🔑',
+      '⚡',
     ];
 
     final incomeTemplates = [
@@ -140,16 +182,26 @@ class _ManageCategoriesScreenState extends State<ManageCategoriesScreen>
     ];
 
     final colors = [
-      'FF6B35', '4ECDC4', 'A855F7', 'F59E0B',
-      '10B981', '3B82F6', '6B7280', 'E74C3C',
-      '27AE60', '2980B9', 'F39C12', '8E44AD',
+      'FF6B35',
+      '4ECDC4',
+      'A855F7',
+      'F59E0B',
+      '10B981',
+      '3B82F6',
+      '6B7280',
+      'E74C3C',
+      '27AE60',
+      '2980B9',
+      'F39C12',
+      '8E44AD',
     ];
 
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setSheet) {
           final iconSuggestions = selectedType == 'income'
@@ -158,18 +210,27 @@ class _ManageCategoriesScreenState extends State<ManageCategoriesScreen>
 
           return Padding(
             padding: EdgeInsets.fromLTRB(
-                24, 24, 24, MediaQuery.of(ctx).viewInsets.bottom + 24),
+              24,
+              24,
+              24,
+              MediaQuery.of(ctx).viewInsets.bottom + 24,
+            ),
             child: SingleChildScrollView(
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('New Category',
-                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                  const Text(
+                    'New Category',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                  ),
                   const SizedBox(height: 16),
 
                   // ── Type selector ──────────────────────────────────────
-                  const Text('Type', style: TextStyle(fontWeight: FontWeight.w500)),
+                  const Text(
+                    'Type',
+                    style: TextStyle(fontWeight: FontWeight.w500),
+                  ),
                   const SizedBox(height: 8),
                   Row(
                     children: ['expense', 'income'].map((type) {
@@ -178,17 +239,23 @@ class _ManageCategoriesScreenState extends State<ManageCategoriesScreen>
                         child: GestureDetector(
                           onTap: () => setSheet(() => selectedType = type),
                           child: Container(
-                            margin: EdgeInsets.only(right: type == 'expense' ? 8 : 0),
+                            margin: EdgeInsets.only(
+                              right: type == 'expense' ? 8 : 0,
+                            ),
                             padding: const EdgeInsets.symmetric(vertical: 10),
                             decoration: BoxDecoration(
-                              color: selected ? AppColors.primary : Colors.grey.shade100,
+                              color: selected
+                                  ? AppColors.primary
+                                  : Colors.grey.shade100,
                               borderRadius: BorderRadius.circular(8),
                             ),
                             child: Center(
                               child: Text(
                                 type[0].toUpperCase() + type.substring(1),
                                 style: TextStyle(
-                                  color: selected ? Colors.white : AppColors.textPrimary,
+                                  color: selected
+                                      ? Colors.white
+                                      : AppColors.textPrimary,
                                   fontWeight: FontWeight.w500,
                                 ),
                               ),
@@ -202,7 +269,10 @@ class _ManageCategoriesScreenState extends State<ManageCategoriesScreen>
                   // ── Quick-add income templates ─────────────────────────
                   if (selectedType == 'income') ...[
                     const SizedBox(height: 16),
-                    const Text('Quick add', style: TextStyle(fontWeight: FontWeight.w500)),
+                    const Text(
+                      'Quick add',
+                      style: TextStyle(fontWeight: FontWeight.w500),
+                    ),
                     const SizedBox(height: 8),
                     Wrap(
                       spacing: 8,
@@ -216,35 +286,57 @@ class _ManageCategoriesScreenState extends State<ManageCategoriesScreen>
                             selectedColor = t['color']!;
                           }),
                           child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 6,
+                            ),
                             decoration: BoxDecoration(
                               color: Colors.grey.shade100,
                               borderRadius: BorderRadius.circular(20),
                               border: Border.all(color: Colors.grey.shade300),
                             ),
-                            child: Row(mainAxisSize: MainAxisSize.min, children: [
-                              Text(t['icon']!, style: const TextStyle(fontSize: 16)),
-                              const SizedBox(width: 6),
-                              Text(t['name']!, style: const TextStyle(fontSize: 13)),
-                            ]),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(
+                                  t['icon']!,
+                                  style: const TextStyle(fontSize: 16),
+                                ),
+                                const SizedBox(width: 6),
+                                Text(
+                                  t['name']!,
+                                  style: const TextStyle(fontSize: 13),
+                                ),
+                              ],
+                            ),
                           ),
                         );
                       }).toList(),
                     ),
                     const SizedBox(height: 4),
-                    const Text('Tap to fill — or type your own below',
-                        style: TextStyle(color: AppColors.textSecondary, fontSize: 11)),
+                    const Text(
+                      'Tap to fill — or type your own below',
+                      style: TextStyle(
+                        color: AppColors.textSecondary,
+                        fontSize: 11,
+                      ),
+                    ),
                   ],
 
                   const SizedBox(height: 16),
                   TextField(
                     controller: nameCtrl,
-                    decoration: const InputDecoration(labelText: 'Category name'),
+                    decoration: const InputDecoration(
+                      labelText: 'Category name',
+                    ),
                   ),
 
                   // ── Icon: keyboard input + quick picks ────────────────
                   const SizedBox(height: 16),
-                  const Text('Icon', style: TextStyle(fontWeight: FontWeight.w500)),
+                  const Text(
+                    'Icon',
+                    style: TextStyle(fontWeight: FontWeight.w500),
+                  ),
                   const SizedBox(height: 8),
                   TextField(
                     controller: iconCtrl,
@@ -254,19 +346,28 @@ class _ManageCategoriesScreenState extends State<ManageCategoriesScreen>
                       hintText: '😊',
                       helperText: 'Type any emoji from your keyboard',
                       helperStyle: const TextStyle(fontSize: 11),
-                      contentPadding:
-                          const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
+                      contentPadding: const EdgeInsets.symmetric(
+                        vertical: 10,
+                        horizontal: 12,
+                      ),
                       border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(8)),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
                     ),
                     onChanged: (val) {
                       final trimmed = val.trim();
-                      if (trimmed.isNotEmpty) setSheet(() => selectedIcon = trimmed);
+                      if (trimmed.isNotEmpty)
+                        setSheet(() => selectedIcon = trimmed);
                     },
                   ),
                   const SizedBox(height: 10),
-                  const Text('Quick picks',
-                      style: TextStyle(color: AppColors.textSecondary, fontSize: 11)),
+                  const Text(
+                    'Quick picks',
+                    style: TextStyle(
+                      color: AppColors.textSecondary,
+                      fontSize: 11,
+                    ),
+                  ),
                   const SizedBox(height: 6),
                   Wrap(
                     spacing: 8,
@@ -291,7 +392,10 @@ class _ManageCategoriesScreenState extends State<ManageCategoriesScreen>
                                 : null,
                           ),
                           child: Center(
-                            child: Text(icon, style: const TextStyle(fontSize: 20)),
+                            child: Text(
+                              icon,
+                              style: const TextStyle(fontSize: 20),
+                            ),
                           ),
                         ),
                       );
@@ -299,8 +403,10 @@ class _ManageCategoriesScreenState extends State<ManageCategoriesScreen>
                   ),
 
                   const SizedBox(height: 16),
-                  const Text('Choose Color',
-                      style: TextStyle(fontWeight: FontWeight.w500)),
+                  const Text(
+                    'Choose Color',
+                    style: TextStyle(fontWeight: FontWeight.w500),
+                  ),
                   const SizedBox(height: 8),
                   Wrap(
                     spacing: 8,
@@ -334,15 +440,18 @@ class _ManageCategoriesScreenState extends State<ManageCategoriesScreen>
                         if (name.isEmpty) return;
 
                         final newCat = CategoryModel(
-                          id: '${selectedType}_${DateTime.now().millisecondsSinceEpoch}',
+                          id: _uuid.v4(),
                           name: name,
                           icon: selectedIcon,
                           colorHex: selectedColor,
                           type: selectedType,
                           isDefault: false,
+                          userId: context.read<AuthProvider>().userId,
                         );
 
-                        await context.read<BudgetProvider>().addCategory(newCat);
+                        await context.read<BudgetProvider>().addCategory(
+                          newCat,
+                        );
 
                         if (ctx.mounted) Navigator.pop(ctx);
                       },
@@ -366,15 +475,15 @@ class _ManageCategoriesScreenState extends State<ManageCategoriesScreen>
         content: Text('Delete "${cat.name}"?'),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel')),
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
           TextButton(
             onPressed: () async {
               Navigator.pop(context);
               await context.read<BudgetProvider>().removeCategory(cat);
             },
-            child: const Text('Delete',
-                style: TextStyle(color: Colors.red)),
+            child: const Text('Delete', style: TextStyle(color: Colors.red)),
           ),
         ],
       ),

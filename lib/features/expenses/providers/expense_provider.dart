@@ -60,6 +60,10 @@ class ExpenseProvider extends ChangeNotifier {
     try {
       _expenses = await _service.getExpenses();
     } catch (e) {
+      // Reset rather than leaving whatever was loaded before — otherwise a
+      // failed fetch (e.g. right after switching accounts) just keeps
+      // showing the previous account's stale records forever.
+      _expenses = [];
       _error = e.toString();
     } finally {
       _isLoading = false;

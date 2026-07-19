@@ -10,6 +10,7 @@ import '../../../shared/models/location_model.dart';
 import '../../../shared/services/gemini_service.dart';
 import '../../../shared/services/local_storage_service.dart';
 import '../../../shared/services/navigation_service.dart';
+import '../../../shared/services/supabase_service.dart';
 import '../../budget/services/budget_service.dart';
 import '../../expenses/services/expense_service.dart';
 
@@ -24,6 +25,7 @@ class AlertService {
   static final AlertService instance = AlertService._();
 
   final _store = LocalStorageService.instance;
+  final _supabase = SupabaseService.instance;
   final _gemini = GeminiService.instance;
   final _uuid = const Uuid();
 
@@ -59,11 +61,47 @@ class AlertService {
         ?.requestPermissions(alert: true, badge: true, sound: true);
   }
 
-  Future<List<AlertLogModel>> getAlerts() async => _store.getAlerts();
+  /// Local-first, same pattern as ExpenseService: read the cache instantly,
+  /// only reach for Supabase when nothing has ever been cached locally (e.g.
+  /// first run, or a different device/account).
+  Future<List<AlertLogModel>> getAlerts() async {
+    var alerts = _store.getAlerts();
+    if (alerts.isEmpty && _supabase.isLoggedIn) {
+      try {
+        final cloud = await _supabase.getAlerts();
+        if (cloud.isNotEmpty) {
+          for (final a in cloud) {
+            await _store.insertAlert(a);
+          }
+          alerts = _store.getAlerts();
+        }
+      } catch (_) {}
+    }
+    return alerts;
+  }
 
-  Future<void> markRead(String alertId) => _store.markAlertRead(alertId);
+  Future<void> markRead(String alertId) async {
+    await _store.markAlertRead(alertId);
+    if (_supabase.isLoggedIn) {
+      _supabase.markAlertRead(alertId).catchError((_) {});
+    }
+  }
 
-  Future<void> markAllRead() => _store.markAllAlertsRead();
+  Future<void> markAllRead() async {
+    await _store.markAllAlertsRead();
+    if (_supabase.isLoggedIn) {
+      _supabase.markAllAlertsRead().catchError((_) {});
+    }
+  }
+
+  /// Saves an alert locally (source of truth for the UI) and syncs it to
+  /// Supabase in the background, best-effort.
+  Future<void> _saveAlert(AlertLogModel alert) async {
+    await _store.insertAlert(alert);
+    if (_supabase.isLoggedIn) {
+      _supabase.insertAlert(alert).catchError((_) => alert);
+    }
+  }
 
   /// Gathers categories/budgets/expenses itself (all plain singletons, no
   /// BuildContext/Provider needed) and runs [evaluateVenueVisit]. This is
@@ -149,7 +187,7 @@ class AlertService {
         locationId: venue.id,
         createdAt: DateTime.now(),
       );
-      await _store.insertAlert(alert);
+      await _saveAlert(alert);
       await _pushNotification(title, message, const Color(0xFF1976D2));
       return;
     }
@@ -177,7 +215,7 @@ class AlertService {
         locationId: venue.id,
         createdAt: DateTime.now(),
       );
-      await _store.insertAlert(alert);
+      await _saveAlert(alert);
       await _pushNotification(title, message, const Color(0xFF1976D2));
       return;
     }
@@ -191,16 +229,19 @@ class AlertService {
     String message;
     String type;
 
+    // Shown in every severity tier, not just green — the user should always
+    // see the hard number their advice/warning is based on.
+    final remainingLines = relevant
+        .map(
+          (s) => '${s.categoryName}: RM ${s.remaining.toStringAsFixed(2)} left',
+        )
+        .join('\n');
+
     if (worst.severity == AlertSeverity.green) {
       // Step 3: informational, no urgency, no AI call needed.
       type = 'green';
       title = '✅ ${venue.name}';
-      message = relevant
-          .map(
-            (s) =>
-                '${s.categoryName}: RM ${s.remaining.toStringAsFixed(2)} left',
-          )
-          .join('\n');
+      message = remainingLines;
     } else {
       // Step 4-5: Caution/Critical — ask Gemini for a contextual warning.
       type = worst.severity == AlertSeverity.red ? 'red' : 'yellow';
@@ -209,11 +250,14 @@ class AlertService {
           : '⚠️ Spending Heads-Up — ${venue.name}';
 
       final categorySummary = relevant
-          .map(
-            (s) =>
-                '- ${s.categoryName}: RM ${s.remaining.toStringAsFixed(2)} left '
-                '(${_severityLabel(s.severity)}, projected RM ${s.projectedSpending.toStringAsFixed(2)} by month-end)',
-          )
+          .map((s) {
+            final depletion = s.daysUntilDepletion;
+            final depletionNote = depletion == null
+                ? ''
+                : ', runs out in ${depletion.toStringAsFixed(1)} day(s) at current pace';
+            return '- ${s.categoryName}: RM ${s.remaining.toStringAsFixed(2)} left '
+                '(${_severityLabel(s.severity)}, projected RM ${s.projectedSpending.toStringAsFixed(2)} by month-end$depletionNote)';
+          })
           .join('\n');
 
       final pastAmounts = venueExpenses.map((e) => e.amount).toList();
@@ -221,13 +265,28 @@ class AlertService {
           ? null
           : pastAmounts.reduce((a, b) => a + b) / pastAmounts.length;
 
+      final now = DateTime.now();
+      final daysLeftInMonth =
+          DateTime(now.year, now.month + 1, 0).day - now.day;
+      final overallBudgetRemaining = allStatuses.fold(
+        0.0,
+        (sum, s) => sum + s.remaining,
+      );
+
       final advice = await _gemini.getVenueVisitAdvice(
         venueName: venue.name,
         categorySummary: categorySummary,
+        overallBudgetRemaining: overallBudgetRemaining,
+        daysLeftInMonth: daysLeftInMonth,
         averageSpendAtVenue: averageSpend,
         pastVisitCount: pastAmounts.length,
       );
-      message = '💡 $advice';
+      // Never present a fallback/error string as if it were personalized
+      // AI advice — label it honestly when Gemini couldn't be reached.
+      final adviceLine = advice.isFallback
+          ? '⚠️ AI tip unavailable right now — general advice: ${advice.text}'
+          : '💡 ${advice.text}';
+      message = '$remainingLines\n$adviceLine';
     }
 
     final alert = AlertLogModel(
@@ -241,7 +300,7 @@ class AlertService {
       createdAt: DateTime.now(),
     );
 
-    await _store.insertAlert(alert);
+    await _saveAlert(alert);
     await _pushNotification(title, message, _severityColor(worst.severity));
   }
 

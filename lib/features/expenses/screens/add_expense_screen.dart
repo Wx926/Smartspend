@@ -30,6 +30,7 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
   final _formKey = GlobalKey<FormState>();
   final _amountCtrl = TextEditingController();
   final _descCtrl = TextEditingController();
+  final _manualLocationCtrl = TextEditingController();
   CategoryModel? _selectedCategory;
   WalletModel? _selectedWallet;
   DateTime _selectedDate = DateTime.now();
@@ -255,6 +256,7 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
   void dispose() {
     _amountCtrl.dispose();
     _descCtrl.dispose();
+    _manualLocationCtrl.dispose();
     super.dispose();
   }
 
@@ -373,20 +375,28 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
       final sgProvider = context.read<SavingsGoalProvider>();
       final bp = context.read<BudgetProvider>();
       final candidate = _selectedLocationCandidate;
+      final manualLocationName = _manualLocationCtrl.text.trim();
+      // A manually typed name (e.g. entered while offline with no GPS/OSM
+      // candidates available) always wins over a detected chip, and is never
+      // attached to a saved locationId — there's no coordinate behind free
+      // text, so it can't be matched or offered for saving like a real place.
       // Only an already-saved location has a locationId to attach directly.
       // A candidate from the live OSM lookup stays unattached for now — the
       // user gets asked whether to save it as a real location *after* the
       // expense itself is safely recorded (see below), rather than that
       // happening silently on every pick.
-      final activeLocationId = (_isIncome || candidate == null)
+      final activeLocationId =
+          (_isIncome || manualLocationName.isNotEmpty || candidate == null)
           ? null
           : candidate.locationId;
       // Kept regardless of whether the place is (or becomes) a saved
       // location, so the visit still shows up in history even if the user
       // says "Not now" below, or later deletes the saved location.
-      final activeLocationName = (_isIncome || candidate == null)
+      final activeLocationName = _isIncome
           ? null
-          : candidate.name;
+          : manualLocationName.isNotEmpty
+          ? manualLocationName
+          : candidate?.name;
 
       ExpenseModel? savedExpense;
       if (_isEdit) {
@@ -446,8 +456,12 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
       // The expense is safely recorded — now, only if it was placed at an
       // unsaved OSM candidate, ask whether to keep this location for next
       // time. Never automatic: a "No" here just means this one record has
-      // no attached location, same as picking nothing at all.
-      if (mounted && savedExpense != null && candidate?.locationId == null) {
+      // no attached location, same as picking nothing at all. A manually
+      // typed name has no coordinate behind it, so it's never offered here.
+      if (mounted &&
+          savedExpense != null &&
+          manualLocationName.isEmpty &&
+          candidate?.locationId == null) {
         final place = candidate;
         if (place != null) {
           final shouldSave = await showDialog<bool>(
@@ -1013,9 +1027,7 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
                           ),
                         ],
                       ),
-                    ] else if (!_isEdit &&
-                        _locationCandidates.isNotEmpty &&
-                        !_isIncome) ...[
+                    ] else if (!_isEdit && !_isIncome) ...[
                       const SizedBox(height: 20),
                       const Text(
                         'Location',
@@ -1034,64 +1046,86 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
                           ),
                         ),
                       ],
-                      const SizedBox(height: 8),
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
-                        children: _locationCandidates.map((cand) {
-                          final selected = _selectedLocationCandidate == cand;
-                          return GestureDetector(
-                            onTap: () {
-                              setState(() => _selectedLocationCandidate = cand);
-                              _suggestCategoryFor(cand);
-                            },
-                            child: AnimatedContainer(
-                              duration: const Duration(milliseconds: 150),
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 14,
-                                vertical: 9,
-                              ),
-                              decoration: BoxDecoration(
-                                color: selected
-                                    ? AppColors.primary.withValues(alpha: 0.12)
-                                    : Colors.white,
-                                borderRadius: BorderRadius.circular(24),
-                                border: Border.all(
-                                  color: selected
-                                      ? AppColors.primary
-                                      : const Color(0xFFE0E0E0),
-                                  width: selected ? 2 : 1,
+                      if (_locationCandidates.isNotEmpty) ...[
+                        const SizedBox(height: 8),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: _locationCandidates.map((cand) {
+                            final selected = _selectedLocationCandidate == cand;
+                            return GestureDetector(
+                              onTap: () {
+                                setState(() {
+                                  _selectedLocationCandidate = cand;
+                                  _manualLocationCtrl.clear();
+                                });
+                                _suggestCategoryFor(cand);
+                              },
+                              child: AnimatedContainer(
+                                duration: const Duration(milliseconds: 150),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 14,
+                                  vertical: 9,
                                 ),
-                              ),
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Text(
-                                    cand.emoji,
-                                    style: const TextStyle(fontSize: 15),
+                                decoration: BoxDecoration(
+                                  color: selected
+                                      ? AppColors.primary.withValues(
+                                          alpha: 0.12,
+                                        )
+                                      : Colors.white,
+                                  borderRadius: BorderRadius.circular(24),
+                                  border: Border.all(
+                                    color: selected
+                                        ? AppColors.primary
+                                        : const Color(0xFFE0E0E0),
+                                    width: selected ? 2 : 1,
                                   ),
-                                  const SizedBox(width: 6),
-                                  ConstrainedBox(
-                                    constraints: const BoxConstraints(
-                                      maxWidth: 160,
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Text(
+                                      cand.emoji,
+                                      style: const TextStyle(fontSize: 15),
                                     ),
-                                    child: Text(
-                                      cand.name,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: TextStyle(
-                                        fontSize: 13,
-                                        fontWeight: selected
-                                            ? FontWeight.w600
-                                            : FontWeight.normal,
+                                    const SizedBox(width: 6),
+                                    ConstrainedBox(
+                                      constraints: const BoxConstraints(
+                                        maxWidth: 160,
+                                      ),
+                                      child: Text(
+                                        cand.name,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: TextStyle(
+                                          fontSize: 13,
+                                          fontWeight: selected
+                                              ? FontWeight.w600
+                                              : FontWeight.normal,
+                                        ),
                                       ),
                                     ),
-                                  ),
-                                ],
+                                  ],
+                                ),
                               ),
-                            ),
-                          );
-                        }).toList(),
+                            );
+                          }).toList(),
+                        ),
+                      ],
+                      const SizedBox(height: 8),
+                      TextField(
+                        controller: _manualLocationCtrl,
+                        onChanged: (val) {
+                          if (val.trim().isNotEmpty &&
+                              _selectedLocationCandidate != null) {
+                            setState(() => _selectedLocationCandidate = null);
+                          }
+                        },
+                        decoration: const InputDecoration(
+                          hintText: 'Or type a location (optional)',
+                          helperText:
+                              'Useful if you\'re offline and nothing was detected',
+                        ),
                       ),
                     ],
 

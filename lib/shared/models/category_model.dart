@@ -5,6 +5,10 @@ class CategoryModel {
   final String colorHex;
   final String type; // 'expense' or 'income'
   final bool isDefault;
+  // null = a shared default category (seeded, visible to everyone). Set =
+  // this user's own custom category — requires the categories table
+  // migration (supabase_migration_sync_fix.sql) to actually sync to Supabase.
+  final String? userId;
 
   const CategoryModel({
     required this.id,
@@ -13,6 +17,7 @@ class CategoryModel {
     required this.colorHex,
     required this.type,
     this.isDefault = true,
+    this.userId,
   });
 
   factory CategoryModel.fromJson(Map<String, dynamic> json) {
@@ -23,6 +28,7 @@ class CategoryModel {
       colorHex: json['color_hex'] as String,
       type: json['type'] as String,
       isDefault: json['is_default'] as bool? ?? true,
+      userId: json['user_id'] as String?,
     );
   }
 
@@ -34,6 +40,7 @@ class CategoryModel {
       'color_hex': colorHex,
       'type': type,
       'is_default': isDefault,
+      if (userId != null) 'user_id': userId,
     };
   }
 
@@ -44,6 +51,7 @@ class CategoryModel {
     String? colorHex,
     String? type,
     bool? isDefault,
+    String? userId,
   }) {
     return CategoryModel(
       id: id ?? this.id,
@@ -52,6 +60,7 @@ class CategoryModel {
       colorHex: colorHex ?? this.colorHex,
       type: type ?? this.type,
       isDefault: isDefault ?? this.isDefault,
+      userId: userId ?? this.userId,
     );
   }
 }

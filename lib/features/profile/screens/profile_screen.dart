@@ -8,6 +8,9 @@ import '../../ocr/screens/warranty_records_screen.dart';
 import '../../ocr/screens/receipt_history_screen.dart';
 import '../../ocr/screens/scan_receipt_screen.dart';
 import '../../expenses/providers/expense_provider.dart';
+import '../../security/screens/passcode_setup_screen.dart';
+import '../../security/screens/passcode_settings_screen.dart';
+import '../../security/screens/passcode_verify_screen.dart';
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
@@ -64,8 +67,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
         .take(2)
         .join()
         .toUpperCase();
-    final isGoogle =
-        auth.currentUser?.appMetadata['provider'] == 'google';
 
     return Scaffold(
       backgroundColor: AppColors.background,
@@ -85,7 +86,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       Align(
                         alignment: Alignment.centerLeft,
                         child: IconButton(
-                          icon: const Icon(Icons.arrow_back, color: Colors.white),
+                          icon: const Icon(
+                            Icons.arrow_back,
+                            color: Colors.white,
+                          ),
                           onPressed: () => Navigator.pop(context),
                           padding: EdgeInsets.zero,
                           constraints: const BoxConstraints(),
@@ -97,7 +101,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       decoration: BoxDecoration(
                         shape: BoxShape.circle,
                         border: Border.all(
-                            color: const Color(0xFFD4AF37), width: 3),
+                          color: const Color(0xFFD4AF37),
+                          width: 3,
+                        ),
                         color: AppColors.primary,
                       ),
                       child: Center(
@@ -125,33 +131,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       Text(
                         auth.email,
                         style: const TextStyle(
-                            color: Colors.white70, fontSize: 13),
-                      ),
-                      if (isGoogle) ...[
-                        const SizedBox(height: 10),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 12, vertical: 6),
-                          decoration: BoxDecoration(
-                            color: Colors.white.withValues(alpha: 0.15),
-                            borderRadius: BorderRadius.circular(20),
-                          ),
-                          child: const Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Text('G',
-                                  style: TextStyle(
-                                      color: Colors.white,
-                                      fontWeight: FontWeight.bold,
-                                      fontSize: 14)),
-                              SizedBox(width: 6),
-                              Text('Signed in with Google',
-                                  style: TextStyle(
-                                      color: Colors.white, fontSize: 12)),
-                            ],
-                          ),
+                          color: Colors.white70,
+                          fontSize: 13,
                         ),
-                      ],
+                      ),
                     ],
                   ],
                 ),
@@ -173,9 +156,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   ? 'No receipts yet'
                   : '$receiptCount receipts',
               trailingBadge: receiptCount > 0 ? '$receiptCount' : null,
-              onTap: () => Navigator.push(context,
-                  MaterialPageRoute(
-                      builder: (_) => const ReceiptHistoryScreen())),
+              onTap: () => Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const ReceiptHistoryScreen()),
+              ),
             ),
             _divider(),
             _tile(
@@ -184,9 +168,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
               iconBg: const Color(0xFFFFF0E6),
               title: 'Scan a new receipt',
               subtitle: 'Camera, gallery or voice input',
-              onTap: () => Navigator.push(context,
-                  MaterialPageRoute(
-                      builder: (_) => const ScanReceiptScreen())),
+              onTap: () => Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const ScanReceiptScreen()),
+              ),
             ),
             _divider(),
             _tile(
@@ -196,8 +181,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
               title: 'Voice input language',
               subtitle: 'English (Malaysia)',
               onTap: () => ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                    content: Text('Voice input — coming soon')),
+                const SnackBar(content: Text('Voice input — coming soon')),
               ),
             ),
             _divider(),
@@ -255,10 +239,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
               subtitle: _warrantyCount == 0
                   ? 'No warranties recorded'
                   : '$_warrantyCount item${_warrantyCount != 1 ? 's' : ''}'
-                    '${_expiringCount > 0 ? ' · $_expiringCount expiring soon' : ''}',
-              onTap: () => Navigator.push(context,
-                  MaterialPageRoute(
-                      builder: (_) => const WarrantyRecordsScreen())),
+                        '${_expiringCount > 0 ? ' · $_expiringCount expiring soon' : ''}',
+              onTap: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => const WarrantyRecordsScreen(),
+                ),
+              ),
             ),
           ]),
 
@@ -318,9 +305,49 @@ class _ProfileScreenState extends State<ProfileScreen> {
               icon: Icons.lock_outlined,
               iconColor: const Color(0xFF8B5CF6),
               iconBg: const Color(0xFFF5F3FF),
-              title: 'Data & privacy',
-              subtitle: 'How we handle your location data',
-              onTap: () {},
+              title: 'Passcode',
+              subtitle: !auth.isLoggedIn
+                  ? 'Sign in to use a passcode lock'
+                  : LocalStorageService.instance.passcodeEnabled
+                  ? 'Enabled'
+                  : 'Lock SmartSpend with a 4-digit passcode',
+              onTap: () async {
+                // Recovering a forgotten passcode relies on your account
+                // login (password/Google) — a guest has no way to prove
+                // ownership, so passcode setup isn't offered here at all.
+                if (!auth.isLoggedIn) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Sign in to use a passcode lock'),
+                    ),
+                  );
+                  return;
+                }
+                if (LocalStorageService.instance.passcodeEnabled) {
+                  await Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const PasscodeSettingsScreen(),
+                    ),
+                  );
+                } else {
+                  final ok = await Navigator.push<bool>(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const PasscodeSetupScreen(),
+                    ),
+                  );
+                  if (ok == true && context.mounted) {
+                    await Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => const PasscodeSettingsScreen(),
+                      ),
+                    );
+                  }
+                }
+                if (mounted) setState(() {});
+              },
             ),
             if (auth.isLoggedIn) ...[
               _divider(),
@@ -332,6 +359,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 titleColor: const Color(0xFFE74C3C),
                 subtitle: auth.email,
                 onTap: () async {
+                  if (LocalStorageService.instance.passcodeEnabled) {
+                    final verified = await Navigator.push<bool>(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => const PasscodeVerifyScreen(),
+                      ),
+                    );
+                    if (verified != true || !context.mounted) return;
+                  }
                   await context.read<AuthProvider>().signOut();
                 },
               ),
@@ -356,28 +392,28 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     const Text(
                       'Using SmartSpend without an account?',
                       style: TextStyle(
-                          fontWeight: FontWeight.bold, fontSize: 15),
+                        fontWeight: FontWeight.bold,
+                        fontSize: 15,
+                      ),
                     ),
                     const SizedBox(height: 6),
                     const Text(
                       'Sign in to sync your data across devices and enable cloud backup. Signing in is optional.',
                       style: TextStyle(
-                          color: AppColors.textSecondary, fontSize: 13),
+                        color: AppColors.textSecondary,
+                        fontSize: 13,
+                      ),
                     ),
                     const SizedBox(height: 14),
                     SizedBox(
                       width: double.infinity,
-                      child: ElevatedButton.icon(
-                        icon: const Text('G',
-                            style: TextStyle(
-                                fontWeight: FontWeight.bold, fontSize: 16)),
-                        label: const Text('Sign in with Google'),
-                        onPressed: () =>
-                            Navigator.pushNamed(context, '/login'),
+                      child: ElevatedButton(
+                        onPressed: () => Navigator.pushNamed(context, '/login'),
                         style: ElevatedButton.styleFrom(
                           backgroundColor: AppColors.primaryDark,
                           foregroundColor: Colors.white,
                         ),
+                        child: const Text('Sign In / Create Account'),
                       ),
                     ),
                   ],
@@ -390,8 +426,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
           const Center(
             child: Text(
               'SmartSpend v1.0.0 · TAR UMT 2025/26',
-              style:
-                  TextStyle(color: AppColors.textSecondary, fontSize: 12),
+              style: TextStyle(color: AppColors.textSecondary, fontSize: 12),
             ),
           ),
           const SizedBox(height: 32),
@@ -420,15 +455,17 @@ class _ProfileScreenState extends State<ProfileScreen> {
             onPressed: () async {
               final name = ctrl.text.trim();
               if (name.isEmpty) return;
-              final ok =
-                  await context.read<AuthProvider>().updateName(name);
+              final ok = await context.read<AuthProvider>().updateName(name);
               if (context.mounted) {
                 Navigator.pop(context);
-                ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                  content: Text(ok ? 'Name updated!' : 'Update failed'),
-                  backgroundColor:
-                      ok ? AppColors.budgetGreen : AppColors.budgetRed,
-                ));
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(ok ? 'Name updated!' : 'Update failed'),
+                    backgroundColor: ok
+                        ? AppColors.budgetGreen
+                        : AppColors.budgetRed,
+                  ),
+                );
               }
             },
             child: const Text('Save'),
@@ -439,28 +476,28 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Widget _sectionLabel(String label) => Padding(
-        padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-        child: Text(
-          label,
-          style: const TextStyle(
-            color: AppColors.textSecondary,
-            fontSize: 11,
-            fontWeight: FontWeight.w600,
-            letterSpacing: 0.8,
-          ),
-        ),
-      );
+    padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+    child: Text(
+      label,
+      style: const TextStyle(
+        color: AppColors.textSecondary,
+        fontSize: 11,
+        fontWeight: FontWeight.w600,
+        letterSpacing: 0.8,
+      ),
+    ),
+  );
 
   Widget _card(List<Widget> children) => Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16),
-        child: Container(
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: Column(children: children),
-        ),
-      );
+    padding: const EdgeInsets.symmetric(horizontal: 16),
+    child: Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(children: children),
+    ),
+  );
 
   Widget _divider() => const Divider(height: 1, indent: 56);
 
@@ -473,52 +510,64 @@ class _ProfileScreenState extends State<ProfileScreen> {
     Color? titleColor,
     String? trailingBadge,
     VoidCallback? onTap,
-  }) =>
-      ListTile(
-        leading: Container(
-          width: 36,
-          height: 36,
-          decoration: BoxDecoration(
-              color: iconBg, borderRadius: BorderRadius.circular(8)),
-          child: Icon(icon, color: iconColor, size: 20),
-        ),
-        title: Text(title,
-            style: TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.w500,
-                color: titleColor)),
-        subtitle: subtitle != null
-            ? Text(subtitle,
-                style: const TextStyle(
-                    fontSize: 12, color: AppColors.textSecondary))
-            : null,
-        trailing: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (trailingBadge != null) ...[
-              Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                decoration: BoxDecoration(
-                  color: AppColors.primary,
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Text(trailingBadge,
-                    style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 11,
-                        fontWeight: FontWeight.w600)),
+  }) => ListTile(
+    leading: Container(
+      width: 36,
+      height: 36,
+      decoration: BoxDecoration(
+        color: iconBg,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Icon(icon, color: iconColor, size: 20),
+    ),
+    title: Text(
+      title,
+      style: TextStyle(
+        fontSize: 14,
+        fontWeight: FontWeight.w500,
+        color: titleColor,
+      ),
+    ),
+    subtitle: subtitle != null
+        ? Text(
+            subtitle,
+            style: const TextStyle(
+              fontSize: 12,
+              color: AppColors.textSecondary,
+            ),
+          )
+        : null,
+    trailing: Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (trailingBadge != null) ...[
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+            decoration: BoxDecoration(
+              color: AppColors.primary,
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Text(
+              trailingBadge,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
               ),
-              const SizedBox(width: 6),
-            ],
-            const Icon(Icons.chevron_right,
-                color: AppColors.textSecondary, size: 18),
-          ],
+            ),
+          ),
+          const SizedBox(width: 6),
+        ],
+        const Icon(
+          Icons.chevron_right,
+          color: AppColors.textSecondary,
+          size: 18,
         ),
-        onTap: onTap,
-        contentPadding:
-            const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
-      );
+      ],
+    ),
+    onTap: onTap,
+    contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
+  );
 
   Widget _toggleTile({
     required IconData icon,
@@ -528,29 +577,34 @@ class _ProfileScreenState extends State<ProfileScreen> {
     String? subtitle,
     required bool value,
     required ValueChanged<bool> onChanged,
-  }) =>
-      ListTile(
-        leading: Container(
-          width: 36,
-          height: 36,
-          decoration: BoxDecoration(
-              color: iconBg, borderRadius: BorderRadius.circular(8)),
-          child: Icon(icon, color: iconColor, size: 20),
-        ),
-        title: Text(title,
+  }) => ListTile(
+    leading: Container(
+      width: 36,
+      height: 36,
+      decoration: BoxDecoration(
+        color: iconBg,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Icon(icon, color: iconColor, size: 20),
+    ),
+    title: Text(
+      title,
+      style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
+    ),
+    subtitle: subtitle != null
+        ? Text(
+            subtitle,
             style: const TextStyle(
-                fontSize: 14, fontWeight: FontWeight.w500)),
-        subtitle: subtitle != null
-            ? Text(subtitle,
-                style: const TextStyle(
-                    fontSize: 12, color: AppColors.textSecondary))
-            : null,
-        trailing: Switch(
-          value: value,
-          onChanged: onChanged,
-          activeThumbColor: AppColors.primary,
-        ),
-        contentPadding:
-            const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
-      );
+              fontSize: 12,
+              color: AppColors.textSecondary,
+            ),
+          )
+        : null,
+    trailing: Switch(
+      value: value,
+      onChanged: onChanged,
+      activeThumbColor: AppColors.primary,
+    ),
+    contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
+  );
 }

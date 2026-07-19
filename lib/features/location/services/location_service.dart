@@ -4,6 +4,7 @@ import 'package:uuid/uuid.dart';
 import '../../../shared/constants/app_constants.dart';
 import '../../../shared/models/location_model.dart';
 import '../../../shared/services/local_storage_service.dart';
+import '../../../shared/services/supabase_service.dart';
 
 /// Algorithm 1: Location Detection + Dwell Time Filtering
 class LocationService {
@@ -11,6 +12,7 @@ class LocationService {
   static final LocationService instance = LocationService._();
 
   final _store = LocalStorageService.instance;
+  final _supabase = SupabaseService.instance;
   final _uuid = const Uuid();
 
   Timer? _timer;
@@ -110,16 +112,16 @@ class LocationService {
           _currentLocationId = matched.id;
           _arrivedAt = DateTime.now();
           _activeHistoryId = _uuid.v4();
-          await _store.bufferHistory(
-            LocationHistoryModel(
-              id: _activeHistoryId!,
-              userId: userId,
-              locationId: matched.id,
-              latitude: position.latitude,
-              longitude: position.longitude,
-              arrivedAt: _arrivedAt!,
-            ),
+          final historyEntry = LocationHistoryModel(
+            id: _activeHistoryId!,
+            userId: userId,
+            locationId: matched.id,
+            latitude: position.latitude,
+            longitude: position.longitude,
+            arrivedAt: _arrivedAt!,
           );
+          await _store.bufferHistory(historyEntry);
+          _syncInsertHistory(historyEntry);
 
           if (forced) {
             _confirmed = true;
@@ -184,10 +186,13 @@ class LocationService {
 
   Future<void> _closeCurrentVisit(String userId) async {
     if (_activeHistoryId != null && _arrivedAt != null) {
-      final dwell = DateTime.now().difference(_arrivedAt!).inMinutes;
-      await _store.closeHistory(_activeHistoryId!, DateTime.now(), dwell);
+      final leftAt = DateTime.now();
+      final dwell = leftAt.difference(_arrivedAt!).inMinutes;
+      await _store.closeHistory(_activeHistoryId!, leftAt, dwell);
+      _syncCloseHistory(_activeHistoryId!, leftAt, dwell);
       if (_currentLocationId != null) {
         await _store.incrementVisitCount(_currentLocationId!);
+        _syncIncrementVisitCount(_currentLocationId!);
       }
     }
     _activeHistoryId = null;
@@ -214,7 +219,40 @@ class LocationService {
       categoryIds: categoryIds,
       createdAt: DateTime.now(),
     );
-    return _store.upsertLocation(loc);
+    final saved = await _store.upsertLocation(loc);
+    _syncUpsertLocation(saved);
+    return saved;
+  }
+
+  // ── Background cloud sync — best-effort, never blocks the caller or the
+  // GPS polling loop on network state; the local write above is already the
+  // source of truth for the UI. ──────────────────────────────────────────
+  Future<void> _syncUpsertLocation(LocationModel loc) async {
+    if (!_supabase.isLoggedIn) return;
+    try {
+      await _supabase.upsertLocation(loc);
+    } catch (_) {}
+  }
+
+  Future<void> _syncInsertHistory(LocationHistoryModel h) async {
+    if (!_supabase.isLoggedIn) return;
+    try {
+      await _supabase.insertLocationHistory(h);
+    } catch (_) {}
+  }
+
+  Future<void> _syncCloseHistory(String id, DateTime leftAt, int dwell) async {
+    if (!_supabase.isLoggedIn) return;
+    try {
+      await _supabase.closeLocationHistory(id, leftAt, dwell);
+    } catch (_) {}
+  }
+
+  Future<void> _syncIncrementVisitCount(String locationId) async {
+    if (!_supabase.isLoggedIn) return;
+    try {
+      await _supabase.incrementVisitCount(locationId);
+    } catch (_) {}
   }
 
   Future<Position?> getCurrentPosition() async {
