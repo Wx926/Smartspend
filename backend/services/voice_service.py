@@ -21,7 +21,7 @@ shape. Confirmed against:
 import re
 from datetime import date, timedelta
 
-from services.categorisation_service import categorise_text
+from services.categorisation_service import categorise_text, category_result_for
 
 # "RM 25", "RM25.00", or a bare number followed by a currency word. "dollars"/
 # "bucks" are accepted as colloquial stand-ins for ringgit, and so are the
@@ -35,6 +35,16 @@ _AMOUNT_PATTERN = re.compile(
     r"|(\d+(?:\.\d{1,2})?)\s*(?:ringgit|rm|dollars?|bucks?|块|令吉|零吉)\b",
     re.IGNORECASE,
 )
+
+# Chinese colloquial money shorthand: "9块9" spoken aloud means "9 kuai 9"
+# (9 yuan/dollars + 9 jiao/10-cent units) = RM 9.90 — a trailing 1-2 digit
+# number directly after "块" is a decimal shorthand, not a separate whole
+# number, and is a completely different meaning from a bare "9块" alone
+# (just "9 dollars", handled by _AMOUNT_PATTERN above). Checked first in
+# _extract_amount since _AMOUNT_PATTERN's plain "number + currency word"
+# alternative can't parse this shape at all — the trailing digit breaks its
+# required word boundary immediately after "块".
+_CHINESE_KUAI_DECIMAL = re.compile(r"(\d+)块(\d{1,2})\b")
 
 # Last-resort fallback when no currency word is spoken at all (e.g. "movie
 # tickets 45") — just the first bare number in the sentence. Trades off
@@ -120,6 +130,34 @@ _YESTERDAY_PATTERN = re.compile(r"\byesterday\b", re.IGNORECASE)
 _SENTENCE_SPLIT = re.compile(r"\.(?!\d)|[!?]")
 
 
+def _split_segments(text: str) -> list[str]:
+    """Splits a transcript into individual spoken-expense segments — first
+    on sentence-ending punctuation, then (only within a sentence that itself
+    contains MORE THAN ONE amount) on commas too. A comma alone is
+    ambiguous: it can separate a description from its OWN amount within a
+    single expense ("Bought groceries at Aeon, RM 68" — one amount total,
+    must NOT split there), or it can join two complete item+amount pairs
+    spoken as one sentence (e.g. Chinese "鸡饭 9块9,炒饭 15令吉" — two
+    amounts, must split). Counting amounts first disambiguates the two.
+    """
+    segments = []
+    for sentence in _SENTENCE_SPLIT.split(text):
+        sentence = sentence.strip(" ,")
+        if not sentence:
+            continue
+        amount_count = (
+            len(_CHINESE_KUAI_DECIMAL.findall(sentence))
+            + len(_AMOUNT_PATTERN.findall(sentence))
+        )
+        if amount_count >= 2:
+            segments.extend(
+                part.strip(" ,") for part in sentence.split(",") if part.strip(" ,")
+            )
+        else:
+            segments.append(sentence)
+    return segments
+
+
 class VoiceParseError(Exception):
     """Raised when the transcript is empty or has no usable amount."""
     pass
@@ -128,6 +166,12 @@ class VoiceParseError(Exception):
 def _extract_amount(text: str) -> tuple[float | None, tuple[int, int] | None]:
     """Returns (amount, span) so the caller can strip the matched words
     (number + currency) out of the text before deriving a description."""
+    m = _CHINESE_KUAI_DECIMAL.search(text)
+    if m:
+        whole, cents = m.group(1), m.group(2)
+        if len(cents) == 1:
+            cents += "0"
+        return float(f"{whole}.{cents}"), m.span()
     m = _AMOUNT_PATTERN.search(text)
     if m:
         raw = m.group(1) or m.group(2)
@@ -214,7 +258,7 @@ def parse_voice_expense(transcript: str) -> dict:
     if not text:
         raise VoiceParseError("Empty transcript — nothing to parse.")
 
-    segments = [s.strip(" ,") for s in _SENTENCE_SPLIT.split(text) if s.strip(" ,")]
+    segments = _split_segments(text)
     parsed = [p for s in (segments or [text]) if (p := _parse_segment(s)) is not None]
 
     if not parsed:
@@ -254,7 +298,7 @@ def parse_voice_expense(transcript: str) -> dict:
     item_cats = [p["category_name"] for p in parsed if p["category_name"] != "Others"]
     if item_cats:
         majority_name = max(set(item_cats), key=item_cats.count)
-        category = categorise_text(majority_name)
+        category = category_result_for(majority_name)
     elif parsed:
         category = categorise_text(f"{parsed[0]['item_name']} {vendor or ''}".strip())
     else:

@@ -262,8 +262,17 @@ class LocationService {
       ).timeout(const Duration(seconds: 10));
     } catch (_) {
       // Fall back to a cached fix if a fresh one couldn't be obtained
-      // (e.g. GPS unavailable or the request timed out).
-      return Geolocator.getLastKnownPosition();
+      // (e.g. GPS unavailable or the request timed out). This fallback has
+      // the exact same permission requirement as the call that just failed
+      // above, so if that failure was actually a denied-permission error
+      // (not just "GPS unavailable"), this call fails the same way — and
+      // needs its own try/catch, or that becomes a genuinely unhandled
+      // exception instead of the null every caller already knows to expect.
+      try {
+        return await Geolocator.getLastKnownPosition();
+      } catch (_) {
+        return null;
+      }
     }
   }
 }

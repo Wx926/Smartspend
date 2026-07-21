@@ -15,6 +15,7 @@ import '../../../shared/models/expense_model.dart';
 import '../../../shared/models/savings_goal_model.dart';
 import '../../../shared/models/wallet_model.dart';
 import '../../../shared/theme/app_colors.dart';
+import '../../ocr/screens/receipt_review_screen.dart';
 import '../../ocr/screens/scan_receipt_screen.dart';
 import '../../voice/screens/voice_input_screen.dart';
 
@@ -49,6 +50,35 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
 
   bool get _isEdit => widget.existingExpense != null;
   bool get _isIncome => _type == 'income';
+  // True for a record that was created from a receipt scan or voice entry
+  // (as opposed to typed in manually here) — these have a fuller review
+  // screen (with the receipt image, multi-item breakdown, warranty info)
+  // that this generic single-field editor can't show.
+  bool get _hasReceiptSource =>
+      _isEdit &&
+      (widget.existingExpense!.source == 'ocr' ||
+          widget.existingExpense!.source == 'voice') &&
+      widget.existingExpense!.batchId != null;
+
+  /// Jumps from this generic single-field editor to the fuller Receipt
+  /// Review screen (receipt image, multi-item breakdown, warranty info) for
+  /// every record that shares this one's batch id. A normal push, so
+  /// backing out of Receipt Review returns to this Edit Record screen
+  /// (standard back-stack behaviour), not straight past it.
+  void _openReceiptDetails() {
+    final batchId = widget.existingExpense!.batchId;
+    final batchItems = context
+        .read<ExpenseProvider>()
+        .expenses
+        .where((e) => e.batchId == batchId)
+        .toList();
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ReceiptReviewScreen(existingExpenses: batchItems),
+      ),
+    );
+  }
 
   @override
   void initState() {
@@ -542,6 +572,14 @@ class _AddExpenseScreenState extends State<AddExpenseScreen> {
               _isEdit ? 'Edit Record' : 'Add Record',
               style: const TextStyle(color: Colors.white),
             ),
+            actions: [
+              if (_hasReceiptSource)
+                IconButton(
+                  icon: const Icon(Icons.receipt_long, color: Colors.white),
+                  tooltip: 'View full receipt details',
+                  onPressed: _openReceiptDetails,
+                ),
+            ],
           ),
 
           SliverPadding(

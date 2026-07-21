@@ -915,7 +915,7 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
                       ),
                       _extractedRow(
                         'Total',
-                        'RM ${(widget.result?.amount ?? _total).toStringAsFixed(2)}',
+                        'RM ${_total.toStringAsFixed(2)}',
                         widget.result?.amount != null || _isEditMode,
                       ),
                     ],
@@ -1062,7 +1062,7 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
                             Expanded(
                               flex: 2,
                               child: Text(
-                                'RM ${(widget.result?.amount ?? _total).toStringAsFixed(2)}',
+                                'RM ${_total.toStringAsFixed(2)}',
                                 style: const TextStyle(
                                   fontWeight: FontWeight.bold,
                                   fontSize: 14,

@@ -18,7 +18,7 @@ from datetime import datetime, date
 from dotenv import load_dotenv
 load_dotenv()
 
-from services.categorisation_service import categorise_text
+from services.categorisation_service import categorise_text, category_result_for
 from services.warranty_service import detect_warranty
 
 GOOGLE_VISION_API_KEY = os.environ.get("GOOGLE_VISION_API_KEY", "")
@@ -33,6 +33,7 @@ AMOUNT_PATTERN = re.compile(
 DATE_PATTERNS = [
     r"(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})",   # 27/06/2026 or 27-06-26
     r"(\d{4}[\/\-]\d{1,2}[\/\-]\d{1,2})",     # 2026-06-27
+    r"(\d{4}\.\d{1,2}\.\d{1,2})",             # 2026.07.15 (dot-separated POS timestamp)
 ]
 
 # Restricted to actual month names/abbreviations (not any 3-9 letter word) —
@@ -67,22 +68,52 @@ _CURRENCY = r"(?:RM|MYR|USD|SGD|GBP|\$|£|€|¥)?\s*"
 _CJK = r"一-鿿㐀-䶿（）"
 
 # A standalone "-" (space-hyphen-space, a stylistic word separator like
-# "Naughty Spare Rib - Full Slab") or a "+"/"/"-joined size descriptor like
-# "1+1/2" (as in "HH Asahi 1+1/2") — neither fits a plain word token, so both
-# need their own alternative in the word-continuation groups below.
-_LOOSE_WORD_SEP = r"-|::|\d+(?:[+\/]\d+)+"
+# "Naughty Spare Rib - Full Slab"), a standalone "&" (space-ampersand-space,
+# e.g. "Fish & Chips" — as opposed to one glued onto a word, e.g. "Fish&Chips",
+# which the word-token character classes already cover on their own), or a
+# "+"/"/"-joined size descriptor like "1+1/2" (as in "HH Asahi 1+1/2") — none
+# of these fit a plain word token, so all three need their own alternative in
+# the word-continuation groups below.
+_LOOSE_WORD_SEP = r"-|::|&|\d+(?:[+\/]\d+)+"
 
 # Single-line item: alphabetical name, optional product-code/content in middle, price at end.
 # e.g. "TEH TARIK 3.50"  →  TEH TARIK, 3.50
 # e.g. "FRAP 001200010451 F 5.48 N"  →  FRAP, 5.48
 # e.g. "1/2 Roasted Chicken 15.90" → 1/2 Roasted Chicken, 15.90 (menu portion
 #      names like "1/4"/"1/2" start with a fraction, not a letter)
+# Word tokens allow embedded digits (e.g. "R1-12", "R1-4pcs" — a department/
+# SKU code glued onto the front of the name on some invoice layouts) and a
+# bare 1-4 digit continuation word (e.g. the "100" in "Gummy Shark 100 pc"),
+# matching the same allowances _NAME_ONLY already makes — without them, any
+# item name containing an embedded number failed to match this layout at all.
 LINE_ITEM_PATTERN = re.compile(
-    rf"^((?:[A-Za-z{_CJK}][A-Za-z{_CJK}\-&'\/\(\)]*|\d+\/\d+)"
-    rf"(?:\s(?:[A-Za-z{_CJK}][A-Za-z{_CJK}\-&'\/\(\)]*|{_LOOSE_WORD_SEP}))*)"
+    rf"^((?:[A-Za-z{_CJK}][A-Za-z0-9{_CJK}\-&'\/\(\)]*|\d+\/\d+)"
+    rf"(?:\s(?:[A-Za-z{_CJK}][A-Za-z0-9{_CJK}\-&'\/\(\)]*"
+    rf"|[0-9]+[A-Za-z][A-Za-z0-9\-&'\/\(\)]*|\d{{1,4}}|{_LOOSE_WORD_SEP}))*)"
     rf"\s+.*?{_CURRENCY}(\d+[.,]\d{{2}})\s*\*?\s*[A-Z]{{0,2}}\s*$",
     re.IGNORECASE,
 )
+
+
+def _match_line_item(line: str) -> re.Match | None:
+    """LINE_ITEM_PATTERN.match(), with one extra safety check: if the gap
+    between the captured name and the captured price contains ANOTHER
+    decimal number, only accept the match when the line ends with a
+    trailing 1-2 letter tax code — a strong "this row is deliberately
+    closed out" signal. Without this, a row with an embedded discount/
+    subtotal column ahead of the real total (e.g. "A01 - SERVICE 0.00
+    499.00", where "0.00" is a discount column, not part of the name) reads
+    as a plausible name+price match for the WRONG number entirely, since the
+    non-greedy middle gap will happily skip over an earlier decimal to reach
+    a later one.
+    """
+    m = LINE_ITEM_PATTERN.match(line)
+    if not m:
+        return None
+    gap = line[m.end(1):m.start(2)]
+    if re.search(r"\d[.,]\d{2}", gap) and not re.search(r"[A-Z]{1,2}\s*$", line):
+        return None
+    return m
 
 # Item name alone on this line (no price, no code) — multi-line item formats.
 # Allows:
@@ -215,6 +246,16 @@ _TRAILING_BARCODE = re.compile(r"\s+\d{6,}[A-Za-z]{0,2}$")
 # awaiting a price are unrecoverable and must not be paired with a totals figure.
 _TOTALS_BOUNDARY = re.compile(
     r"\b(sub[\s\-]?total|total|(?:amount|amt)\s*due|balance\s*due)\b", re.IGNORECASE
+)
+
+# A genuine extra charge line (e.g. "Take away fee RM 0.50") that commonly
+# prints AFTER the subtotal line that trips _TOTALS_BOUNDARY above — a real
+# cost the user paid, not more totals-section noise, so it's captured as its
+# own line item as a carve-out from the "past totals" skip.
+_EXTRA_FEE_LINE = re.compile(
+    rf"^((?:take[\s\-]?away|delivery|service|packaging|container|eco)\s*fee)\b"
+    rf".*?{_CURRENCY}(\d+[.,]\d{{2}})\s*$",
+    re.IGNORECASE,
 )
 
 # A tabular receipt's own column-header row (e.g. "QTY ITEM TOTAL") — contains
@@ -489,7 +530,7 @@ def _extract_amount(raw_text: str) -> float | None:
         re.IGNORECASE,
     )
     _TOTAL_EXCLUDE = re.compile(
-        r"\b(subtotal|sub[\s\-]total|cash|change|tax|gst|sst|qty|items?\s*sold|payable)\b"
+        r"\b(subtotal|sub[\s\-]total|cash|change|tax|gst|sst|qty|items?\s*sold|payable|savings?)\b"
         r"|小计|现金|找零|找续|找赎|消费税|服务税|数量",
         re.IGNORECASE,
     )
@@ -591,7 +632,8 @@ def _extract_date(raw_text: str) -> date | None:
         if match:
             date_str = match.group(1)
             for fmt in ("%d/%m/%Y", "%d-%m-%Y", "%d/%m/%y", "%d-%m-%y",
-                        "%Y/%m/%d", "%Y-%m-%d", "%m/%d/%y", "%m/%d/%Y"):
+                        "%Y/%m/%d", "%Y-%m-%d", "%m/%d/%y", "%m/%d/%Y",
+                        "%Y.%m.%d"):
                 try:
                     return datetime.strptime(date_str, fmt).date()
                 except ValueError:
@@ -622,6 +664,17 @@ def _extract_date(raw_text: str) -> date | None:
 # for one.
 _VENDOR_WORD_LINE = re.compile(
     rf"^[A-Z{_CJK}][A-Za-z{_CJK}'&\-]*(\s[A-Z{_CJK}][A-Za-z{_CJK}'&\-]*){{0,2}}$"
+)
+
+# Order-type labels ("Takeaway", "Dine In", "Delivery") are short,
+# capitalised, single-to-two-word lines — they satisfy _VENDOR_WORD_LINE's
+# shape exactly as well as a genuine short brand name does, and would
+# otherwise win over the real (often longer) vendor name printed elsewhere
+# on the receipt.
+_ORDER_TYPE_LABEL = re.compile(
+    r"^(?:take[\s\-]?away|dine[\s\-]?in|eat[\s\-]?in|delivery|"
+    r"drive[\s\-]?(?:thru|through))$",
+    re.IGNORECASE,
 )
 
 
@@ -705,11 +758,19 @@ def _extract_vendor(lines: list[str]) -> str | None:
             return line
     for line in lines[:8]:
         stripped = line.strip()
-        if _VENDOR_WORD_LINE.match(stripped) and not _is_noise_line(stripped):
+        if (_VENDOR_WORD_LINE.match(stripped)
+                and not _is_noise_line(stripped)
+                and not _ORDER_TYPE_LABEL.match(stripped)):
             return stripped
     for line in lines[:3]:
-        if not re.search(r"\d{3,}", line) and not any(c in line for c in "#:*"):
-            return line
+        stripped = line.strip()
+        # Same minimum length as every other candidate check above — without
+        # it, a stray single-character OCR artifact (e.g. a lone "0" picked
+        # up near the letterhead) can win this last-resort fallback outright.
+        if (not re.search(r"\d{3,}", stripped)
+                and not any(c in stripped for c in "#:*")
+                and len(stripped) > 3):
+            return stripped
     return lines[0] if lines else None
 
 
@@ -748,9 +809,24 @@ def _extract_line_items(raw_text: str) -> list[dict]:
     # "4" on its own line above "1/4 Chic+1sd-T") is that item's quantity —
     # captured here and consumed by whichever item is emitted next.
     pending_qty: int | None = None
+    # A name-only line whose own forward lookahead broke on ANOTHER bare name
+    # immediately after it (e.g. "Tom Yum" then "XL White Fish Ball", both
+    # wrapping across two physical lines to describe ONE item, before its
+    # qty/price row appears) — that second name gets its own shot at Layout 2
+    # first, so this holds the first fragment in reserve. If what eventually
+    # gets priced next turns out to be a bare quantity word ("each"/"ea"/
+    # "unit") rather than a real name, this fragment is prepended to it,
+    # since a quantity word alone is never the actual item description.
+    pending_wrapped_name: str | None = None
+    _QTY_WORD_ONLY = re.compile(r"^(?:each|ea|unit|units|pcs|pc)$", re.IGNORECASE)
 
     def _emit(name: str, price: float, line_qty: int | None = None) -> None:
-        nonlocal pending_qty
+        nonlocal pending_qty, pending_wrapped_name
+        if pending_wrapped_name and _QTY_WORD_ONLY.match(name):
+            # The quantity word itself ("each"/"ea"/"unit") carries no real
+            # description — replace it outright with the accumulated name.
+            name = pending_wrapped_name
+        pending_wrapped_name = None
         # A quantity glued to this exact line (line_qty) always wins over an
         # older standalone pending_qty from a prior line — see the qty-prefix
         # stripping comment below for why the fresher one takes precedence.
@@ -787,6 +863,16 @@ def _extract_line_items(raw_text: str) -> list[dict]:
             # purchasable item — GST breakdown tables, marketing surveys, and
             # footer notes must never be matched, not just excluded from
             # pending-queue bookkeeping (which only stops *new* deferrals).
+            # Exception: a genuine extra charge (takeaway/delivery/service
+            # fee) commonly prints AFTER a "Total Sales (Exc. Tax)" subtotal
+            # line — which itself trips this same boundary — but is still a
+            # real cost the user paid, not more totals-section noise, so it
+            # must still be captured as its own line item.
+            fee_match = _EXTRA_FEE_LINE.match(line)
+            if fee_match:
+                fee_price = float(fee_match.group(2).replace(",", "."))
+                if fee_price > 0:
+                    _emit(fee_match.group(1).strip(), fee_price)
             i += 1
             continue
         if not line or _is_noise_line(line) or _MASKED_ACCOUNT_NUMBER.match(line):
@@ -801,6 +887,7 @@ def _extract_line_items(raw_text: str) -> list[dict]:
                 pending_names.clear()
                 pending_prices.clear()
                 pending_qty = None
+                pending_wrapped_name = None
                 seen_header = True
             elif line and _TOTALS_BOUNDARY.search(line):
                 # Past the itemised list now — any names/prices still waiting
@@ -808,6 +895,7 @@ def _extract_line_items(raw_text: str) -> list[dict]:
                 pending_names.clear()
                 pending_prices.clear()
                 pending_qty = None
+                pending_wrapped_name = None
                 past_totals = True
             i += 1
             continue
@@ -885,7 +973,7 @@ def _extract_line_items(raw_text: str) -> list[dict]:
         # per-unit rate for the real charged total (e.g. "1/4 Chic+1sd-T
         # @17.90" → wrongly "1/4"/17.90 instead of "1/4 Chic+1sd-T"/71.60 from
         # the next line). Such lines fall through to Layout 2's lookahead.
-        m = None if _QTY_CALC_LINE.search(line) else LINE_ITEM_PATTERN.match(line)
+        m = None if _QTY_CALC_LINE.search(line) else _match_line_item(line)
         if m:
             name = m.group(1).strip()
             price = float(m.group(2).replace(",", "."))
@@ -977,7 +1065,7 @@ def _extract_line_items(raw_text: str) -> list[dict]:
                     # own price line as if a whole new item had started and
                     # dropping the pending item entirely.
                     ahead_unqtied = re.sub(r"^\d{1,3}\s+", "", ahead)
-                    ahead_item_match = LINE_ITEM_PATTERN.match(ahead_unqtied)
+                    ahead_item_match = _match_line_item(ahead_unqtied)
                     if (not _QTY_CALC_LINE.search(ahead_unqtied)
                             and ahead_item_match
                             and len(ahead_item_match.group(1).strip()) >= 3):
@@ -990,15 +1078,33 @@ def _extract_line_items(raw_text: str) -> list[dict]:
                     # right after the rate. Three decimal numbers on one line
                     # (weight, rate, total) rather than the usual two (weight,
                     # rate alone with the total on a separate later line) is
-                    # the tell — grab the trailing one in that case instead of
-                    # skipping past the item's only chance at a price.
+                    # normally the tell — grab the trailing one in that case
+                    # instead of skipping past the item's only chance at a
+                    # price. A bare-integer quantity (e.g. "2 pc @ 2.50 5.00
+                    # GO" — qty=2, rate=2.50, total=5.00, only 2 of those 3
+                    # are decimal-formatted) won't clear that 3-decimal bar,
+                    # so a trailing tax-code letter right after the last
+                    # number is accepted as an equally strong "this row is a
+                    # complete, closed-out charge" signal on its own — a
+                    # genuine rate-only line (no total baked in) never has
+                    # one, ending right after the bare rate instead.
                     if _QTY_CALC_LINE.search(ahead):
-                        if len(re.findall(r"\d+[.,]\d{2}", ahead)) >= 3:
+                        decimals_found = len(re.findall(r"\d+[.,]\d{2}", ahead))
+                        has_trailing_code = bool(
+                            re.search(r"\d[.,]\d{2}\s*\*?\s*[A-Z]{1,2}\s*$", ahead)
+                        )
+                        if decimals_found >= 3 or (
+                            decimals_found == 2 and has_trailing_code
+                        ):
                             pm = _PRICE_AT_END.search(ahead)
                             if pm:
                                 price = float(pm.group(1).replace(",", "."))
                                 if price > 0:
-                                    _emit(name, price, line_qty)
+                                    ahead_qty = re.match(r"^(\d{1,3})\s+", ahead)
+                                    emit_qty = line_qty if line_qty is not None else (
+                                        int(ahead_qty.group(1)) if ahead_qty else None
+                                    )
+                                    _emit(name, price, emit_qty)
                                     i = j + 1
                                     price_found = True
                                     break
@@ -1027,6 +1133,21 @@ def _extract_line_items(raw_text: str) -> list[dict]:
                         else:
                             # Price wasn't nearby — defer and keep scanning forward for it.
                             pending_names.append(name)
+                    else:
+                        # Dropped because what looked like a different item's
+                        # name/price row came next — but this is often really
+                        # the SAME item's name wrapping across several
+                        # physical lines (e.g. "Tom Yum" then "XL White Fish
+                        # Ball", with the combined item's qty/price only
+                        # appearing after both fragments). Keep accumulating;
+                        # _emit() below uses this in place of a bare quantity
+                        # word ("each"/"ea"/"unit") that carries no real name
+                        # of its own, and clears it after every emit either
+                        # way so it can never leak into an unrelated item.
+                        pending_wrapped_name = (
+                            f"{pending_wrapped_name} {name}"
+                            if pending_wrapped_name else name
+                        )
                     i += 1
             else:
                 i += 1
@@ -1152,7 +1273,7 @@ def process_receipt(filename: str, file_size_bytes: int, image_bytes: bytes) -> 
                      if i["category_name"] != "Others"]
         if item_cats:
             majority = max(set(item_cats), key=item_cats.count)
-            receipt_category = categorise_text(majority)
+            receipt_category = category_result_for(majority)
         else:
             receipt_category = categorise_text(parsed["vendor_name"] or "")
     else:

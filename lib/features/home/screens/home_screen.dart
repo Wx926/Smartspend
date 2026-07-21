@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
@@ -70,31 +72,50 @@ class _HomeScreenState extends State<HomeScreen> {
     final sp = context.read<SavingsGoalProvider>();
     final wp = context.read<WalletProvider>();
     final auth = context.read<AuthProvider>();
-    // Run independent loads in parallel — much faster than sequential awaits.
-    // WalletProvider.load() is a no-op after its first successful load unless
-    // forced — needed here so switching accounts actually refreshes wallets
-    // instead of leaving the previous account's list in place.
-    await Future.wait([
-      ep.load(),
-      wp.load(force: forceWalletReload),
-      sp.load(),
-    ]);
-    final now = DateTime.now();
-    await bp.load(ep.expensesForMonth(now.month, now.year));
-    final skipped = await sp.checkAutoTransfers(
-      walletProvider: wp,
-      expenseProvider: ep,
-      userId: auth.userId,
-    );
-    if (mounted && skipped.isNotEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            'Auto-transfer skipped for: ${skipped.join(', ')} — insufficient funds',
+    try {
+      // Bounded so a hung network call (e.g. flaky wifi) can't leave the
+      // pull-to-refresh spinner stuck forever — none of these providers'
+      // own Supabase calls have a timeout of their own, so this is the
+      // backstop that guarantees _load() always eventually completes.
+      await Future(() async {
+        // Run independent loads in parallel — much faster than sequential
+        // awaits. WalletProvider.load() is a no-op after its first
+        // successful load unless forced — needed here so switching
+        // accounts actually refreshes wallets instead of leaving the
+        // previous account's list in place.
+        await Future.wait([
+          ep.load(),
+          wp.load(force: forceWalletReload),
+          sp.load(),
+        ]);
+        final now = DateTime.now();
+        await bp.load(ep.expensesForMonth(now.month, now.year));
+        final skipped = await sp.checkAutoTransfers(
+          walletProvider: wp,
+          expenseProvider: ep,
+          userId: auth.userId,
+        );
+        if (mounted && skipped.isNotEmpty) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                'Auto-transfer skipped for: ${skipped.join(', ')} — insufficient funds',
+              ),
+              duration: const Duration(seconds: 4),
+            ),
+          );
+        }
+      }).timeout(const Duration(seconds: 20));
+    } on TimeoutException {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Refresh timed out — check your connection and try again.',
+            ),
           ),
-          duration: const Duration(seconds: 4),
-        ),
-      );
+        );
+      }
     }
   }
 

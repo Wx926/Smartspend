@@ -29,7 +29,8 @@ CATEGORY_KEYWORDS: dict[str, list[str]] = {
         # "冬菇肉碎老鼠粉（小）" / "加鸡蛋" — none of the romanised keywords
         # above ever match that text).
         "鸡蛋", "老鼠粉", "冬菇", "餐厅", "茶餐厅", "小炒", "煮炒", "海鲜",
-        "点心",
+        "点心", "鸡饭", "炒饭", "炒面", "叉烧", "云吞", "烧腊", "粥",
+        "水饺", "包子", "豆浆",
         # Japanese-cuisine menu terms (e.g. "Salmon Teriyaki Don")
         "salmon", "teriyaki", "teryaki", "sashimi", "tempura", "udon",
         "ramen", "bento", "katsu", "yakitori", "onigiri",
@@ -72,7 +73,7 @@ CATEGORY_KEYWORDS: dict[str, list[str]] = {
     ],
     "Entertainment": [
         "cinema", "gsc", "tgv", "netflix", "spotify", "movie",
-        "concert", "game", "steam", "karaoke",
+        "concert", "game", "steam", "karaoke", "arcade",
     ],
     "Health": [
         "pharmacy", "clinic", "hospital", "medicine", "doctor",
@@ -140,3 +141,17 @@ def _build_result(category_name: str, matched_keyword: str | None, confidence: s
         "matched_keyword": matched_keyword,
         "confidence": confidence,
     }
+
+
+def category_result_for(category_name: str, confidence: str = "high") -> dict:
+    """Builds a categorise_text()-shaped result for a category name that's
+    ALREADY known (e.g. the majority category across a multi-item receipt/
+    voice entry's line items) — callers with this exact need must not just
+    re-run categorise_text(category_name) instead, since that re-searches the
+    name against its OWN keyword list and only succeeds by coincidence (e.g.
+    "Food & Dining" contains "food", "Shopping" contains "shopping") — it
+    wrongly falls back to "Others" for every category whose name doesn't
+    happen to contain one of its own keywords (confirmed: Entertainment,
+    Transport, Utilities, and Health all silently broke this way).
+    """
+    return _build_result(category_name, None, confidence)
