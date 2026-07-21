@@ -59,24 +59,30 @@ class SavingsGoalModel {
   }
 
   Map<String, dynamic> toJson() => {
-        'id': id,
-        'user_id': userId,
-        'name': name,
-        'target_amount': targetAmount,
-        'current_amount': currentAmount,
-        'deadline': deadline?.toIso8601String().split('T').first,
-        'is_completed': isCompleted,
-        if (linkedWalletLabel != null) 'linked_wallet_label': linkedWalletLabel,
-        'auto_transfer_enabled': autoTransferEnabled,
-        if (autoTransferAmount != null) 'auto_transfer_amount': autoTransferAmount,
-        if (autoTransferSourceWalletId != null)
-          'auto_transfer_source_wallet_id': autoTransferSourceWalletId,
-        if (autoTransferDayOfMonth != null)
-          'auto_transfer_day_of_month': autoTransferDayOfMonth,
-        if (lastAutoTransferDate != null)
-          'last_auto_transfer_date':
-              lastAutoTransferDate!.toIso8601String().split('T').first,
-      };
+    'id': id,
+    'user_id': userId,
+    'name': name,
+    'target_amount': targetAmount,
+    'current_amount': currentAmount,
+    'deadline': deadline?.toIso8601String().split('T').first,
+    'is_completed': isCompleted,
+    // Not sent to Supabase (SupabaseService whitelists specific fields
+    // for insert/update, letting the DB default created_at on insert) —
+    // only needed here so local-cache round-tripping via fromJson works.
+    'created_at': createdAt.toIso8601String(),
+    if (linkedWalletLabel != null) 'linked_wallet_label': linkedWalletLabel,
+    'auto_transfer_enabled': autoTransferEnabled,
+    if (autoTransferAmount != null) 'auto_transfer_amount': autoTransferAmount,
+    if (autoTransferSourceWalletId != null)
+      'auto_transfer_source_wallet_id': autoTransferSourceWalletId,
+    if (autoTransferDayOfMonth != null)
+      'auto_transfer_day_of_month': autoTransferDayOfMonth,
+    if (lastAutoTransferDate != null)
+      'last_auto_transfer_date': lastAutoTransferDate!
+          .toIso8601String()
+          .split('T')
+          .first,
+  };
 
   SavingsGoalModel copyWith({
     String? name,
@@ -92,25 +98,24 @@ class SavingsGoalModel {
     String? autoTransferSourceWalletId,
     int? autoTransferDayOfMonth,
     DateTime? lastAutoTransferDate,
-  }) =>
-      SavingsGoalModel(
-        id: id,
-        userId: userId,
-        name: name ?? this.name,
-        targetAmount: targetAmount ?? this.targetAmount,
-        currentAmount: currentAmount ?? this.currentAmount,
-        deadline: clearDeadline ? null : (deadline ?? this.deadline),
-        isCompleted: isCompleted ?? this.isCompleted,
-        createdAt: createdAt,
-        linkedWalletLabel: (clearLinkedWalletLabel == true)
-            ? null
-            : (linkedWalletLabel ?? this.linkedWalletLabel),
-        autoTransferEnabled: autoTransferEnabled ?? this.autoTransferEnabled,
-        autoTransferAmount: autoTransferAmount ?? this.autoTransferAmount,
-        autoTransferSourceWalletId:
-            autoTransferSourceWalletId ?? this.autoTransferSourceWalletId,
-        autoTransferDayOfMonth:
-            autoTransferDayOfMonth ?? this.autoTransferDayOfMonth,
-        lastAutoTransferDate: lastAutoTransferDate ?? this.lastAutoTransferDate,
-      );
+  }) => SavingsGoalModel(
+    id: id,
+    userId: userId,
+    name: name ?? this.name,
+    targetAmount: targetAmount ?? this.targetAmount,
+    currentAmount: currentAmount ?? this.currentAmount,
+    deadline: clearDeadline ? null : (deadline ?? this.deadline),
+    isCompleted: isCompleted ?? this.isCompleted,
+    createdAt: createdAt,
+    linkedWalletLabel: (clearLinkedWalletLabel == true)
+        ? null
+        : (linkedWalletLabel ?? this.linkedWalletLabel),
+    autoTransferEnabled: autoTransferEnabled ?? this.autoTransferEnabled,
+    autoTransferAmount: autoTransferAmount ?? this.autoTransferAmount,
+    autoTransferSourceWalletId:
+        autoTransferSourceWalletId ?? this.autoTransferSourceWalletId,
+    autoTransferDayOfMonth:
+        autoTransferDayOfMonth ?? this.autoTransferDayOfMonth,
+    lastAutoTransferDate: lastAutoTransferDate ?? this.lastAutoTransferDate,
+  );
 }

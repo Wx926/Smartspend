@@ -15,6 +15,7 @@ class BudgetProvider extends ChangeNotifier {
   List<CategoryModel> _categories = [];
   List<BudgetStatus> _statuses = [];
   bool _isLoading = false;
+  bool _hasLoadedOnce = false;
   String? _error;
   late DateTime _selectedMonth;
 
@@ -24,7 +25,9 @@ class BudgetProvider extends ChangeNotifier {
     final now = DateTime.now();
     _selectedMonth = DateTime(now.year, now.month);
     _categories = LocalStorageService.instance.getCategories();
-    _incomeCategories = LocalStorageService.instance.getCategories(type: 'income');
+    _incomeCategories = LocalStorageService.instance.getCategories(
+      type: 'income',
+    );
   }
 
   List<BudgetModel> get budgets => _budgets;
@@ -32,14 +35,18 @@ class BudgetProvider extends ChangeNotifier {
   List<CategoryModel> get incomeCategories => _incomeCategories;
   List<BudgetStatus> get statuses => _statuses;
   bool get isLoading => _isLoading;
+  // True once load() has completed at least once — distinct from isLoading,
+  // which starts false both before the first load call and after it. Callers
+  // that need to tell "genuinely no data" apart from "hasn't loaded yet"
+  // (e.g. the AI Advice greeting, which is built before this ever loads)
+  // should check this instead.
+  bool get hasLoadedOnce => _hasLoadedOnce;
   String? get error => _error;
   DateTime get selectedMonth => _selectedMonth;
 
-  double get totalBudget =>
-      _budgets.fold(0.0, (sum, b) => sum + b.amount);
+  double get totalBudget => _budgets.fold(0.0, (sum, b) => sum + b.amount);
 
-  double get totalSpent =>
-      _statuses.fold(0.0, (sum, s) => sum + s.spent);
+  double get totalSpent => _statuses.fold(0.0, (sum, s) => sum + s.spent);
 
   void setMonth(DateTime month) {
     _selectedMonth = month;
@@ -50,14 +57,22 @@ class BudgetProvider extends ChangeNotifier {
     _isLoading = true;
     _error = null;
     notifyListeners();
+    await _hydrateCustomCategoriesIfNeeded();
     try {
       _budgets = await _service.getBudgets(
-          _selectedMonth.month, _selectedMonth.year);
-      _recalculate(expenses);
+        _selectedMonth.month,
+        _selectedMonth.year,
+      );
     } catch (e) {
+      // Reset rather than leaving whatever was loaded before — otherwise a
+      // failed fetch (e.g. right after switching accounts) just keeps
+      // showing the previous account's stale numbers forever.
+      _budgets = [];
       _error = e.toString();
     } finally {
+      _recalculate(expenses);
       _isLoading = false;
+      _hasLoadedOnce = true;
       notifyListeners();
     }
   }
@@ -82,10 +97,12 @@ class BudgetProvider extends ChangeNotifier {
     required double amount,
   }) async {
     final existing = _budgets
-        .where((b) =>
-            b.categoryId == categoryId &&
-            b.month == _selectedMonth.month &&
-            b.year == _selectedMonth.year)
+        .where(
+          (b) =>
+              b.categoryId == categoryId &&
+              b.month == _selectedMonth.month &&
+              b.year == _selectedMonth.year,
+        )
         .firstOrNull;
 
     final budget = BudgetModel(
@@ -150,16 +167,22 @@ class BudgetProvider extends ChangeNotifier {
       final prev = results[1];
       if (existing.isNotEmpty || prev.isEmpty) return false;
 
-      await Future.wait(prev.map((b) => _service.upsertBudget(BudgetModel(
-            id: _uuid.v4(),
-            userId: userId,
-            categoryId: b.categoryId,
-            amount: b.amount,
-            month: now.month,
-            year: now.year,
-            createdAt: DateTime.now(),
-            updatedAt: DateTime.now(),
-          ))));
+      await Future.wait(
+        prev.map(
+          (b) => _service.upsertBudget(
+            BudgetModel(
+              id: _uuid.v4(),
+              userId: userId,
+              categoryId: b.categoryId,
+              amount: b.amount,
+              month: now.month,
+              year: now.year,
+              createdAt: DateTime.now(),
+              updatedAt: DateTime.now(),
+            ),
+          ),
+        ),
+      );
       return true;
     } catch (_) {
       return false;
@@ -169,18 +192,54 @@ class BudgetProvider extends ChangeNotifier {
   // ── Category management ────────────────────────────────────────────────────
   void _reloadCategories() {
     _categories = LocalStorageService.instance.getCategories();
-    _incomeCategories = LocalStorageService.instance.getCategories(type: 'income');
+    _incomeCategories = LocalStorageService.instance.getCategories(
+      type: 'income',
+    );
+  }
+
+  /// Local-first, same pattern as budgets/expenses: only reach for Supabase
+  /// when no custom categories have ever been cached locally (e.g. first
+  /// run, or a different account) — requires the categories table
+  /// migration to actually return anything beyond the shared defaults.
+  Future<void> _hydrateCustomCategoriesIfNeeded() async {
+    final store = LocalStorageService.instance;
+    if (store.getCustomCategoriesOnly().isNotEmpty ||
+        !SupabaseService.instance.isLoggedIn) {
+      return;
+    }
+    try {
+      final cloud = await Future.wait([
+        SupabaseService.instance.getCategories(type: 'expense'),
+        SupabaseService.instance.getCategories(type: 'income'),
+      ]);
+      final customs = [
+        ...cloud[0],
+        ...cloud[1],
+      ].where((c) => c.userId != null).toList();
+      if (customs.isNotEmpty) {
+        await store.replaceCustomCategories(customs);
+        _reloadCategories();
+      }
+    } catch (_) {}
   }
 
   Future<void> addCategory(CategoryModel cat) async {
     await LocalStorageService.instance.saveCategory(cat);
     _reloadCategories();
     notifyListeners();
+    // Requires the categories table migration — silently a no-op locally
+    // until that's applied (a shared default's userId is null, so it's
+    // never re-uploaded here; only genuinely new custom categories are).
+    if (cat.userId != null && SupabaseService.instance.isLoggedIn) {
+      SupabaseService.instance.insertCategory(cat).catchError((_) => cat);
+    }
   }
 
   Future<void> removeCategory(CategoryModel cat) async {
     // Delete any budget entry set for this category
-    final budgetsToDelete = _budgets.where((b) => b.categoryId == cat.id).toList();
+    final budgetsToDelete = _budgets
+        .where((b) => b.categoryId == cat.id)
+        .toList();
     for (final b in budgetsToDelete) {
       await _service.deleteBudget(b.id);
     }
@@ -194,5 +253,8 @@ class BudgetProvider extends ChangeNotifier {
     await LocalStorageService.instance.deleteCategory(cat.id);
     _reloadCategories();
     notifyListeners();
+    if (cat.userId != null && SupabaseService.instance.isLoggedIn) {
+      SupabaseService.instance.deleteCategory(cat.id).catchError((_) {});
+    }
   }
 }

@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
+import '../util/auth_validators.dart';
 import '../../../shared/theme/app_colors.dart';
+
+const _maxAttemptsBeforeResetHint = 3;
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -15,6 +18,7 @@ class _LoginScreenState extends State<LoginScreen> {
   final _emailCtrl = TextEditingController();
   final _passwordCtrl = TextEditingController();
   bool _obscure = true;
+  int _failedAttempts = 0;
 
   @override
   void dispose() {
@@ -32,16 +36,31 @@ class _LoginScreenState extends State<LoginScreen> {
     );
     if (!mounted) return;
     if (ok) {
-      Navigator.pushNamedAndRemoveUntil(
-          context, '/home-profile', (_) => false);
-    } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(auth.errorMessage ?? 'Login failed'),
-          backgroundColor: AppColors.budgetRed,
-        ),
-      );
+      Navigator.pushNamedAndRemoveUntil(context, '/home-profile', (_) => false);
+      return;
     }
+
+    _failedAttempts++;
+    // Supabase returns the same generic message for both a wrong email and a
+    // wrong password (deliberately, so a failed login can't be used to probe
+    // whether an email is registered) — surface that as one plain sentence
+    // rather than Supabase's raw wording.
+    final rawError = (auth.errorMessage ?? '').toLowerCase();
+    final isCredentialsError =
+        rawError.contains('invalid') || rawError.contains('credentials');
+    final suggestReset = _failedAttempts >= _maxAttemptsBeforeResetHint;
+    final message = isCredentialsError
+        ? 'Your email or password is invalid.'
+              '${suggestReset ? ' Forgot your password? Tap "Forgot Password?" below to reset it.' : ''}'
+        : (auth.errorMessage ?? 'Login failed');
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: AppColors.budgetRed,
+        duration: Duration(seconds: suggestReset ? 6 : 3),
+      ),
+    );
   }
 
   @override
@@ -72,8 +91,11 @@ class _LoginScreenState extends State<LoginScreen> {
                     color: AppColors.primary,
                     borderRadius: BorderRadius.circular(20),
                   ),
-                  child: const Icon(Icons.account_balance_wallet,
-                      size: 44, color: Colors.white),
+                  child: const Icon(
+                    Icons.account_balance_wallet,
+                    size: 44,
+                    color: Colors.white,
+                  ),
                 ),
                 const SizedBox(height: 24),
                 const Text(
@@ -86,15 +108,19 @@ class _LoginScreenState extends State<LoginScreen> {
                 ),
                 const Text(
                   'Intelligent Budget Monitoring',
-                  style: TextStyle(fontSize: 14, color: AppColors.textSecondary),
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: AppColors.textSecondary,
+                  ),
                 ),
                 const SizedBox(height: 48),
                 const Text(
                   'Welcome Back',
                   style: TextStyle(
-                      fontSize: 22,
-                      fontWeight: FontWeight.bold,
-                      color: AppColors.textPrimary),
+                    fontSize: 22,
+                    fontWeight: FontWeight.bold,
+                    color: AppColors.textPrimary,
+                  ),
                 ),
                 const SizedBox(height: 8),
                 const Text(
@@ -109,11 +135,7 @@ class _LoginScreenState extends State<LoginScreen> {
                     labelText: 'Email',
                     prefixIcon: Icon(Icons.email_outlined),
                   ),
-                  validator: (v) {
-                    if (v == null || v.trim().isEmpty) return 'Email is required';
-                    if (!v.contains('@')) return 'Enter a valid email';
-                    return null;
-                  },
+                  validator: validateEmail,
                 ),
                 const SizedBox(height: 16),
                 TextFormField(
@@ -124,7 +146,8 @@ class _LoginScreenState extends State<LoginScreen> {
                     prefixIcon: const Icon(Icons.lock_outlined),
                     suffixIcon: IconButton(
                       icon: Icon(
-                          _obscure ? Icons.visibility_off : Icons.visibility),
+                        _obscure ? Icons.visibility_off : Icons.visibility,
+                      ),
                       onPressed: () => setState(() => _obscure = !_obscure),
                     ),
                   ),
@@ -151,7 +174,9 @@ class _LoginScreenState extends State<LoginScreen> {
                           height: 20,
                           width: 20,
                           child: CircularProgressIndicator(
-                              strokeWidth: 2, color: Colors.white),
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
                         )
                       : const Text('Sign In'),
                 ),
@@ -159,11 +184,12 @@ class _LoginScreenState extends State<LoginScreen> {
                 Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    const Text("Don't have an account? ",
-                        style: TextStyle(color: AppColors.textSecondary)),
+                    const Text(
+                      "Don't have an account? ",
+                      style: TextStyle(color: AppColors.textSecondary),
+                    ),
                     GestureDetector(
-                      onTap: () =>
-                          Navigator.pushNamed(context, '/register'),
+                      onTap: () => Navigator.pushNamed(context, '/register'),
                       child: const Text(
                         'Sign Up',
                         style: TextStyle(

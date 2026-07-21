@@ -25,21 +25,60 @@ class _HomeScreenState extends State<HomeScreen> {
   DateTime _txStart = DateTime(DateTime.now().year, DateTime.now().month, 1);
   DateTime _txEnd = DateTime.now();
   String _filterLabel = 'This Month';
+  String? _lastUserId;
 
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _load());
+    // HomeScreen is kept alive inside MainShell's IndexedStack rather than
+    // rebuilt on navigation, so signing out/in while sitting on another tab
+    // wouldn't otherwise re-trigger a reload — the providers would just keep
+    // showing whichever account's data they last loaded.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _lastUserId = context.read<AuthProvider>().userId;
+      context.read<AuthProvider>().addListener(_onAuthChanged);
+      _load();
+    });
   }
 
-  Future<void> _load() async {
+  @override
+  void dispose() {
+    context.read<AuthProvider>().removeListener(_onAuthChanged);
+    super.dispose();
+  }
+
+  void _onAuthChanged() {
+    final currentUserId = context.read<AuthProvider>().userId;
+    if (currentUserId != _lastUserId) {
+      _lastUserId = currentUserId;
+      // The background location service runs in its own isolate under
+      // whichever session was active when it started — it has no way to
+      // learn the identity changed. stopTracking() both kills that stale
+      // isolate and resets LocationProvider's own isTracking/activeLocation
+      // state, so the next visit to the Nearby screen restarts it cleanly
+      // for whoever's actually logged in now (a raw service stop alone
+      // left isTracking stuck "true", blocking any restart).
+      context.read<LocationProvider>().stopTracking();
+      _load(forceWalletReload: true);
+    }
+  }
+
+  Future<void> _load({bool forceWalletReload = false}) async {
     final ep = context.read<ExpenseProvider>();
     final bp = context.read<BudgetProvider>();
     final sp = context.read<SavingsGoalProvider>();
     final wp = context.read<WalletProvider>();
     final auth = context.read<AuthProvider>();
-    // Run independent loads in parallel — much faster than sequential awaits
-    await Future.wait([ep.load(), wp.load(), sp.load()]);
+    // Run independent loads in parallel — much faster than sequential awaits.
+    // WalletProvider.load() is a no-op after its first successful load unless
+    // forced — needed here so switching accounts actually refreshes wallets
+    // instead of leaving the previous account's list in place.
+    await Future.wait([
+      ep.load(),
+      wp.load(force: forceWalletReload),
+      sp.load(),
+    ]);
     final now = DateTime.now();
     await bp.load(ep.expensesForMonth(now.month, now.year));
     final skipped = await sp.checkAutoTransfers(
@@ -608,14 +647,20 @@ class _HomeScreenState extends State<HomeScreen> {
                               color: AppColors.textSecondary,
                             ),
                             const SizedBox(height: 8),
-                            const Text(
-                              'No budgets set yet',
-                              style: TextStyle(fontWeight: FontWeight.bold),
+                            Text(
+                              bp.error != null
+                                  ? "Couldn't load budgets"
+                                  : 'No budgets set yet',
+                              style: const TextStyle(
+                                fontWeight: FontWeight.bold,
+                              ),
                             ),
                             const SizedBox(height: 4),
-                            const Text(
-                              'Set monthly budgets to track your spending',
-                              style: TextStyle(
+                            Text(
+                              bp.error ??
+                                  'Set monthly budgets to track your spending',
+                              textAlign: TextAlign.center,
+                              style: const TextStyle(
                                 color: AppColors.textSecondary,
                                 fontSize: 13,
                               ),

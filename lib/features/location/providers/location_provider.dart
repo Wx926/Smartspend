@@ -4,6 +4,7 @@ import 'package:flutter_background_service/flutter_background_service.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../../../shared/models/location_model.dart';
 import '../../../shared/services/local_storage_service.dart';
+import '../../../shared/services/supabase_service.dart';
 import '../services/location_service.dart';
 
 class LocationProvider extends ChangeNotifier {
@@ -12,6 +13,7 @@ class LocationProvider extends ChangeNotifier {
   // (see background_location_service.dart), not in this app process.
   final _service = LocationService.instance;
   final _store = LocalStorageService.instance;
+  final _supabase = SupabaseService.instance;
   final _bgService = FlutterBackgroundService();
 
   List<LocationModel> _locations = [];
@@ -44,6 +46,7 @@ class LocationProvider extends ChangeNotifier {
     if (idx != -1) {
       _locations[idx] = _locations[idx].copyWithRoutineOverride(override);
       notifyListeners();
+      _syncUpsert(_locations[idx]);
     }
   }
 
@@ -54,26 +57,50 @@ class LocationProvider extends ChangeNotifier {
     await _store.setCategoryIds(locationId, categoryIds);
     _locations = _store.getLocations();
     notifyListeners();
+    final updated = _locations.where((l) => l.id == locationId).firstOrNull;
+    if (updated != null) _syncUpsert(updated);
   }
 
+  Future<void> _syncUpsert(LocationModel loc) async {
+    if (!_supabase.isLoggedIn) return;
+    try {
+      await _supabase.upsertLocation(loc);
+    } catch (_) {}
+  }
+
+  /// Local-first, same pattern as ExpenseService: read the cache instantly,
+  /// only reach for Supabase when nothing has ever been cached locally (e.g.
+  /// first run, or a different device/account) — so a dropped connection no
+  /// longer makes existing saved locations disappear.
   Future<void> load([String? userId]) async {
     _isLoading = true;
     _error = null;
     notifyListeners();
+    var locations = _store.getLocations();
+    if (locations.isEmpty && _supabase.isLoggedIn) {
+      try {
+        final cloud = await _supabase.getLocations();
+        if (cloud.isNotEmpty) {
+          for (final loc in cloud) {
+            await _store.upsertLocation(loc);
+          }
+          locations = _store.getLocations();
+        }
+      } catch (e) {
+        _error = e.toString();
+      }
+    }
+    _locations = locations;
     try {
-      _locations = _store.getLocations();
       // Auto-resume tracking if it was on before the app was closed. Safe to
       // call even if the background service is already running (e.g. it
       // survived the app being killed) — it just (re)attaches the listener.
       if (!_isTracking && userId != null && _store.trackingEnabled) {
         await startTracking(userId);
       }
-    } catch (e) {
-      _error = e.toString();
-    } finally {
-      _isLoading = false;
-      notifyListeners();
-    }
+    } catch (_) {}
+    _isLoading = false;
+    notifyListeners();
   }
 
   Future<bool> startTracking(String userId) async {
@@ -145,6 +172,9 @@ class LocationProvider extends ChangeNotifier {
     await _store.deleteLocation(locationId);
     _locations.removeWhere((l) => l.id == locationId);
     notifyListeners();
+    if (_supabase.isLoggedIn) {
+      _supabase.deleteLocation(locationId).catchError((_) {});
+    }
   }
 
   Stream<LocationEvent> get locationEvents => _eventController.stream;

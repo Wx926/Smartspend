@@ -1,6 +1,7 @@
 import '../../../shared/models/budget_model.dart';
 import '../../../shared/models/category_model.dart';
 import '../../../shared/models/expense_model.dart';
+import '../../../shared/services/local_storage_service.dart';
 import '../../../shared/services/supabase_service.dart';
 import '../../../shared/constants/app_constants.dart';
 
@@ -8,16 +9,49 @@ class BudgetService {
   BudgetService._();
   static final BudgetService instance = BudgetService._();
 
+  final _local = LocalStorageService.instance;
   final _supabase = SupabaseService.instance;
 
-  Future<List<BudgetModel>> getBudgets(int month, int year) =>
-      _supabase.getBudgets(month, year);
+  /// Local-first, same pattern as ExpenseService: read the cache instantly,
+  /// only reach for Supabase when that month has never been cached locally
+  /// (e.g. first run, or a different device) — so a dropped connection no
+  /// longer makes existing budgets disappear.
+  Future<List<BudgetModel>> getBudgets(int month, int year) async {
+    var budgets = _local.getBudgets(month, year);
+    // A guest session has no Supabase user at all — there's nothing to fetch
+    // (and _supabase.getBudgets would throw), so an empty local cache for a
+    // guest just means "no budgets set," not "go check the cloud."
+    if (budgets.isEmpty && _supabase.isLoggedIn) {
+      final cloud = await _supabase.getBudgets(month, year);
+      if (cloud.isNotEmpty) {
+        for (final b in cloud) {
+          await _local.upsertBudget(b);
+        }
+        budgets = _local.getBudgets(month, year);
+      }
+    }
+    return budgets;
+  }
 
-  Future<BudgetModel> upsertBudget(BudgetModel budget) =>
-      _supabase.upsertBudget(budget);
+  Future<BudgetModel> upsertBudget(BudgetModel budget) async {
+    final saved = await _local.upsertBudget(budget);
+    _syncUpsert(budget);
+    return saved;
+  }
 
-  Future<void> deleteBudget(String budgetId) =>
-      _supabase.deleteBudget(budgetId);
+  Future<void> _syncUpsert(BudgetModel budget) async {
+    try {
+      await _supabase.upsertBudget(budget);
+    } catch (_) {
+      // Offline — the local copy already saved above is the source of truth
+      // for the UI; this sync just retries implicitly next successful call.
+    }
+  }
+
+  Future<void> deleteBudget(String budgetId) async {
+    await _local.deleteBudget(budgetId);
+    _supabase.deleteBudget(budgetId).catchError((_) {});
+  }
 
   /// Algorithm 2: Burn Rate Calculation + Budget Forecast
   List<BudgetStatus> computeBudgetStatuses({

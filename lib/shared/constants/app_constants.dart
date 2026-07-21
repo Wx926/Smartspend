@@ -9,7 +9,7 @@ class AppConstants {
       dotenv.env['OCR_BACKEND_URL'] ?? 'http://10.0.2.2:5000';
 
   static const String geminiEndpoint =
-      'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent';
+      'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent';
 
   // Location tracking (Algorithm 1)
   static const double geofenceRadiusMeters = 100.0;
@@ -22,7 +22,7 @@ class AppConstants {
 
   // Algorithm 3 Step 1/7: per-venue cooldown between repeat alerts, and a
   // hard daily cap so a long stay at one place can't spam indefinitely.
-  static const double alertCooldownHours = 0.025;
+  static const double alertCooldownHours = 0.1;
   static const int maxAlertsPerVenuePerDay = 100;
 
   static const String appName = 'SmartSpend';

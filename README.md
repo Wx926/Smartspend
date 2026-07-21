@@ -60,7 +60,7 @@ Four-layer layered architecture (chosen over microservices — team of 2, no nee
 Presentation Layer   → Flutter UI (Dashboard, Add Expense, AI Advisor, Forecast, Profile)
 Business Logic Layer → Financial Service, Location Service, Recommendation Service,
                         Forecast Service, Dashboard Service
-Security Layer        → Supabase Auth (Google OAuth), JWT session (15min expiry),
+Security Layer        → Supabase Auth (email + OTP verification),
                         Row Level Security, location permission control
 Data Access Layer     → DAOs (Financial, Location, User) → Supabase
 ```
@@ -76,7 +76,6 @@ Data Access Layer     → DAOs (Financial, Location, User) → Supabase
 - App starts in <3s · expense recording in ≤3 taps · AI advice loads in <3s
 - Works offline for basic features, syncs when reconnected
 - Raw GPS coordinates are **never stored** — only the matched venue name + dwell duration
-- Session auto-expires after 30 min of inactivity
 - Bilingual: English + Bahasa Malaysia
 
 ## Project status / timeline

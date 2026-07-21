@@ -9,6 +9,7 @@ import '../models/location_model.dart';
 import '../models/alert_log_model.dart';
 import '../models/wallet_model.dart';
 import '../models/recent_receipt_model.dart';
+import '../models/savings_goal_model.dart';
 
 /// Local on-device storage. No internet or login required.
 /// Data persists across app restarts via SharedPreferences.
@@ -29,6 +30,11 @@ class LocalStorageService {
   static const _keyRecentReceipts = 'ss_recent_receipts';
   static const _keyAiCategorisation = 'ss_ai_categorisation_enabled';
   static const _keyLocationHistory = 'ss_location_history';
+  static const _keyPasscodeEnabled = 'ss_passcode_enabled';
+  static const _keyPasscodeHash = 'ss_passcode_hash';
+  static const _keyPasscodeTimeoutMinutes = 'ss_passcode_timeout_minutes';
+  static const _keyPasscodeLastUnlockedAt = 'ss_passcode_last_unlocked_at';
+  static const _keySavingsGoals = 'ss_savings_goals';
   static const _maxRecentReceipts = 12;
 
   // Algorithm 1 Step 3: a location is "routine" once it's been visited at
@@ -67,6 +73,32 @@ class LocalStorageService {
     await _prefs?.reload();
   }
 
+  /// Wipes locally-cached account records that have a real Supabase backup
+  /// to re-fetch from, so a re-fetch after sign-in/out actually restores the
+  /// correct account's data instead of showing whoever was cached last.
+  ///
+  /// Deliberately NOT included: recent receipts (device file paths — not
+  /// meaningfully "synced" data in the first place) and wallets/preferred
+  /// wallet (WalletProvider never reads local storage at all — it's
+  /// pure-cloud already, so clearing this key here would be a no-op either
+  /// way). Locations, location history, alerts, and custom categories were
+  /// excluded here until supabase_migration_sync_fix.sql added the missing
+  /// columns/RLS their sync code needed — now that it's applied, they're
+  /// safe to include too.
+  Future<void> clearAccountData() async {
+    final prefs = _prefs;
+    if (prefs == null) return;
+    await Future.wait([
+      prefs.remove(_keyExpenses),
+      prefs.remove(_keyBudgets),
+      prefs.remove(_keySavingsGoals),
+      prefs.remove(_keyLocations),
+      prefs.remove(_keyLocationHistory),
+      prefs.remove(_keyAlerts),
+      prefs.remove(_keyCustomCategories),
+    ]);
+  }
+
   String get localUserId => _prefs?.getString(_keyDeviceId) ?? 'local_user';
 
   // ── Notification preference ────────────────────────────────────────────────
@@ -86,6 +118,38 @@ class LocalStorageService {
 
   Future<void> setAiCategorisationEnabled(bool value) async =>
       _prefs?.setBool(_keyAiCategorisation, value);
+
+  // ── App passcode lock ──────────────────────────────────────────────────────
+  bool get passcodeEnabled => _prefs?.getBool(_keyPasscodeEnabled) ?? false;
+
+  Future<void> setPasscodeEnabled(bool value) async =>
+      _prefs?.setBool(_keyPasscodeEnabled, value);
+
+  String? get passcodeHash => _prefs?.getString(_keyPasscodeHash);
+
+  Future<void> setPasscodeHash(String? hash) async {
+    if (hash == null) {
+      await _prefs?.remove(_keyPasscodeHash);
+    } else {
+      await _prefs?.setString(_keyPasscodeHash, hash);
+    }
+  }
+
+  /// Minutes of background/inactivity allowed before the passcode is asked
+  /// for again. 0 means "Immediately".
+  int get passcodeTimeoutMinutes =>
+      _prefs?.getInt(_keyPasscodeTimeoutMinutes) ?? 0;
+
+  Future<void> setPasscodeTimeoutMinutes(int minutes) async =>
+      _prefs?.setInt(_keyPasscodeTimeoutMinutes, minutes);
+
+  DateTime? get passcodeLastUnlockedAt {
+    final raw = _prefs?.getString(_keyPasscodeLastUnlockedAt);
+    return raw == null ? null : DateTime.tryParse(raw);
+  }
+
+  Future<void> setPasscodeLastUnlockedAt(DateTime value) async =>
+      _prefs?.setString(_keyPasscodeLastUnlockedAt, value.toIso8601String());
 
   // ── Categories ─────────────────────────────────────────────────────────────
   List<CategoryModel> _defaultCategories(String type) {
@@ -146,6 +210,14 @@ class LocalStorageService {
         .toList();
     return [..._defaultCategories(type), ...customs];
   }
+
+  List<CategoryModel> getCustomCategoriesOnly() => _loadCustomCategories();
+
+  /// Overwrites the local custom-category cache wholesale — used to hydrate
+  /// it from Supabase when local storage is empty (e.g. after a reinstall,
+  /// or a different account on the same device).
+  Future<void> replaceCustomCategories(List<CategoryModel> cats) =>
+      _saveCustomCategories(cats);
 
   Future<void> saveCategory(CategoryModel cat) async {
     final all = _loadCustomCategories();
@@ -267,6 +339,49 @@ class LocalStorageService {
     final all = _loadBudgets()..removeWhere((b) => b.id == id);
     await _saveBudgets(all);
   }
+
+  // ── Savings goals ──────────────────────────────────────────────────────────
+  List<SavingsGoalModel> _loadSavingsGoals() {
+    final raw = _prefs?.getString(_keySavingsGoals);
+    if (raw == null) return [];
+    final list = jsonDecode(raw) as List;
+    return list.map((e) => SavingsGoalModel.fromJson(e)).toList();
+  }
+
+  Future<void> _saveSavingsGoals(List<SavingsGoalModel> goals) async {
+    await _prefs?.setString(
+      _keySavingsGoals,
+      jsonEncode(goals.map((g) => g.toJson()).toList()),
+    );
+  }
+
+  List<SavingsGoalModel> getSavingsGoals() {
+    final goals = _loadSavingsGoals();
+    goals.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    return goals;
+  }
+
+  Future<SavingsGoalModel> upsertSavingsGoal(SavingsGoalModel goal) async {
+    final all = _loadSavingsGoals();
+    final idx = all.indexWhere((g) => g.id == goal.id);
+    if (idx >= 0) {
+      all[idx] = goal;
+    } else {
+      all.add(goal);
+    }
+    await _saveSavingsGoals(all);
+    return goal;
+  }
+
+  Future<void> deleteSavingsGoal(String id) async {
+    final all = _loadSavingsGoals()..removeWhere((g) => g.id == id);
+    await _saveSavingsGoals(all);
+  }
+
+  /// Overwrites the local savings-goal cache wholesale — used to hydrate it
+  /// from Supabase when local storage is empty (e.g. after a reinstall).
+  Future<void> replaceSavingsGoals(List<SavingsGoalModel> goals) =>
+      _saveSavingsGoals(goals);
 
   // ── Expenses ───────────────────────────────────────────────────────────────
   List<ExpenseModel> _loadExpenses() {

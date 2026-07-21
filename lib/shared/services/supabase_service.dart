@@ -17,7 +17,17 @@ class SupabaseService {
   SupabaseClient get _client => Supabase.instance.client;
   String get _uid => _client.auth.currentUser!.id;
 
+  /// Guest sessions have no Supabase user at all — callers doing local-first
+  /// caching with a cloud fallback should check this first instead of
+  /// attempting a query that's guaranteed to throw on the `_uid` unwrap.
+  bool get isLoggedIn => _client.auth.currentUser != null;
+
   // ── Categories ────────────────────────────────────────────────
+  // Relies entirely on RLS to decide visibility (shared defaults where
+  // user_id is null, plus this user's own custom ones) — no explicit
+  // user_id filter needed here. Requires the categories table migration
+  // (supabase_migration_sync_fix.sql) for custom categories to work; the
+  // shared defaults already work without it.
   Future<List<CategoryModel>> getCategories({String type = 'expense'}) async {
     final data = await _client
         .from('categories')
@@ -25,6 +35,19 @@ class SupabaseService {
         .eq('type', type)
         .order('name');
     return (data as List).map((e) => CategoryModel.fromJson(e)).toList();
+  }
+
+  Future<CategoryModel> insertCategory(CategoryModel cat) async {
+    final data = await _client
+        .from('categories')
+        .insert({...cat.toJson(), 'user_id': _uid})
+        .select()
+        .single();
+    return CategoryModel.fromJson(data);
+  }
+
+  Future<void> deleteCategory(String id) async {
+    await _client.from('categories').delete().eq('id', id);
   }
 
   // ── Budgets ───────────────────────────────────────────────────
@@ -61,8 +84,9 @@ class SupabaseService {
         .order('created_at', ascending: false);
 
     final data = await query;
-    final expenses =
-        (data as List).map((e) => ExpenseModel.fromJson(e)).toList();
+    final expenses = (data as List)
+        .map((e) => ExpenseModel.fromJson(e))
+        .toList();
 
     if (month != null && year != null) {
       return expenses
@@ -101,11 +125,9 @@ class SupabaseService {
   Future<String> uploadReceiptImage(File file, String batchId) async {
     final ext = file.path.split('.').last.toLowerCase();
     final path = '$_uid/$batchId.$ext';
-    await _client.storage.from('receipts').upload(
-          path,
-          file,
-          fileOptions: const FileOptions(upsert: true),
-        );
+    await _client.storage
+        .from('receipts')
+        .upload(path, file, fileOptions: const FileOptions(upsert: true));
     return _client.storage.from('receipts').getPublicUrl(path);
   }
 
@@ -132,16 +154,26 @@ class SupabaseService {
     await _client.rpc('increment_visit_count', params: {'loc_id': locationId});
   }
 
+  Future<void> deleteLocation(String locationId) async {
+    await _client.from('locations').delete().eq('id', locationId);
+  }
+
   Future<void> insertLocationHistory(LocationHistoryModel h) async {
     await _client.from('user_location_history').insert(h.toJson());
   }
 
   Future<void> closeLocationHistory(
-      String historyId, DateTime leftAt, int dwellMinutes) async {
-    await _client.from('user_location_history').update({
-      'left_at': leftAt.toIso8601String(),
-      'dwell_time_minutes': dwellMinutes,
-    }).eq('id', historyId);
+    String historyId,
+    DateTime leftAt,
+    int dwellMinutes,
+  ) async {
+    await _client
+        .from('user_location_history')
+        .update({
+          'left_at': leftAt.toIso8601String(),
+          'dwell_time_minutes': dwellMinutes,
+        })
+        .eq('id', historyId);
   }
 
   // ── Alert Logs ────────────────────────────────────────────────
@@ -264,7 +296,9 @@ class SupabaseService {
   }
 
   Future<void> reassignWalletExpenses(
-      String fromWalletId, String toWalletId) async {
+    String fromWalletId,
+    String toWalletId,
+  ) async {
     await _client
         .from('expenses')
         .update({'wallet_id': toWalletId})
@@ -273,7 +307,9 @@ class SupabaseService {
   }
 
   Future<void> reassignCategoryExpenses(
-      String fromCategoryId, String toCategoryId) async {
+    String fromCategoryId,
+    String toCategoryId,
+  ) async {
     await _client
         .from('expenses')
         .update({'category_id': toCategoryId})
@@ -292,8 +328,10 @@ class SupabaseService {
   }
 
   // Base-only fields that are guaranteed to exist in the original schema
-  Map<String, dynamic> _goalBaseJson(Map<String, dynamic> json,
-      {bool includeUserId = false}) {
+  Map<String, dynamic> _goalBaseJson(
+    Map<String, dynamic> json, {
+    bool includeUserId = false,
+  }) {
     return {
       if (includeUserId) 'user_id': json['user_id'],
       'name': json['name'],
@@ -313,7 +351,8 @@ class SupabaseService {
       if (json['auto_transfer_amount'] != null)
         'auto_transfer_amount': json['auto_transfer_amount'],
       if (json['auto_transfer_source_wallet_id'] != null)
-        'auto_transfer_source_wallet_id': json['auto_transfer_source_wallet_id'],
+        'auto_transfer_source_wallet_id':
+            json['auto_transfer_source_wallet_id'],
       if (json['auto_transfer_day_of_month'] != null)
         'auto_transfer_day_of_month': json['auto_transfer_day_of_month'],
       if (json['last_auto_transfer_date'] != null)
@@ -354,10 +393,7 @@ class SupabaseService {
 
   Future<SavingsGoalModel> updateSavingsGoal(SavingsGoalModel goal) async {
     final json = goal.toJson();
-    final fullJson = {
-      ..._goalBaseJson(json),
-      ..._goalExtendedJson(json),
-    };
+    final fullJson = {..._goalBaseJson(json), ..._goalExtendedJson(json)};
     try {
       final data = await _client
           .from('savings_goals')
