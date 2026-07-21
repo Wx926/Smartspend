@@ -67,7 +67,8 @@ CATEGORY_KEYWORDS: dict[str, list[str]] = {
         "sneakers", "sandal", "apparel", "clothing", "clothes", "fashion",
         "garment", "scarf", "hat", "cap", "sock", "socks", "bag",
         "handbag", "wallet", "jewellery", "jewelry", "accessory",
-        "accessories",
+        "accessories", "jersey", "shirt", "t-shirt", "tshirt", "jeans",
+        "pants", "trousers", "jacket", "shorts", "hoodie",
     ],
     "Entertainment": [
         "cinema", "gsc", "tgv", "netflix", "spotify", "movie",
@@ -76,6 +77,7 @@ CATEGORY_KEYWORDS: dict[str, list[str]] = {
     "Health": [
         "pharmacy", "clinic", "hospital", "medicine", "doctor",
         "dental", "checkup", "vitamin", "watson", "guardian",
+        "protein", "whey", "creatine", "supplement", "multivitamin", "bcaa",
     ],
     "Utilities": [
         "tnb", "water bill", "unifi", "maxis", "celcom", "digi",

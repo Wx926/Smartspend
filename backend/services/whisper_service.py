@@ -42,9 +42,10 @@ def _get_model() -> WhisperModel:
 _INITIAL_PROMPT = (
     "Malaysian expense note, amounts in ringgit (RM). "
     "Example: I spent RM 40 on lunch at KFC. Bought groceries at Aeon, RM 68. "
-    "RM 80 shoes at Uniqlo. "
+    "RM 80 shoes at Uniqlo. RM 15 for Bak Kut Teh. "
     "Also: 令吉, 块, Grab, McDonald's, Nando's, Uniqlo, Shopee, Lazada, Mydin, "
-    "Watsons, Petronas, Tealive, Chagee."
+    "Watsons, Petronas, Tealive, Chagee, Bak Kut Teh, Char Kway Teow, Nasi Lemak, "
+    "Roti Canai, Teh Tarik."
 )
 
 # Belt-and-suspenders: fixes the common near-miss spellings of "ringgit" that
@@ -52,6 +53,15 @@ _INITIAL_PROMPT = (
 # matches the literal word "ringgit") still recognises it.
 _RINGGIT_MISHEARDS = re.compile(
     r"\bring\s*g?it\b|\bring\s*g?ate\b|\bring\s*get\b|\bwring\s*g?ate\b",
+    re.IGNORECASE,
+)
+
+# Same belt-and-suspenders treatment for "Bak Kut Teh" — a rare, non-English
+# dish name with no real anchor in Whisper's training data, so even with the
+# prompt hint above it can still come back as a different phonetically-
+# similar guess (confirmed empirically: "bag kut teh", "bakuteh", "good teh").
+_BAK_KUT_TEH_MISHEARDS = re.compile(
+    r"\b(?:bak|bag|back|bar)\s*kut\s*teh\b|\bbakuteh\b|\bgood\s*teh\b",
     re.IGNORECASE,
 )
 
@@ -79,4 +89,5 @@ def transcribe_audio(audio_bytes: bytes, filename: str) -> str:
         raise WhisperTranscriptionError(
             "No speech detected — please try recording again."
         )
-    return _RINGGIT_MISHEARDS.sub("ringgit", text)
+    text = _RINGGIT_MISHEARDS.sub("ringgit", text)
+    return _BAK_KUT_TEH_MISHEARDS.sub("Bak Kut Teh", text)
