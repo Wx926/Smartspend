@@ -158,6 +158,7 @@ class _SavingsGoalsScreenState extends State<SavingsGoalsScreen> {
     final pct = (goal.progress * 100).toStringAsFixed(0);
     final remaining = goal.targetAmount - goal.currentAmount;
     final isComplete = goal.isCompleted || goal.progress >= 1.0;
+    final paceText = _paceText(goal, remaining, isComplete, fmt);
 
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
@@ -340,9 +341,53 @@ class _SavingsGoalsScreenState extends State<SavingsGoalsScreen> {
                 ),
             ],
           ),
+          if (paceText != null) ...[
+            const SizedBox(height: 6),
+            Text(
+              paceText,
+              style: const TextStyle(
+                color: AppColors.primary,
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
         ],
       ),
     );
+  }
+
+  /// Priority 1: if auto-transfer is on, project months-to-target from that
+  /// fixed monthly amount — it's a firmer commitment than a deadline. Only
+  /// falls back to the deadline-derived pace when there's no auto-transfer.
+  /// Neither set → nothing to show.
+  String? _paceText(
+    SavingsGoalModel goal,
+    double remaining,
+    bool isComplete,
+    NumberFormat fmt,
+  ) {
+    if (isComplete || remaining <= 0) return null;
+
+    if (goal.autoTransferEnabled &&
+        goal.autoTransferAmount != null &&
+        goal.autoTransferAmount! > 0) {
+      final months = (remaining / goal.autoTransferAmount!).ceil();
+      return 'RM ${fmt.format(goal.autoTransferAmount)}/mo → target in $months mo';
+    }
+
+    if (goal.deadline != null) {
+      final now = DateTime.now();
+      int months =
+          (goal.deadline!.year - now.year) * 12 +
+          (goal.deadline!.month - now.month);
+      if (goal.deadline!.day < now.day) months--;
+      if (months <= 0) return 'Deadline has passed';
+      final perMonth = remaining / months;
+      return 'Save RM ${fmt.format(perMonth)}/mo to hit target by deadline';
+    }
+
+    return null;
   }
 
   Widget _badge(String text, Color bg, Color fg) => Container(

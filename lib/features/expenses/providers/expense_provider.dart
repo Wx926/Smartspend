@@ -32,11 +32,15 @@ class ExpenseProvider extends ChangeNotifier {
       )
       .toList();
 
-  /// Only income records — used for income display.
+  /// Only income records excluding savings_transfer/wallet_transfer — used for income display.
   List<ExpenseModel> incomeForMonth(int month, int year) => _expenses
       .where(
         (e) =>
-            e.date.month == month && e.date.year == year && e.type == 'income',
+            e.date.month == month &&
+            e.date.year == year &&
+            e.type == 'income' &&
+            e.categoryId != 'savings_transfer' &&
+            e.categoryId != 'wallet_transfer',
       )
       .toList();
 

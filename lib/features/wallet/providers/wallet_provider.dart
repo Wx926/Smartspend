@@ -76,15 +76,28 @@ class WalletProvider extends ChangeNotifier {
     return income - expense;
   }
 
-  /// Total income across ALL wallets.
+  /// Total income across ALL wallets. Excludes savings_transfer/wallet_transfer —
+  /// a transfer between the user's own wallets/goals isn't new money earned.
   double totalAsset(List<ExpenseModel> records) => records
-      .where((r) => r.type == 'income')
+      .where(
+        (r) =>
+            r.type == 'income' &&
+            r.categoryId != 'savings_transfer' &&
+            r.categoryId != 'wallet_transfer',
+      )
       .fold(0.0, (s, r) => s + r.amount);
 
   /// Total expenses across ALL wallets.
-  /// Excludes savings_goal-sourced purchases (already counted when transferred to goal).
+  /// Excludes savings_goal-sourced purchases (already counted when transferred to goal)
+  /// and savings_transfer/wallet_transfer (internal moves, not real spending).
   double totalDebt(List<ExpenseModel> records) => records
-      .where((r) => r.type == 'expense' && r.walletId != 'savings_goal')
+      .where(
+        (r) =>
+            r.type == 'expense' &&
+            r.walletId != 'savings_goal' &&
+            r.categoryId != 'savings_transfer' &&
+            r.categoryId != 'wallet_transfer',
+      )
       .fold(0.0, (s, r) => s + r.amount);
 
   /// Net asset = total income − total expenses.

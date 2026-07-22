@@ -757,10 +757,20 @@ class _HomeScreenState extends State<HomeScreen> {
                       )
                       .toList();
                   final periodIncome = periodTx
-                      .where((e) => e.type == 'income')
+                      .where(
+                        (e) =>
+                            e.type == 'income' &&
+                            e.categoryId != 'savings_transfer' &&
+                            e.categoryId != 'wallet_transfer',
+                      )
                       .fold(0.0, (s, e) => s + e.amount);
                   final periodExpense = periodTx
-                      .where((e) => e.type == 'expense')
+                      .where(
+                        (e) =>
+                            e.type == 'expense' &&
+                            e.categoryId != 'savings_transfer' &&
+                            e.categoryId != 'wallet_transfer',
+                      )
                       .fold(0.0, (s, e) => s + e.amount);
                   return Padding(
                     padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
@@ -828,10 +838,20 @@ class _HomeScreenState extends State<HomeScreen> {
                       final dayKey = days[di];
                       final dayTx = byDate[dayKey]!;
                       final dayIncome = dayTx
-                          .where((e) => e.type == 'income')
+                          .where(
+                            (e) =>
+                                e.type == 'income' &&
+                                e.categoryId != 'savings_transfer' &&
+                                e.categoryId != 'wallet_transfer',
+                          )
                           .fold(0.0, (s, e) => s + e.amount);
                       final dayExpense = dayTx
-                          .where((e) => e.type == 'expense')
+                          .where(
+                            (e) =>
+                                e.type == 'expense' &&
+                                e.categoryId != 'savings_transfer' &&
+                                e.categoryId != 'wallet_transfer',
+                          )
                           .fold(0.0, (s, e) => s + e.amount);
 
                       return Column(

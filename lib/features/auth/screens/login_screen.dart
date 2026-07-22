@@ -91,11 +91,8 @@ class _LoginScreenState extends State<LoginScreen> {
                     color: AppColors.primary,
                     borderRadius: BorderRadius.circular(20),
                   ),
-                  child: const Icon(
-                    Icons.account_balance_wallet,
-                    size: 44,
-                    color: Colors.white,
-                  ),
+                  padding: const EdgeInsets.all(14),
+                  child: Image.asset('assets/logo.png'),
                 ),
                 const SizedBox(height: 24),
                 const Text(
