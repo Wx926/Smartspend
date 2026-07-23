@@ -7,6 +7,7 @@ import '../../../features/expenses/providers/expense_provider.dart';
 import '../../../features/location/providers/location_provider.dart';
 import '../../../features/savings_goals/providers/savings_goal_provider.dart';
 import '../../../features/wallet/providers/wallet_provider.dart';
+import '../../../shared/constants/app_constants.dart';
 import '../../../shared/models/budget_model.dart';
 import '../../../shared/theme/app_colors.dart';
 import '../../analytics/screens/analytics_screen.dart';
@@ -760,16 +761,18 @@ class _HomeScreenState extends State<HomeScreen> {
                       .where(
                         (e) =>
                             e.type == 'income' &&
-                            e.categoryId != 'savings_transfer' &&
-                            e.categoryId != 'wallet_transfer',
+                            !AppConstants.internalCategoryIds.contains(
+                              e.categoryId,
+                            ),
                       )
                       .fold(0.0, (s, e) => s + e.amount);
                   final periodExpense = periodTx
                       .where(
                         (e) =>
                             e.type == 'expense' &&
-                            e.categoryId != 'savings_transfer' &&
-                            e.categoryId != 'wallet_transfer',
+                            !AppConstants.internalCategoryIds.contains(
+                              e.categoryId,
+                            ),
                       )
                       .fold(0.0, (s, e) => s + e.amount);
                   return Padding(
@@ -841,16 +844,18 @@ class _HomeScreenState extends State<HomeScreen> {
                           .where(
                             (e) =>
                                 e.type == 'income' &&
-                                e.categoryId != 'savings_transfer' &&
-                                e.categoryId != 'wallet_transfer',
+                                !AppConstants.internalCategoryIds.contains(
+                                  e.categoryId,
+                                ),
                           )
                           .fold(0.0, (s, e) => s + e.amount);
                       final dayExpense = dayTx
                           .where(
                             (e) =>
                                 e.type == 'expense' &&
-                                e.categoryId != 'savings_transfer' &&
-                                e.categoryId != 'wallet_transfer',
+                                !AppConstants.internalCategoryIds.contains(
+                                  e.categoryId,
+                                ),
                           )
                           .fold(0.0, (s, e) => s + e.amount);
 

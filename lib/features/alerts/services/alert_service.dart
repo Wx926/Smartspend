@@ -35,8 +35,12 @@ class AlertService {
 
   Future<void> initNotifications() async {
     if (_notificationsInitialised) return;
+    // Must be a plain white silhouette with real transparency — Android
+    // forces monochrome rendering on this icon regardless of what's given,
+    // and the full-color @mipmap/ic_launcher (opaque background, no alpha)
+    // rendered as a solid white block instead of a recognizable shape.
     const androidSettings = AndroidInitializationSettings(
-      '@mipmap/ic_launcher',
+      '@drawable/ic_stat_smartspend',
     );
     const iosSettings = DarwinInitializationSettings();
     await _notifications.initialize(

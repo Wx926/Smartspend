@@ -73,10 +73,38 @@ class _WalletScreenState extends State<WalletScreen> {
                                 size: 22,
                               ),
                             ),
-                            const Icon(
-                              Icons.account_balance_wallet_outlined,
-                              color: Colors.white70,
-                              size: 22,
+                            GestureDetector(
+                              onTap: () =>
+                                  Navigator.pushNamed(context, '/loans'),
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 10,
+                                  vertical: 5,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: Colors.white.withValues(alpha: 0.15),
+                                  borderRadius: BorderRadius.circular(20),
+                                ),
+                                child: const Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(
+                                      Icons.request_quote_outlined,
+                                      color: Colors.white,
+                                      size: 16,
+                                    ),
+                                    SizedBox(width: 5),
+                                    Text(
+                                      'Loans',
+                                      style: TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
                             ),
                           ],
                         ),

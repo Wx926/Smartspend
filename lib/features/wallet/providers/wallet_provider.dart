@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../../shared/constants/app_constants.dart';
 import '../../../shared/models/expense_model.dart';
 import '../../../shared/models/wallet_model.dart';
 import '../../../shared/services/local_storage_service.dart';
@@ -76,27 +77,25 @@ class WalletProvider extends ChangeNotifier {
     return income - expense;
   }
 
-  /// Total income across ALL wallets. Excludes savings_transfer/wallet_transfer —
-  /// a transfer between the user's own wallets/goals isn't new money earned.
+  /// Total income across ALL wallets. Excludes internal transfers —
+  /// a transfer between the user's own wallets/goals/loans isn't new money earned.
   double totalAsset(List<ExpenseModel> records) => records
       .where(
         (r) =>
             r.type == 'income' &&
-            r.categoryId != 'savings_transfer' &&
-            r.categoryId != 'wallet_transfer',
+            !AppConstants.internalCategoryIds.contains(r.categoryId),
       )
       .fold(0.0, (s, r) => s + r.amount);
 
   /// Total expenses across ALL wallets.
   /// Excludes savings_goal-sourced purchases (already counted when transferred to goal)
-  /// and savings_transfer/wallet_transfer (internal moves, not real spending).
+  /// and internal transfers (not real spending).
   double totalDebt(List<ExpenseModel> records) => records
       .where(
         (r) =>
             r.type == 'expense' &&
             r.walletId != 'savings_goal' &&
-            r.categoryId != 'savings_transfer' &&
-            r.categoryId != 'wallet_transfer',
+            !AppConstants.internalCategoryIds.contains(r.categoryId),
       )
       .fold(0.0, (s, r) => s + r.amount);
 

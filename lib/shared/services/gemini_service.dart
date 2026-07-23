@@ -222,6 +222,12 @@ Use Malaysian Ringgit (RM). No headers.
     required List<String> categoryBreakdown,
     required List<String> transactions,
     required String month,
+    required double netAsset,
+    required List<String> walletBreakdown,
+    required double totalSaved,
+    required List<String> savingsGoals,
+    required double totalOwed,
+    required List<String> loans,
   }) async {
     final breakdown = categoryBreakdown.isNotEmpty
         ? categoryBreakdown.join('\n')
@@ -229,6 +235,15 @@ Use Malaysian Ringgit (RM). No headers.
     final transactionList = transactions.isNotEmpty
         ? transactions.join('\n')
         : 'No transactions recorded yet this month.';
+    final walletList = walletBreakdown.isNotEmpty
+        ? walletBreakdown.join('\n')
+        : 'No wallets set up yet.';
+    final savingsGoalList = savingsGoals.isNotEmpty
+        ? savingsGoals.join('\n')
+        : 'No savings goals set up yet.';
+    final loanList = loans.isNotEmpty
+        ? loans.join('\n')
+        : 'No loans/debts recorded.';
     // Computed here (not left to the model) so projections are exact, not
     // an LLM guess: a simple linear run-rate off spending-so-far.
     final projectedMonthEndSpend = daysElapsedInMonth > 0
@@ -236,26 +251,39 @@ Use Malaysian Ringgit (RM). No headers.
         : totalSpent;
     final prompt =
         '''
-You are a friendly personal finance advisor for SmartSpend, a Malaysian budgeting app.
+You are a friendly personal finance advisor for SmartSpend, a Malaysian budgeting app. You have access to the user's COMPLETE financial picture below — spending, budgets, wallets, savings goals, and loans/debts. Use whichever parts are relevant to answer their question; you're not limited to just this month's spending.
 
-The user's financial data for $month (already correct and final — use these figures as-is, do not recompute totals yourself or invent other numbers):
+── Spending & budget for $month (already correct and final — use these figures as-is, do not recompute totals yourself or invent other numbers) ──
 - Income: RM ${totalIncome.toStringAsFixed(2)}
 - Total budget: RM ${totalBudget.toStringAsFixed(2)}
 - Total spent so far (real spending only — excludes transfers below): RM ${totalSpent.toStringAsFixed(2)}
 - Remaining in budget: RM ${(totalBudget - totalSpent).toStringAsFixed(2)}
 - Net saved so far (income minus spent): RM ${(totalIncome - totalSpent).toStringAsFixed(2)}
-- Savings/wallet transfers this month: RM ${totalTransfers.toStringAsFixed(2)} — this is money the user MOVED between their wallet and savings goals, not money they spent. It never counts against the budget or "total spent" above, no matter how large.
+- Savings/wallet/loan transfers this month: RM ${totalTransfers.toStringAsFixed(2)} — this is money the user MOVED between their own wallets, savings goals, or loans, not money they spent. It never counts against the budget or "total spent" above, no matter how large.
 - Day $daysElapsedInMonth of $daysInMonth days in this month
 - Projected total spend by month end at the current daily pace: RM ${projectedMonthEndSpend.toStringAsFixed(2)}
 Category breakdown:
 $breakdown
 
-Individual transactions this month, most recent first (use this list to answer questions about a specific date, item, or transaction — lines marked "transfer" are savings/wallet moves, not spending):
+Individual transactions this month, most recent first (use this list to answer questions about a specific date, item, or transaction — lines marked "transfer" are internal moves, not spending):
 $transactionList
+
+── Wallets & net worth (current, not month-specific) ──
+- Net asset (real money across all wallets, does not include loan debt): RM ${netAsset.toStringAsFixed(2)}
+$walletList
+
+── Savings goals (current progress) ──
+- Total saved across all goals: RM ${totalSaved.toStringAsFixed(2)}
+$savingsGoalList
+
+── Loans / debts owed (current) ──
+- Total still owed across all loans: RM ${totalOwed.toStringAsFixed(2)}
+$loanList
+Note: a loan's principal was credited as income when it was added and its repayments are excluded from "Total spent" above — they show up here, not as budget spending.
 
 User question: "$question"
 
-Answer clearly and helpfully in 2-4 sentences based on their actual data above — if the question is about a future projection or trend, use the "Projected total spend by month end" figure given rather than estimating your own; if it's about a specific date or transaction, read it from the individual transactions list; if it's about whether a transfer counts as spending, the answer is always no. Use Malaysian Ringgit (RM). Be friendly, practical, and specific. No markdown formatting or bullet points.
+Answer clearly and helpfully in 2-4 sentences based on their actual data above, drawing on whichever section(s) the question actually needs — e.g. a question about affordability or "should I take this loan" should weigh income, budget headroom, existing loan repayments, and savings goals together, not just this month's spending. If the question is about a future projection or trend, use the "Projected total spend by month end" figure given rather than estimating your own; if it's about a specific date or transaction, read it from the individual transactions list; if it's about whether a transfer counts as spending, the answer is always no. Use Malaysian Ringgit (RM). Be friendly, practical, and specific. No markdown formatting or bullet points.
 ''';
     return _generate(
       prompt,

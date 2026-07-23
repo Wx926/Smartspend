@@ -27,6 +27,17 @@ class AppConstants {
 
   static const String appName = 'SmartSpend';
 
+  // Category IDs used to tag internal money movement (wallet-to-wallet,
+  // wallet-to-savings-goal, wallet-to-loan) that must never be counted as
+  // real income/expense — moving your own money around isn't earning or
+  // spending it.
+  static const Set<String> internalCategoryIds = {
+    'savings_transfer',
+    'wallet_transfer',
+    'loan_disbursement',
+    'loan_repayment',
+  };
+
   // Default expense categories with icon (emoji), color hex, and type
   static const List<Map<String, String>> defaultCategories = [
     {
