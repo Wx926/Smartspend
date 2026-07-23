@@ -127,6 +127,53 @@ class ExpenseProvider extends ChangeNotifier {
     return expense;
   }
 
+  /// Same as [addExpense], but awaits the real Supabase insert before
+  /// returning — use this when a caller needs a guaranteed-to-exist
+  /// server-side id right away (e.g. inserting a warranty row whose foreign
+  /// key points at this expense), since [addExpense] returns a locally
+  /// generated id optimistically while its Supabase sync still runs in the
+  /// background.
+  Future<ExpenseModel> addExpenseSynced({
+    required String userId,
+    required String categoryId,
+    required double amount,
+    required String description,
+    required DateTime date,
+    String? locationId,
+    String? locationName,
+    String type = 'expense',
+    String walletId = 'default_account',
+    String? savingsGoalId,
+    String source = 'manual',
+    String? merchantName,
+    String? batchId,
+    String? receiptImageUrl,
+  }) async {
+    final expense = ExpenseModel(
+      id: _uuid.v4(),
+      userId: userId,
+      categoryId: categoryId,
+      amount: amount,
+      description: description,
+      date: date,
+      locationId: locationId,
+      locationName: locationName,
+      createdAt: DateTime.now(),
+      updatedAt: DateTime.now(),
+      type: type,
+      walletId: walletId,
+      savingsGoalId: savingsGoalId,
+      source: source,
+      merchantName: merchantName,
+      batchId: batchId,
+      receiptImageUrl: receiptImageUrl,
+    );
+    final saved = await _service.addExpenseSynced(expense);
+    _expenses.insert(0, saved);
+    notifyListeners();
+    return saved;
+  }
+
   Future<void> updateExpense(ExpenseModel updated) async {
     final idx = _expenses.indexWhere((e) => e.id == updated.id);
     final previous = idx != -1 ? _expenses[idx] : null;

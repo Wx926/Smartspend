@@ -15,7 +15,11 @@ from utils.supabase_client import get_category_id
 CATEGORY_KEYWORDS: dict[str, list[str]] = {
     "Food & Dining": [
         "restaurant", "cafe", "cuisine", "kopitiam", "mamak", "nasi", "food",
-        "mcdonald", "kfc", "starbucks", "pizza", "burger", "char",
+        "mcdonald", "kfc", "starbucks", "pizza", "burger",
+        # "char" (char kway teow, char siew) is handled via
+        # WORD_BOUNDARY_KEYWORDS below since it's also a substring of
+        # unrelated words like "Charges" ("Service Charges" on an invoice).
+        "char",
         "kopi", "makan", "lunch", "dinner", "breakfast", "bakery",
         "teh", "tarik", "roti", "canai", "lemak", "mee", "laksa",
         "curry", "rice", "ayam", "ikan", "sup", "bihun", "kuey",
@@ -25,7 +29,8 @@ CATEGORY_KEYWORDS: dict[str, list[str]] = {
         # "冬菇肉碎老鼠粉（小）" / "加鸡蛋" — none of the romanised keywords
         # above ever match that text).
         "鸡蛋", "老鼠粉", "冬菇", "餐厅", "茶餐厅", "小炒", "煮炒", "海鲜",
-        "点心",
+        "点心", "鸡饭", "炒饭", "炒面", "叉烧", "云吞", "烧腊", "粥",
+        "水饺", "包子", "豆浆",
         # Japanese-cuisine menu terms (e.g. "Salmon Teriyaki Don")
         "salmon", "teriyaki", "teryaki", "sashimi", "tempura", "udon",
         "ramen", "bento", "katsu", "yakitori", "onigiri",
@@ -63,15 +68,17 @@ CATEGORY_KEYWORDS: dict[str, list[str]] = {
         "sneakers", "sandal", "apparel", "clothing", "clothes", "fashion",
         "garment", "scarf", "hat", "cap", "sock", "socks", "bag",
         "handbag", "wallet", "jewellery", "jewelry", "accessory",
-        "accessories",
+        "accessories", "jersey", "shirt", "t-shirt", "tshirt", "jeans",
+        "pants", "trousers", "jacket", "shorts", "hoodie",
     ],
     "Entertainment": [
         "cinema", "gsc", "tgv", "netflix", "spotify", "movie",
-        "concert", "game", "steam", "karaoke",
+        "concert", "game", "steam", "karaoke", "arcade",
     ],
     "Health": [
         "pharmacy", "clinic", "hospital", "medicine", "doctor",
         "dental", "checkup", "vitamin", "watson", "guardian",
+        "protein", "whey", "creatine", "supplement", "multivitamin", "bcaa",
     ],
     "Utilities": [
         "tnb", "water bill", "unifi", "maxis", "celcom", "digi",
@@ -86,7 +93,7 @@ CATEGORY_KEYWORDS: dict[str, list[str]] = {
 # receipt text (e.g. "mall" inside the size "Small" — "Small Cone"/"Small
 # Fries" would otherwise be miscategorised as Shopping on almost every fast-
 # food receipt) and must require real word boundaries instead.
-WORD_BOUNDARY_KEYWORDS = {"mall", "crab"}
+WORD_BOUNDARY_KEYWORDS = {"mall", "crab", "char"}
 
 DEFAULT_CATEGORY = "Others"
 
@@ -134,3 +141,17 @@ def _build_result(category_name: str, matched_keyword: str | None, confidence: s
         "matched_keyword": matched_keyword,
         "confidence": confidence,
     }
+
+
+def category_result_for(category_name: str, confidence: str = "high") -> dict:
+    """Builds a categorise_text()-shaped result for a category name that's
+    ALREADY known (e.g. the majority category across a multi-item receipt/
+    voice entry's line items) — callers with this exact need must not just
+    re-run categorise_text(category_name) instead, since that re-searches the
+    name against its OWN keyword list and only succeeds by coincidence (e.g.
+    "Food & Dining" contains "food", "Shopping" contains "shopping") — it
+    wrongly falls back to "Others" for every category whose name doesn't
+    happen to contain one of its own keywords (confirmed: Entertainment,
+    Transport, Utilities, and Health all silently broke this way).
+    """
+    return _build_result(category_name, None, confidence)

@@ -21,7 +21,7 @@ shape. Confirmed against:
 import re
 from datetime import date, timedelta
 
-from services.categorisation_service import categorise_text
+from services.categorisation_service import categorise_text, category_result_for
 
 # "RM 25", "RM25.00", or a bare number followed by a currency word. "dollars"/
 # "bucks" are accepted as colloquial stand-ins for ringgit, and so are the
@@ -35,6 +35,16 @@ _AMOUNT_PATTERN = re.compile(
     r"|(\d+(?:\.\d{1,2})?)\s*(?:ringgit|rm|dollars?|bucks?|块|令吉|零吉)\b",
     re.IGNORECASE,
 )
+
+# Chinese colloquial money shorthand: "9块9" spoken aloud means "9 kuai 9"
+# (9 yuan/dollars + 9 jiao/10-cent units) = RM 9.90 — a trailing 1-2 digit
+# number directly after "块" is a decimal shorthand, not a separate whole
+# number, and is a completely different meaning from a bare "9块" alone
+# (just "9 dollars", handled by _AMOUNT_PATTERN above). Checked first in
+# _extract_amount since _AMOUNT_PATTERN's plain "number + currency word"
+# alternative can't parse this shape at all — the trailing digit breaks its
+# required word boundary immediately after "块".
+_CHINESE_KUAI_DECIMAL = re.compile(r"(\d+)块(\d{1,2})\b")
 
 # Last-resort fallback when no currency word is spoken at all (e.g. "movie
 # tickets 45") — just the first bare number in the sentence. Trades off
@@ -106,6 +116,47 @@ _KNOWN_VENDORS = {
 
 _YESTERDAY_PATTERN = re.compile(r"\byesterday\b", re.IGNORECASE)
 
+# Splits a transcript describing MULTIPLE separate expenses in one recording
+# (e.g. "Water, RM 4. Mamak, RM 9. Football jersey, RM 200.") into individual
+# segments, each parsed as its own line item — mirroring how
+# ocr_service.process_receipt() handles a multi-item receipt, just from
+# spoken sentences instead of printed rows. A transcript describing only one
+# expense (the common case, e.g. "I spent RM 25 on lunch at KFC" — no
+# sentence-ending punctuation at all) naturally comes back as a single
+# segment and is parsed exactly as before this multi-item support existed.
+# A "." is only treated as a sentence end when NOT immediately followed by a
+# digit — otherwise it would also split the decimal point inside an amount
+# like "RM 12.50" into two fake segments ("RM 12" / "50 for Grab...").
+_SENTENCE_SPLIT = re.compile(r"\.(?!\d)|[!?]")
+
+
+def _split_segments(text: str) -> list[str]:
+    """Splits a transcript into individual spoken-expense segments — first
+    on sentence-ending punctuation, then (only within a sentence that itself
+    contains MORE THAN ONE amount) on commas too. A comma alone is
+    ambiguous: it can separate a description from its OWN amount within a
+    single expense ("Bought groceries at Aeon, RM 68" — one amount total,
+    must NOT split there), or it can join two complete item+amount pairs
+    spoken as one sentence (e.g. Chinese "鸡饭 9块9,炒饭 15令吉" — two
+    amounts, must split). Counting amounts first disambiguates the two.
+    """
+    segments = []
+    for sentence in _SENTENCE_SPLIT.split(text):
+        sentence = sentence.strip(" ,")
+        if not sentence:
+            continue
+        amount_count = (
+            len(_CHINESE_KUAI_DECIMAL.findall(sentence))
+            + len(_AMOUNT_PATTERN.findall(sentence))
+        )
+        if amount_count >= 2:
+            segments.extend(
+                part.strip(" ,") for part in sentence.split(",") if part.strip(" ,")
+            )
+        else:
+            segments.append(sentence)
+    return segments
+
 
 class VoiceParseError(Exception):
     """Raised when the transcript is empty or has no usable amount."""
@@ -115,6 +166,12 @@ class VoiceParseError(Exception):
 def _extract_amount(text: str) -> tuple[float | None, tuple[int, int] | None]:
     """Returns (amount, span) so the caller can strip the matched words
     (number + currency) out of the text before deriving a description."""
+    m = _CHINESE_KUAI_DECIMAL.search(text)
+    if m:
+        whole, cents = m.group(1), m.group(2)
+        if len(cents) == 1:
+            cents += "0"
+        return float(f"{whole}.{cents}"), m.span()
     m = _AMOUNT_PATTERN.search(text)
     if m:
         raw = m.group(1) or m.group(2)
@@ -171,38 +228,85 @@ def _extract_date(text: str) -> tuple[date, bool]:
     return date.today(), False
 
 
+def _parse_segment(text: str) -> dict | None:
+    """Parses ONE spoken expense statement (a single sentence/segment) into
+    its line-item fields. Returns None if it carries no recognisable amount
+    at all, so a stray filler segment (e.g. an empty string left behind by
+    the sentence split) doesn't turn into a bogus zero-price item."""
+    amount, amount_span = _extract_amount(text)
+    if amount is None:
+        return None
+    remainder = text[:amount_span[0]] + text[amount_span[1]:]
+    found = _extract_vendor(text) or _match_known_vendor(remainder)
+    vendor_raw, vendor = found if found else (None, None)
+    description = _extract_description(remainder, vendor_raw) or vendor or text.strip()
+    # Categorise off the combined description + vendor, same as OCR's
+    # "vendor/item text" matching — e.g. "Grab" alone hits the Transport
+    # keyword even when the spoken description was just "Grab" itself.
+    category = categorise_text(f"{description} {vendor or ''}".strip())
+    return {
+        "vendor": vendor,
+        "amount": amount,
+        "item_name": description,
+        "category_id": category["category_id"],
+        "category_name": category["category_name"],
+    }
+
+
 def parse_voice_expense(transcript: str) -> dict:
     text = transcript.strip()
     if not text:
         raise VoiceParseError("Empty transcript — nothing to parse.")
 
-    amount, amount_span = _extract_amount(text)
-    remainder = (
-        text[:amount_span[0]] + text[amount_span[1]:] if amount_span else text
-    )
-    found = _extract_vendor(text) or _match_known_vendor(remainder)
-    vendor_raw, vendor = found if found else (None, None)
-    description = _extract_description(remainder, vendor_raw) or vendor or text
+    segments = _split_segments(text)
+    parsed = [p for s in (segments or [text]) if (p := _parse_segment(s)) is not None]
+
+    if not parsed:
+        # No segment carried a recognisable amount on its own — fall back to
+        # a single bare-number scan across the WHOLE transcript, the same
+        # last-resort behaviour this parser always had before multi-item
+        # support existed (covers an amount only findable by looking past a
+        # sentence boundary the split above happened to cut through).
+        single = _parse_segment(text)
+        parsed = [single] if single else []
+
     expense_date, date_explicit = _extract_date(text)
 
-    # Categorise off the combined description + vendor, same as OCR's
-    # "vendor/item text" matching — e.g. "Grab" alone hits the Transport
-    # keyword even when the spoken description was just "Grab" itself.
-    category = categorise_text(f"{description} {vendor or ''}".strip())
-
-    line_items = []
-    if amount is not None:
-        line_items.append({
-            "item_name": description,
-            "price": amount,
+    line_items = [
+        {
+            "item_name": p["item_name"],
+            "price": p["amount"],
             "quantity": 1,
-            "category_id": category["category_id"],
-            "category_name": category["category_name"],
-        })
+            "category_id": p["category_id"],
+            "category_name": p["category_name"],
+        }
+        for p in parsed
+    ]
+    total_amount = sum(p["amount"] for p in parsed) if parsed else None
+
+    # Overall vendor: the first segment that actually named one. Unlike a
+    # physical receipt (always exactly one vendor for every line on it), a
+    # single voice recording can describe purchases from several unrelated
+    # places, so there's no single "correct" vendor to force here — left
+    # blank (user fills it in) when nothing in any segment named one.
+    vendor = next((p["vendor"] for p in parsed if p["vendor"]), None)
+
+    # Overall category: majority vote across line items (excluding
+    # "Others") — the same rule ocr_service.process_receipt() already
+    # applies to a multi-item receipt spanning several categories, rather
+    # than inventing a separate "mixed"/"Others" bucket just for voice.
+    item_cats = [p["category_name"] for p in parsed if p["category_name"] != "Others"]
+    if item_cats:
+        majority_name = max(set(item_cats), key=item_cats.count)
+        category = category_result_for(majority_name)
+    elif parsed:
+        category = categorise_text(f"{parsed[0]['item_name']} {vendor or ''}".strip())
+    else:
+        category = categorise_text("")
 
     return {
         "vendor_name": vendor,
-        "amount": amount,
+        "amount": total_amount,
         "date": expense_date.isoformat(),
         "raw_text": transcript,
         "line_items": line_items,

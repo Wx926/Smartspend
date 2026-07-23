@@ -208,38 +208,53 @@ class _VoiceInputScreenState extends State<VoiceInputScreen>
         ],
       ),
       body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(20),
-          child: Column(
-            children: [
-              _tipCard(),
-              const SizedBox(height: 12),
-              if (_error != null) _errorBanner(),
-              const Spacer(),
-              _micButton(),
-              const SizedBox(height: 20),
-              Text(
-                _recording
-                    ? 'Recording… tap to stop'
-                    : _transcribing
-                        ? 'Transcribing…'
-                        : 'Tap to speak',
-                style: const TextStyle(
-                    fontWeight: FontWeight.bold,
-                    fontSize: 16,
-                    color: AppColors.primaryDark),
+        child: LayoutBuilder(
+          builder: (context, constraints) => SingleChildScrollView(
+            padding: const EdgeInsets.all(20),
+            // The two Spacers below need a bounded height to distribute —
+            // impossible inside a plain SingleChildScrollView (unbounded),
+            // so this forces the Column to be at least as tall as the
+            // visible area (letting Spacer behave exactly as before with
+            // room to spare) while still allowing it to grow taller and
+            // scroll on the rare occasion it doesn't fit (e.g. the on-screen
+            // keyboard opening and eating a big chunk of the vertical space).
+            child: ConstrainedBox(
+              constraints: BoxConstraints(minHeight: constraints.maxHeight),
+              child: IntrinsicHeight(
+                child: Column(
+                  children: [
+                    _tipCard(),
+                    const SizedBox(height: 12),
+                    if (_error != null) _errorBanner(),
+                    const Spacer(),
+                    _micButton(),
+                    const SizedBox(height: 20),
+                    Text(
+                      _recording
+                          ? 'Recording… tap to stop'
+                          : _transcribing
+                              ? 'Transcribing…'
+                              : 'Tap to speak',
+                      style: const TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 16,
+                          color: AppColors.primaryDark),
+                    ),
+                    const SizedBox(height: 4),
+                    const Text(
+                      'Tap the mic and describe your expense',
+                      style: TextStyle(
+                          fontSize: 12, color: AppColors.textSecondary),
+                    ),
+                    const Spacer(),
+                    _transcriptBox(),
+                    const SizedBox(height: 16),
+                    _bottomButtons(hasTranscript),
+                    const SizedBox(height: 8),
+                  ],
+                ),
               ),
-              const SizedBox(height: 4),
-              const Text(
-                'Tap the mic and describe your expense',
-                style: TextStyle(fontSize: 12, color: AppColors.textSecondary),
-              ),
-              const Spacer(),
-              _transcriptBox(),
-              const SizedBox(height: 16),
-              _bottomButtons(hasTranscript),
-              const SizedBox(height: 8),
-            ],
+            ),
           ),
         ),
       ),

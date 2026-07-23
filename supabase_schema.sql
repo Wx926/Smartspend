@@ -61,7 +61,8 @@ CREATE TABLE expenses (
   source          TEXT DEFAULT 'manual', -- 'manual' | 'ocr' | 'voice'
   merchant_name   TEXT,
   batch_id        TEXT, -- groups line items saved from the same receipt scan, or the two legs of a wallet transfer; not a UUID since transfer batch ids are timestamp-based strings
-  location_name   TEXT -- snapshot of the place name at record time, kept even if never saved as a location (or the saved location is later deleted)
+  location_name   TEXT, -- snapshot of the place name at record time, kept even if never saved as a location (or the saved location is later deleted)
+  receipt_image_url TEXT -- storage URL of the scanned receipt photo, so Receipt History can display it again later
 );
 
 -- MIGRATION (run this against an existing database that predates the columns
@@ -74,7 +75,8 @@ CREATE TABLE expenses (
 --   ADD COLUMN IF NOT EXISTS source TEXT DEFAULT 'manual',
 --   ADD COLUMN IF NOT EXISTS merchant_name TEXT,
 --   ADD COLUMN IF NOT EXISTS batch_id TEXT,
---   ADD COLUMN IF NOT EXISTS location_name TEXT;
+--   ADD COLUMN IF NOT EXISTS location_name TEXT,
+--   ADD COLUMN IF NOT EXISTS receipt_image_url TEXT;
 
 -- ─── Locations ───────────────────────────────────────────────────────────────
 CREATE TABLE locations (

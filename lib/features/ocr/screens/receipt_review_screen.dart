@@ -327,6 +327,16 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
       }
     }
 
+    final w = widget.result?.warranty;
+    // The very first saved expense's id is the one the warranty row below
+    // will be foreign-keyed to — addExpense() returns a locally generated
+    // id optimistically while its Supabase sync runs in the background, so
+    // inserting the warranty right after would race that background sync
+    // and hit "expense_id not present in expenses" whenever it hasn't
+    // landed yet. addExpenseSynced() waits for the real insert instead, but
+    // only needs to be used for this one item that the warranty depends on.
+    final needsWarranty = auth.isLoggedIn && w != null && w.hasWarranty;
+
     for (final item in _items) {
       final price = double.tryParse(item.priceCtrl.text) ?? 0;
       if (price <= 0) continue;
@@ -336,21 +346,32 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
       // screen uses — writing straight to Supabase here (as before) left
       // the record orphaned from the app's own Transactions/Budget views,
       // which read from local storage.
-      final saved = await expenseProvider.addExpense(
-        userId: uid,
-        categoryId: catId,
-        amount: price,
-        description: _describeItem(item, qty, notes),
-        date: _date,
-        source: widget.source,
-        merchantName: vendor,
-        batchId: batchId,
-        receiptImageUrl: imageUrl,
-      );
+      final saved = needsWarranty && firstExpenseId == null
+          ? await expenseProvider.addExpenseSynced(
+              userId: uid,
+              categoryId: catId,
+              amount: price,
+              description: _describeItem(item, qty, notes),
+              date: _date,
+              source: widget.source,
+              merchantName: vendor,
+              batchId: batchId,
+              receiptImageUrl: imageUrl,
+            )
+          : await expenseProvider.addExpense(
+              userId: uid,
+              categoryId: catId,
+              amount: price,
+              description: _describeItem(item, qty, notes),
+              date: _date,
+              source: widget.source,
+              merchantName: vendor,
+              batchId: batchId,
+              receiptImageUrl: imageUrl,
+            );
       firstExpenseId ??= saved.id;
     }
 
-    final w = widget.result?.warranty;
     if (w != null && w.hasWarranty && firstExpenseId != null) {
       await db.insertWarranty(
         expenseId: firstExpenseId,
@@ -894,7 +915,7 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
                       ),
                       _extractedRow(
                         'Total',
-                        'RM ${(widget.result?.amount ?? _total).toStringAsFixed(2)}',
+                        'RM ${_total.toStringAsFixed(2)}',
                         widget.result?.amount != null || _isEditMode,
                       ),
                     ],
@@ -1041,7 +1062,7 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
                             Expanded(
                               flex: 2,
                               child: Text(
-                                'RM ${(widget.result?.amount ?? _total).toStringAsFixed(2)}',
+                                'RM ${_total.toStringAsFixed(2)}',
                                 style: const TextStyle(
                                   fontWeight: FontWeight.bold,
                                   fontSize: 14,

@@ -42,6 +42,18 @@ class ExpenseService {
     return saved;
   }
 
+  /// Same as [addExpense], but awaits the Supabase insert instead of firing
+  /// it in the background — for callers (e.g. attaching a warranty) that
+  /// need a guarantee the row actually exists server-side before inserting
+  /// something with a foreign key pointing at it. Unlike [_syncInsert], a
+  /// Supabase failure here is NOT swallowed, since the caller can't safely
+  /// proceed to a dependent insert if this one didn't really happen.
+  Future<ExpenseModel> addExpenseSynced(ExpenseModel expense) async {
+    final saved = await _local.insertExpense(expense);
+    await _supabase.insertExpense(expense);
+    return saved;
+  }
+
   Future<ExpenseModel> updateExpense(ExpenseModel expense) async {
     final saved = await _local.updateExpense(expense);
     _syncUpdate(expense);
