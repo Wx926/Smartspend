@@ -7,6 +7,8 @@ import '../models/location_model.dart';
 import '../models/alert_log_model.dart';
 import '../models/ai_insight_model.dart';
 import '../models/savings_goal_model.dart';
+import '../models/loan_model.dart';
+import '../models/chat_session_model.dart';
 import '../models/wallet_model.dart';
 
 /// Data Access Object — single entry point for all Supabase queries.
@@ -416,5 +418,133 @@ class SupabaseService {
 
   Future<void> deleteSavingsGoal(String goalId) async {
     await _client.from('savings_goals').delete().eq('id', goalId);
+  }
+
+  // ── Loans ─────────────────────────────────────────────────────
+  Future<List<LoanModel>> getLoans() async {
+    final data = await _client
+        .from('loans')
+        .select()
+        .eq('user_id', _uid)
+        .order('created_at', ascending: false);
+    return (data as List).map((e) => LoanModel.fromJson(e)).toList();
+  }
+
+  // Base-only fields that are guaranteed to exist in the original schema
+  Map<String, dynamic> _loanBaseJson(
+    Map<String, dynamic> json, {
+    bool includeUserId = false,
+  }) {
+    return {
+      if (includeUserId) 'user_id': json['user_id'],
+      'name': json['name'],
+      'principal_amount': json['principal_amount'],
+      'paid_amount': json['paid_amount'],
+      'is_completed': json['is_completed'],
+    };
+  }
+
+  // Extended fields — only exist after running the Supabase migration
+  Map<String, dynamic> _loanExtendedJson(Map<String, dynamic> json) {
+    return {
+      'auto_repay_enabled': json['auto_repay_enabled'] ?? false,
+      if (json['auto_repay_amount'] != null)
+        'auto_repay_amount': json['auto_repay_amount'],
+      if (json['auto_repay_source_wallet_id'] != null)
+        'auto_repay_source_wallet_id': json['auto_repay_source_wallet_id'],
+      if (json['auto_repay_day_of_month'] != null)
+        'auto_repay_day_of_month': json['auto_repay_day_of_month'],
+      if (json['last_auto_repay_date'] != null)
+        'last_auto_repay_date': json['last_auto_repay_date'],
+    };
+  }
+
+  Future<LoanModel> insertLoan(LoanModel loan) async {
+    final json = loan.toJson();
+    if (loan.id.isEmpty) json.remove('id');
+    final fullJson = {
+      if (loan.id.isNotEmpty) 'id': loan.id,
+      ..._loanBaseJson(json, includeUserId: true),
+      ..._loanExtendedJson(json),
+    };
+    try {
+      final data = await _client
+          .from('loans')
+          .insert(fullJson)
+          .select()
+          .single();
+      return LoanModel.fromJson(data);
+    } catch (_) {
+      final baseJson = {
+        if (loan.id.isNotEmpty) 'id': loan.id,
+        ..._loanBaseJson(json, includeUserId: true),
+      };
+      final data = await _client
+          .from('loans')
+          .insert(baseJson)
+          .select()
+          .single();
+      return LoanModel.fromJson(data);
+    }
+  }
+
+  Future<LoanModel> updateLoan(LoanModel loan) async {
+    final json = loan.toJson();
+    final fullJson = {..._loanBaseJson(json), ..._loanExtendedJson(json)};
+    try {
+      final data = await _client
+          .from('loans')
+          .update(fullJson)
+          .eq('id', loan.id)
+          .select()
+          .single();
+      return LoanModel.fromJson(data);
+    } catch (_) {
+      final data = await _client
+          .from('loans')
+          .update(_loanBaseJson(json))
+          .eq('id', loan.id)
+          .select()
+          .single();
+      return LoanModel.fromJson(data);
+    }
+  }
+
+  Future<void> deleteLoan(String loanId) async {
+    await _client.from('loans').delete().eq('id', loanId);
+  }
+
+  // ── AI chat sessions ─────────────────────────────────────────
+  Future<List<ChatSessionModel>> getChatSessions() async {
+    final data = await _client
+        .from('ai_chat_sessions')
+        .select()
+        .eq('user_id', _uid)
+        .order('updated_at', ascending: false);
+    return (data as List).map((e) => ChatSessionModel.fromJson(e)).toList();
+  }
+
+  Future<ChatSessionModel> insertChatSession(ChatSessionModel session) async {
+    final json = session.toJson()..['user_id'] = _uid;
+    final data = await _client
+        .from('ai_chat_sessions')
+        .insert(json)
+        .select()
+        .single();
+    return ChatSessionModel.fromJson(data);
+  }
+
+  Future<ChatSessionModel> updateChatSession(ChatSessionModel session) async {
+    final data = await _client
+        .from('ai_chat_sessions')
+        .update(session.toJson())
+        .eq('id', session.id)
+        .select()
+        .single();
+    return ChatSessionModel.fromJson(data);
+  }
+
+  Future<void> deleteChatSession(String id) async {
+    await _client.from('ai_chat_sessions').delete().eq('id', id);
   }
 }

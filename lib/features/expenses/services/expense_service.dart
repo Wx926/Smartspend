@@ -1,3 +1,4 @@
+import '../../../shared/constants/app_constants.dart';
 import '../../../shared/models/expense_model.dart';
 import '../../../shared/services/local_storage_service.dart';
 import '../../../shared/services/supabase_service.dart';
@@ -86,8 +87,7 @@ class ExpenseService {
           (e) =>
               e.date.month == month &&
               e.date.year == year &&
-              e.categoryId != 'savings_transfer' &&
-              e.categoryId != 'wallet_transfer',
+              !AppConstants.internalCategoryIds.contains(e.categoryId),
         )
         .toList();
     final totals = <String, double>{};

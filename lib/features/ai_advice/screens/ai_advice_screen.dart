@@ -1,18 +1,26 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
+import '../../../features/auth/providers/auth_provider.dart';
 import '../../../features/budget/providers/budget_provider.dart';
 import '../../../features/expenses/providers/expense_provider.dart';
+import '../../../features/loans/providers/loan_provider.dart';
+import '../../../features/savings_goals/providers/savings_goal_provider.dart';
+import '../../../features/wallet/providers/wallet_provider.dart';
+import '../providers/chat_history_provider.dart';
 import '../../../shared/models/budget_model.dart';
 import '../../../shared/models/category_model.dart';
+import '../../../shared/models/chat_session_model.dart';
+import '../../../shared/constants/app_constants.dart';
 import '../../../shared/models/expense_model.dart';
+import '../../../shared/models/loan_model.dart';
+import '../../../shared/models/savings_goal_model.dart';
+import '../../../shared/models/wallet_model.dart';
 import '../../../shared/services/gemini_service.dart';
 import '../../../shared/theme/app_colors.dart';
 
-const _transferCategoryIds = {'savings_transfer', 'wallet_transfer'};
-
 String _categoryNameFor(String categoryId, List<CategoryModel> categories) {
-  if (_transferCategoryIds.contains(categoryId)) return 'transfer';
+  if (AppConstants.internalCategoryIds.contains(categoryId)) return 'transfer';
   return categories
       .firstWhere(
         (c) => c.id == categoryId,
@@ -38,6 +46,28 @@ String _formatTransactionLine(ExpenseModel e, List<CategoryModel> categories) {
   return '- ${DateFormat('MMM d').format(e.date)}: $label ($categoryName), $sign RM ${e.amount.toStringAsFixed(2)}';
 }
 
+String _formatWalletLine(WalletModel w, double balance) =>
+    '- ${w.name}: RM ${balance.toStringAsFixed(2)}';
+
+String _formatSavingsGoalLine(SavingsGoalModel g) {
+  final deadlineInfo = g.deadline != null
+      ? ', deadline ${DateFormat('MMM d, yyyy').format(g.deadline!)}'
+      : '';
+  final autoInfo = g.autoTransferEnabled && g.autoTransferAmount != null
+      ? ', auto-saving RM ${g.autoTransferAmount!.toStringAsFixed(2)}/month'
+      : '';
+  final status = g.isCompleted ? ' (completed)' : '';
+  return '- ${g.name}: saved RM ${g.currentAmount.toStringAsFixed(2)} of RM ${g.targetAmount.toStringAsFixed(2)} target$deadlineInfo$autoInfo$status';
+}
+
+String _formatLoanLine(LoanModel l) {
+  final autoInfo = l.autoRepayEnabled && l.autoRepayAmount != null
+      ? ', auto-repaying RM ${l.autoRepayAmount!.toStringAsFixed(2)}/month'
+      : '';
+  final status = l.isCompleted ? ' (paid off)' : '';
+  return '- ${l.name}: owes RM ${l.remaining.toStringAsFixed(2)} of RM ${l.principalAmount.toStringAsFixed(2)} borrowed$autoInfo$status';
+}
+
 class _ChatMessage {
   final String text;
   final bool isUser;
@@ -60,6 +90,11 @@ class _AiAdviceScreenState extends State<AiAdviceScreen> {
   bool _sendingMessage = false;
   final TextEditingController _chatController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
+  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
+  // Null until the first exchange of a conversation is saved — after that,
+  // every following message updates this same session instead of creating
+  // a new one each time.
+  String? _activeSessionId;
 
   @override
   void initState() {
@@ -72,7 +107,31 @@ class _AiAdviceScreenState extends State<AiAdviceScreen> {
       if (!mounted) return;
       context.read<BudgetProvider>().addListener(_onBudgetProviderChanged);
       _maybeLoadGreeting();
+      context.read<ChatHistoryProvider>().loadIfNeeded();
     });
+  }
+
+  void _startNewChat() {
+    setState(() {
+      _messages.clear();
+      _activeSessionId = null;
+    });
+    if (Navigator.of(context).canPop()) Navigator.pop(context);
+  }
+
+  void _openSession(ChatSessionModel session) {
+    setState(() {
+      _messages
+        ..clear()
+        ..addAll(
+          session.messages.map(
+            (m) => _ChatMessage(text: m.text, isUser: m.isUser),
+          ),
+        );
+      _activeSessionId = session.id;
+    });
+    Navigator.pop(context);
+    _scrollToBottom();
   }
 
   @override
@@ -127,6 +186,9 @@ class _AiAdviceScreenState extends State<AiAdviceScreen> {
 
     final bp = context.read<BudgetProvider>();
     final ep = context.read<ExpenseProvider>();
+    final wp = context.read<WalletProvider>();
+    final sgp = context.read<SavingsGoalProvider>();
+    final lp = context.read<LoanProvider>();
     final now = DateTime.now();
     final totalSpent =
         ep.expensesForMonth(now.month, now.year).fold(0.0, (s, e) => s + e.amount);
@@ -136,12 +198,19 @@ class _AiAdviceScreenState extends State<AiAdviceScreen> {
     final monthTxns = ep.forMonth(now.month, now.year)
       ..sort((a, b) => b.date.compareTo(a.date));
     final totalTransfers = monthTxns
-        .where((e) => _transferCategoryIds.contains(e.categoryId))
+        .where((e) => AppConstants.internalCategoryIds.contains(e.categoryId))
         .fold(0.0, (s, e) => s + e.amount);
     final transactionLines = monthTxns
         .take(200)
         .map((e) => _formatTransactionLine(e, bp.categories))
         .toList();
+
+    // Savings goals and loans are lazy-loaded by their own screens — the
+    // user may never have opened either, so make sure both are populated
+    // before building the AI's context rather than silently sending "none".
+    await wp.load();
+    await sgp.loadIfNeeded();
+    await lp.loadIfNeeded();
 
     setState(() {
       _messages.add(_ChatMessage(text: text, isUser: true));
@@ -150,10 +219,32 @@ class _AiAdviceScreenState extends State<AiAdviceScreen> {
     _chatController.clear();
     _scrollToBottom();
 
+    // Save the question immediately — don't wait for the AI reply, so
+    // nothing is lost if the API call fails, times out, or the app is
+    // closed mid-request. The reply gets appended to this same session
+    // once it arrives (see below).
+    if (!mounted) return;
+    final userId = context.read<AuthProvider>().userId;
+    final chatHistory = context.read<ChatHistoryProvider>();
+    _activeSessionId = await chatHistory.saveExchange(
+      existingId: _activeSessionId,
+      userId: userId,
+      messages: _messages
+          .map((m) => ChatMessageRecord(text: m.text, isUser: m.isUser))
+          .toList(),
+    );
+    if (!mounted) return;
+
     final categoryBreakdown = bp.statuses
         .map((s) =>
             '- ${s.categoryName}: spent RM ${s.spent.toStringAsFixed(2)} of RM ${s.budget.amount.toStringAsFixed(2)} budget (${(s.percentUsed * 100).toStringAsFixed(0)}% used)')
         .toList();
+
+    final walletBreakdown = wp.wallets
+        .map((w) => _formatWalletLine(w, wp.walletBalance(w.id, ep.expenses)))
+        .toList();
+    final savingsGoalLines = sgp.goals.map(_formatSavingsGoalLine).toList();
+    final loanLines = lp.loans.map(_formatLoanLine).toList();
 
     final reply = await GeminiService.instance.askFinancialQuestion(
       question: text,
@@ -165,6 +256,12 @@ class _AiAdviceScreenState extends State<AiAdviceScreen> {
       daysInMonth: daysInMonth,
       categoryBreakdown: categoryBreakdown,
       transactions: transactionLines,
+      netAsset: wp.netAsset(ep.expenses),
+      walletBreakdown: walletBreakdown,
+      totalSaved: sgp.totalSaved,
+      savingsGoals: savingsGoalLines,
+      totalOwed: lp.totalOwed,
+      loans: loanLines,
       month: DateFormat('MMMM yyyy').format(now),
     );
 
@@ -174,6 +271,15 @@ class _AiAdviceScreenState extends State<AiAdviceScreen> {
         _sendingMessage = false;
       });
       _scrollToBottom();
+
+      final savedId = await chatHistory.saveExchange(
+        existingId: _activeSessionId,
+        userId: userId,
+        messages: _messages
+            .map((m) => ChatMessageRecord(text: m.text, isUser: m.isUser))
+            .toList(),
+      );
+      if (mounted) setState(() => _activeSessionId = savedId);
     }
   }
 
@@ -199,7 +305,9 @@ class _AiAdviceScreenState extends State<AiAdviceScreen> {
     final onTrack = statuses.where((s) => s.severity == AlertSeverity.green).toList();
 
     return Scaffold(
+      key: _scaffoldKey,
       backgroundColor: AppColors.background,
+      drawer: _buildHistoryDrawer(),
       body: Column(
         children: [
           Expanded(
@@ -270,6 +378,155 @@ class _AiAdviceScreenState extends State<AiAdviceScreen> {
     );
   }
 
+  Widget _buildHistoryDrawer() {
+    return Drawer(
+      child: SafeArea(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 8, 4),
+              child: Row(
+                children: [
+                  const Expanded(
+                    child: Text(
+                      'Chat History',
+                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 17),
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.close),
+                    onPressed: () => Navigator.pop(context),
+                  ),
+                ],
+              ),
+            ),
+            ListTile(
+              leading: const Icon(Icons.add_comment_outlined, color: AppColors.primary),
+              title: const Text(
+                'New chat',
+                style: TextStyle(fontWeight: FontWeight.w600),
+              ),
+              onTap: _startNewChat,
+            ),
+            const Divider(height: 1),
+            Expanded(
+              child: Consumer<ChatHistoryProvider>(
+                builder: (context, chp, _) {
+                  if (chp.isLoading && chp.sessions.isEmpty) {
+                    return const Center(child: CircularProgressIndicator());
+                  }
+                  final starred = chp.sessions.where((s) => s.isStarred).toList();
+                  final recents = chp.sessions.where((s) => !s.isStarred).toList();
+                  if (chp.sessions.isEmpty) {
+                    return const Padding(
+                      padding: EdgeInsets.all(24),
+                      child: Text(
+                        'No past conversations yet',
+                        style: TextStyle(color: AppColors.textSecondary),
+                        textAlign: TextAlign.center,
+                      ),
+                    );
+                  }
+                  return ListView(
+                    children: [
+                      if (starred.isNotEmpty) ...[
+                        _drawerSectionLabel('Starred'),
+                        ...starred.map((s) => _sessionTile(s, chp)),
+                      ],
+                      if (recents.isNotEmpty) ...[
+                        _drawerSectionLabel('Recents'),
+                        ...recents.map((s) => _sessionTile(s, chp)),
+                      ],
+                    ],
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _drawerSectionLabel(String text) => Padding(
+    padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+    child: Text(
+      text,
+      style: const TextStyle(
+        color: AppColors.textSecondary,
+        fontSize: 12,
+        fontWeight: FontWeight.bold,
+      ),
+    ),
+  );
+
+  Widget _sessionTile(ChatSessionModel session, ChatHistoryProvider chp) {
+    final isActive = session.id == _activeSessionId;
+    return ListTile(
+      selected: isActive,
+      selectedTileColor: AppColors.primary.withValues(alpha: 0.08),
+      leading: const Icon(Icons.chat_bubble_outline, size: 20),
+      title: Text(
+        session.title,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: const TextStyle(fontSize: 14),
+      ),
+      subtitle: Text(
+        DateFormat('d MMM, h:mm a').format(session.updatedAt),
+        style: const TextStyle(fontSize: 11),
+      ),
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          IconButton(
+            icon: Icon(
+              session.isStarred ? Icons.star : Icons.star_border,
+              size: 20,
+              color: session.isStarred ? Colors.amber : AppColors.textSecondary,
+            ),
+            onPressed: () => chp.toggleStar(session.id),
+          ),
+          IconButton(
+            icon: const Icon(Icons.delete_outline, size: 20, color: AppColors.textSecondary),
+            onPressed: () => _confirmDeleteSession(session, chp),
+          ),
+        ],
+      ),
+      onTap: () => _openSession(session),
+    );
+  }
+
+  void _confirmDeleteSession(ChatSessionModel session, ChatHistoryProvider chp) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete conversation?'),
+        content: Text('"${session.title}" will be permanently deleted.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () {
+              chp.delete(session.id);
+              if (session.id == _activeSessionId) {
+                setState(() {
+                  _messages.clear();
+                  _activeSessionId = null;
+                });
+              }
+              Navigator.pop(ctx);
+            },
+            child: const Text('Delete', style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildHeader() {
     return SliverAppBar(
       pinned: true,
@@ -302,6 +559,11 @@ class _AiAdviceScreenState extends State<AiAdviceScreen> {
         ],
       ),
       actions: [
+        IconButton(
+          icon: const Icon(Icons.history, color: Colors.white),
+          tooltip: 'Chat history',
+          onPressed: () => _scaffoldKey.currentState?.openDrawer(),
+        ),
         Container(
           margin: const EdgeInsets.only(right: 16),
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),

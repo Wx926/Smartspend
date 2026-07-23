@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:uuid/uuid.dart';
+import '../../../shared/constants/app_constants.dart';
 import '../../../shared/models/expense_model.dart';
 import '../services/expense_service.dart';
 
@@ -20,23 +21,25 @@ class ExpenseProvider extends ChangeNotifier {
       .where((e) => e.date.month == month && e.date.year == year)
       .toList();
 
-  /// Only expense records excluding savings_transfer/wallet_transfer — used for budget calculations.
+  /// Only expense records excluding internal transfers — used for budget calculations.
   List<ExpenseModel> expensesForMonth(int month, int year) => _expenses
       .where(
         (e) =>
             e.date.month == month &&
             e.date.year == year &&
             e.type == 'expense' &&
-            e.categoryId != 'savings_transfer' &&
-            e.categoryId != 'wallet_transfer',
+            !AppConstants.internalCategoryIds.contains(e.categoryId),
       )
       .toList();
 
-  /// Only income records — used for income display.
+  /// Only income records excluding internal transfers — used for income display.
   List<ExpenseModel> incomeForMonth(int month, int year) => _expenses
       .where(
         (e) =>
-            e.date.month == month && e.date.year == year && e.type == 'income',
+            e.date.month == month &&
+            e.date.year == year &&
+            e.type == 'income' &&
+            !AppConstants.internalCategoryIds.contains(e.categoryId),
       )
       .toList();
 

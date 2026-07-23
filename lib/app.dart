@@ -17,6 +17,9 @@ import 'features/profile/screens/profile_screen.dart';
 import 'features/ai_advice/screens/ai_advice_screen.dart';
 import 'features/savings_goals/providers/savings_goal_provider.dart';
 import 'features/savings_goals/screens/savings_goals_screen.dart';
+import 'features/loans/providers/loan_provider.dart';
+import 'features/loans/screens/loans_screen.dart';
+import 'features/ai_advice/providers/chat_history_provider.dart';
 import 'features/profile/screens/manage_categories_screen.dart';
 import 'features/security/screens/app_lock_gate.dart';
 import 'features/wallet/providers/wallet_provider.dart';
@@ -35,6 +38,8 @@ class SmartSpendApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => BudgetProvider()),
         ChangeNotifierProvider(create: (_) => LocationProvider()),
         ChangeNotifierProvider(create: (_) => SavingsGoalProvider()),
+        ChangeNotifierProvider(create: (_) => LoanProvider()),
+        ChangeNotifierProvider(create: (_) => ChatHistoryProvider()),
         ChangeNotifierProvider(create: (_) => WalletProvider()..init()),
       ],
       child: MaterialApp(
@@ -62,6 +67,7 @@ class SmartSpendApp extends StatelessWidget {
           '/profile': (_) => const ProfileScreen(),
           '/ai-advice': (_) => const AiAdviceScreen(),
           '/savings-goals': (_) => const SavingsGoalsScreen(),
+          '/loans': (_) => const LoansScreen(),
           '/manage-categories': (_) => const ManageCategoriesScreen(),
         },
       ),

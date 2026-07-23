@@ -10,6 +10,8 @@ import '../models/alert_log_model.dart';
 import '../models/wallet_model.dart';
 import '../models/recent_receipt_model.dart';
 import '../models/savings_goal_model.dart';
+import '../models/loan_model.dart';
+import '../models/chat_session_model.dart';
 
 /// Local on-device storage. No internet or login required.
 /// Data persists across app restarts via SharedPreferences.
@@ -35,6 +37,8 @@ class LocalStorageService {
   static const _keyPasscodeTimeoutMinutes = 'ss_passcode_timeout_minutes';
   static const _keyPasscodeLastUnlockedAt = 'ss_passcode_last_unlocked_at';
   static const _keySavingsGoals = 'ss_savings_goals';
+  static const _keyLoans = 'ss_loans';
+  static const _keyChatSessions = 'ss_chat_sessions';
   static const _maxRecentReceipts = 12;
 
   // Algorithm 1 Step 3: a location is "routine" once it's been visited at
@@ -92,6 +96,8 @@ class LocalStorageService {
       prefs.remove(_keyExpenses),
       prefs.remove(_keyBudgets),
       prefs.remove(_keySavingsGoals),
+      prefs.remove(_keyLoans),
+      prefs.remove(_keyChatSessions),
       prefs.remove(_keyLocations),
       prefs.remove(_keyLocationHistory),
       prefs.remove(_keyAlerts),
@@ -382,6 +388,91 @@ class LocalStorageService {
   /// from Supabase when local storage is empty (e.g. after a reinstall).
   Future<void> replaceSavingsGoals(List<SavingsGoalModel> goals) =>
       _saveSavingsGoals(goals);
+
+  // ── Loans ──────────────────────────────────────────────────────────────────
+  List<LoanModel> _loadLoans() {
+    final raw = _prefs?.getString(_keyLoans);
+    if (raw == null) return [];
+    final list = jsonDecode(raw) as List;
+    return list.map((e) => LoanModel.fromJson(e)).toList();
+  }
+
+  Future<void> _saveLoans(List<LoanModel> loans) async {
+    await _prefs?.setString(
+      _keyLoans,
+      jsonEncode(loans.map((l) => l.toJson()).toList()),
+    );
+  }
+
+  List<LoanModel> getLoans() {
+    final loans = _loadLoans();
+    loans.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    return loans;
+  }
+
+  Future<LoanModel> upsertLoan(LoanModel loan) async {
+    final all = _loadLoans();
+    final idx = all.indexWhere((l) => l.id == loan.id);
+    if (idx >= 0) {
+      all[idx] = loan;
+    } else {
+      all.add(loan);
+    }
+    await _saveLoans(all);
+    return loan;
+  }
+
+  Future<void> deleteLoan(String id) async {
+    final all = _loadLoans()..removeWhere((l) => l.id == id);
+    await _saveLoans(all);
+  }
+
+  /// Overwrites the local loan cache wholesale — used to hydrate it from
+  /// Supabase when local storage is empty (e.g. after a reinstall).
+  Future<void> replaceLoans(List<LoanModel> loans) => _saveLoans(loans);
+
+  // ── AI chat sessions ─────────────────────────────────────────────────────
+  List<ChatSessionModel> _loadChatSessions() {
+    final raw = _prefs?.getString(_keyChatSessions);
+    if (raw == null) return [];
+    final list = jsonDecode(raw) as List;
+    return list.map((e) => ChatSessionModel.fromJson(e)).toList();
+  }
+
+  Future<void> _saveChatSessions(List<ChatSessionModel> sessions) async {
+    await _prefs?.setString(
+      _keyChatSessions,
+      jsonEncode(sessions.map((s) => s.toJson()).toList()),
+    );
+  }
+
+  List<ChatSessionModel> getChatSessions() {
+    final sessions = _loadChatSessions();
+    sessions.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+    return sessions;
+  }
+
+  Future<ChatSessionModel> upsertChatSession(ChatSessionModel session) async {
+    final all = _loadChatSessions();
+    final idx = all.indexWhere((s) => s.id == session.id);
+    if (idx >= 0) {
+      all[idx] = session;
+    } else {
+      all.add(session);
+    }
+    await _saveChatSessions(all);
+    return session;
+  }
+
+  Future<void> deleteChatSession(String id) async {
+    final all = _loadChatSessions()..removeWhere((s) => s.id == id);
+    await _saveChatSessions(all);
+  }
+
+  /// Overwrites the local chat-session cache wholesale — used to hydrate it
+  /// from Supabase when local storage is empty (e.g. after a reinstall).
+  Future<void> replaceChatSessions(List<ChatSessionModel> sessions) =>
+      _saveChatSessions(sessions);
 
   // ── Expenses ───────────────────────────────────────────────────────────────
   List<ExpenseModel> _loadExpenses() {

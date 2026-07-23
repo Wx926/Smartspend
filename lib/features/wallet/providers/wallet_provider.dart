@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../../shared/constants/app_constants.dart';
 import '../../../shared/models/expense_model.dart';
 import '../../../shared/models/wallet_model.dart';
 import '../../../shared/services/local_storage_service.dart';
@@ -76,15 +77,26 @@ class WalletProvider extends ChangeNotifier {
     return income - expense;
   }
 
-  /// Total income across ALL wallets.
+  /// Total income across ALL wallets. Excludes internal transfers —
+  /// a transfer between the user's own wallets/goals/loans isn't new money earned.
   double totalAsset(List<ExpenseModel> records) => records
-      .where((r) => r.type == 'income')
+      .where(
+        (r) =>
+            r.type == 'income' &&
+            !AppConstants.internalCategoryIds.contains(r.categoryId),
+      )
       .fold(0.0, (s, r) => s + r.amount);
 
   /// Total expenses across ALL wallets.
-  /// Excludes savings_goal-sourced purchases (already counted when transferred to goal).
+  /// Excludes savings_goal-sourced purchases (already counted when transferred to goal)
+  /// and internal transfers (not real spending).
   double totalDebt(List<ExpenseModel> records) => records
-      .where((r) => r.type == 'expense' && r.walletId != 'savings_goal')
+      .where(
+        (r) =>
+            r.type == 'expense' &&
+            r.walletId != 'savings_goal' &&
+            !AppConstants.internalCategoryIds.contains(r.categoryId),
+      )
       .fold(0.0, (s, r) => s + r.amount);
 
   /// Net asset = total income − total expenses.
