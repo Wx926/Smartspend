@@ -184,6 +184,27 @@ class _AiAdviceScreenState extends State<AiAdviceScreen> {
     final text = _chatController.text.trim();
     if (text.isEmpty || _sendingMessage) return;
 
+    // Show the message and save it immediately — must happen before any
+    // network call below, not after, so the UI stays responsive (and the
+    // question isn't lost) even if the connection is slow or offline.
+    setState(() {
+      _messages.add(_ChatMessage(text: text, isUser: true));
+      _sendingMessage = true;
+    });
+    _chatController.clear();
+    _scrollToBottom();
+
+    final userId = context.read<AuthProvider>().userId;
+    final chatHistory = context.read<ChatHistoryProvider>();
+    _activeSessionId = await chatHistory.saveExchange(
+      existingId: _activeSessionId,
+      userId: userId,
+      messages: _messages
+          .map((m) => ChatMessageRecord(text: m.text, isUser: m.isUser))
+          .toList(),
+    );
+    if (!mounted) return;
+
     final bp = context.read<BudgetProvider>();
     final ep = context.read<ExpenseProvider>();
     final wp = context.read<WalletProvider>();
@@ -208,31 +229,17 @@ class _AiAdviceScreenState extends State<AiAdviceScreen> {
     // Savings goals and loans are lazy-loaded by their own screens — the
     // user may never have opened either, so make sure both are populated
     // before building the AI's context rather than silently sending "none".
-    await wp.load();
-    await sgp.loadIfNeeded();
-    await lp.loadIfNeeded();
-
-    setState(() {
-      _messages.add(_ChatMessage(text: text, isUser: true));
-      _sendingMessage = true;
-    });
-    _chatController.clear();
-    _scrollToBottom();
-
-    // Save the question immediately — don't wait for the AI reply, so
-    // nothing is lost if the API call fails, times out, or the app is
-    // closed mid-request. The reply gets appended to this same session
-    // once it arrives (see below).
-    if (!mounted) return;
-    final userId = context.read<AuthProvider>().userId;
-    final chatHistory = context.read<ChatHistoryProvider>();
-    _activeSessionId = await chatHistory.saveExchange(
-      existingId: _activeSessionId,
-      userId: userId,
-      messages: _messages
-          .map((m) => ChatMessageRecord(text: m.text, isUser: m.isUser))
-          .toList(),
-    );
+    // Bounded so a slow/offline connection can't leave the typing indicator
+    // stuck indefinitely — falls through to whatever's already cached.
+    try {
+      await Future.wait([
+        wp.load(),
+        sgp.loadIfNeeded(),
+        lp.loadIfNeeded(),
+      ]).timeout(const Duration(seconds: 10));
+    } catch (_) {
+      // Offline or slow — proceed with whatever's already cached locally.
+    }
     if (!mounted) return;
 
     final categoryBreakdown = bp.statuses

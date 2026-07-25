@@ -37,7 +37,11 @@ class SavingsGoalProvider extends ChangeNotifier {
     // guest just means "no goals yet," not "go check the cloud."
     if (goals.isEmpty && _db.isLoggedIn) {
       try {
-        final cloud = await _db.getSavingsGoals();
+        // Bounded so a slow/offline connection can't leave this screen's
+        // spinner stuck indefinitely — falls back to the empty local list.
+        final cloud = await _db
+            .getSavingsGoals()
+            .timeout(const Duration(seconds: 10));
         if (cloud.isNotEmpty) {
           await _local.replaceSavingsGoals(cloud);
           goals = _local.getSavingsGoals();

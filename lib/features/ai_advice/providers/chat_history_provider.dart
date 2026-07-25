@@ -24,7 +24,12 @@ class ChatHistoryProvider extends ChangeNotifier {
     var sessions = _local.getChatSessions();
     if (sessions.isEmpty && _db.isLoggedIn) {
       try {
-        final cloud = await _db.getChatSessions();
+        // Bounded so a slow/offline connection can't leave the history
+        // drawer's spinner stuck indefinitely — falls back to the empty
+        // local list.
+        final cloud = await _db
+            .getChatSessions()
+            .timeout(const Duration(seconds: 10));
         if (cloud.isNotEmpty) {
           await _local.replaceChatSessions(cloud);
           sessions = _local.getChatSessions();

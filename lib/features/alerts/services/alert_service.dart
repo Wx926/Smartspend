@@ -327,6 +327,11 @@ class AlertService {
   };
 
   Future<void> _pushNotification(String title, String body, Color color) async {
+    // The alert itself is still recorded (callers add it to the in-app
+    // Alerts history regardless) — this only gates the actual OS push, so
+    // toggling this off doesn't hide alerts from the app, just from the
+    // notification shade.
+    if (!_store.notificationsEnabled) return;
     await _notifications.show(
       _notifId++,
       title,

@@ -378,12 +378,15 @@ class _SavingsGoalsScreenState extends State<SavingsGoalsScreen> {
 
     if (goal.deadline != null) {
       final now = DateTime.now();
-      int months =
-          (goal.deadline!.year - now.year) * 12 +
-          (goal.deadline!.month - now.month);
-      if (goal.deadline!.day < now.day) months--;
-      if (months <= 0) return 'Deadline has passed';
-      final perMonth = remaining / months;
+      final today = DateTime(now.year, now.month, now.day);
+      // Days-based rather than calendar-month subtraction — a deadline
+      // less than a month away (but still in the future) would otherwise
+      // get miscounted as "0 months remaining" and wrongly reported as
+      // already passed.
+      final daysRemaining = goal.deadline!.difference(today).inDays;
+      if (daysRemaining <= 0) return 'Deadline has passed';
+      final monthsRemaining = daysRemaining / 30.44;
+      final perMonth = remaining / monthsRemaining;
       return 'Save RM ${fmt.format(perMonth)}/mo to hit target by deadline';
     }
 

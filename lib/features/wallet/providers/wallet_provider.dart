@@ -51,7 +51,11 @@ class WalletProvider extends ChangeNotifier {
   Future<void> load({bool force = false}) async {
     if (_loaded && !force) return;
     try {
-      final cloud = await SupabaseService.instance.getWallets();
+      // Bounded so a slow/offline connection can't leave this stuck
+      // indefinitely — falls back to just the default wallet.
+      final cloud = await SupabaseService.instance
+          .getWallets()
+          .timeout(const Duration(seconds: 10));
       _wallets = [_defaultWallet, ...cloud];
       _loaded = true;
     } catch (_) {

@@ -34,7 +34,9 @@ class LoanProvider extends ChangeNotifier {
     var loans = _local.getLoans();
     if (loans.isEmpty && _db.isLoggedIn) {
       try {
-        final cloud = await _db.getLoans();
+        // Bounded so a slow/offline connection can't leave this screen's
+        // spinner stuck indefinitely — falls back to the empty local list.
+        final cloud = await _db.getLoans().timeout(const Duration(seconds: 10));
         if (cloud.isNotEmpty) {
           await _local.replaceLoans(cloud);
           loans = _local.getLoans();
