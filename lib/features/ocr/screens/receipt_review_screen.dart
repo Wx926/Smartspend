@@ -918,9 +918,44 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
                         'RM ${_total.toStringAsFixed(2)}',
                         widget.result?.amount != null || _isEditMode,
                       ),
+                      _extractedRow(
+                        'Line Items',
+                        '${_items.length} item${_items.length == 1 ? '' : 's'}',
+                        _isEditMode || widget.result?.itemsConfidence != 'low',
+                      ),
                     ],
                   ),
                 ),
+                if (!_isEditMode && widget.result?.itemsConfidence == 'low')
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFFFF3E0),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: const Color(0xFFFFCC80)),
+                      ),
+                      child: const Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Icon(Icons.warning_amber_rounded,
+                              color: Color(0xFFE65100), size: 16),
+                          SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              "These items don't add up to the receipt total — "
+                              "please double-check them before saving.",
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Color(0xFFE65100),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
 
                 const SizedBox(height: 12),
 
@@ -1481,12 +1516,21 @@ class _EditableItem {
   /// mode) — null for a freshly-scanned or manually added row.
   final String? originalId;
 
+  /// The quantity priceCtrl's current value was last computed for — the
+  /// basis for rescaling price when qty next changes (see _ItemRow's qty
+  /// field), since priceCtrl holds the LINE TOTAL (qty x unit price), not a
+  /// per-unit rate, matching how every extracted item already works
+  /// elsewhere in this app (e.g. "2 pc @ 2.50" is stored as one row with
+  /// quantity 2 and price 5.00, not price 2.50).
+  int lastQty;
+
   _EditableItem({
     required this.nameCtrl,
     required this.priceCtrl,
     TextEditingController? qtyCtrl,
     this.originalId,
-  }) : qtyCtrl = qtyCtrl ?? TextEditingController(text: '1');
+  }) : qtyCtrl = qtyCtrl ?? TextEditingController(text: '1'),
+       lastQty = int.tryParse(qtyCtrl?.text ?? '1') ?? 1;
 }
 
 // ── Item row ───────────────────────────────────────────────────────────────────
@@ -1530,7 +1574,23 @@ class _ItemRow extends StatelessWidget {
             width: 40,
             child: TextFormField(
               controller: item.qtyCtrl,
-              onChanged: (_) => onChanged(),
+              onChanged: (text) {
+                // priceCtrl holds the LINE TOTAL, not a per-unit rate — so
+                // bumping quantity must rescale it proportionally (e.g. 1 x
+                // RM27.90 -> 2 x RM55.80), using whatever price was showing
+                // for the PREVIOUS quantity to derive the unit rate, rather
+                // than silently leaving a now-stale total on screen.
+                final newQty = int.tryParse(text);
+                if (newQty != null && newQty > 0 && newQty != item.lastQty) {
+                  final currentTotal =
+                      double.tryParse(item.priceCtrl.text) ?? 0;
+                  final unitPrice = currentTotal / item.lastQty;
+                  item.priceCtrl.text = (unitPrice * newQty)
+                      .toStringAsFixed(2);
+                  item.lastQty = newQty;
+                }
+                onChanged();
+              },
               textAlign: TextAlign.center,
               keyboardType: TextInputType.number,
               style: const TextStyle(fontSize: 13),

@@ -56,6 +56,7 @@ class OcrResult {
   String? suggestedCategoryName;
   String? suggestedCategoryConfidence; // "high" | "low"
   String? dateConfidence; // "high" | "low"
+  String? itemsConfidence; // "high" | "low" — line items summing close to the total
   WarrantyInfo? warranty;
 
   OcrResult({
@@ -68,6 +69,7 @@ class OcrResult {
     this.suggestedCategoryName,
     this.suggestedCategoryConfidence,
     this.dateConfidence,
+    this.itemsConfidence,
     this.warranty,
   });
 
@@ -86,6 +88,7 @@ class OcrResult {
       suggestedCategoryName: json['suggested_category_name'] as String?,
       suggestedCategoryConfidence: json['suggested_category_confidence'] as String?,
       dateConfidence: json['date_confidence'] as String?,
+      itemsConfidence: json['items_confidence'] as String?,
       warranty: warrantyJson != null ? WarrantyInfo.fromJson(warrantyJson) : null,
     );
   }
