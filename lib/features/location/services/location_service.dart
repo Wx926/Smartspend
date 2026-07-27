@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:flutter/foundation.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:uuid/uuid.dart';
 import '../../../shared/constants/app_constants.dart';
@@ -103,6 +104,12 @@ class LocationService {
         }
       }
 
+      debugPrint(
+        '[SmartSpend/Location] poll: pos=(${position.latitude.toStringAsFixed(5)},'
+        '${position.longitude.toStringAsFixed(5)}) knownLocations=${knownLocations.length} '
+        'matched=${matched?.name} distM=${matched == null ? '-' : matchedDist.toStringAsFixed(1)}',
+      );
+
       if (matched != null) {
         if (_currentLocationId != matched.id) {
           // Switched to a new (or first) location — reset the dwell clock
@@ -145,8 +152,15 @@ class LocationService {
           }
         } else if (!_confirmed) {
           final dwell = DateTime.now().difference(_arrivedAt!).inMinutes;
+          debugPrint(
+            '[SmartSpend/Location] dwelling at ${matched.name}: '
+            '${dwell}m / ${AppConstants.dwellTimeMinutes}m needed',
+          );
           if (forced || dwell >= AppConstants.dwellTimeMinutes) {
             _confirmed = true;
+            debugPrint(
+              '[SmartSpend/Location] CONFIRMED ${matched.name} — handing off to Algorithm 3',
+            );
             _eventController.add(
               LocationEvent(
                 type: LocationEventType.entered,
@@ -179,8 +193,11 @@ class LocationService {
           );
         }
       }
-    } catch (_) {
-      // Silently ignore GPS errors
+    } catch (e) {
+      // Was silently ignored before — logged now since a swallowed GPS
+      // timeout/permission error here looks identical to "nothing is
+      // happening" from the outside, with no way to tell them apart.
+      debugPrint('[SmartSpend/Location] poll failed: $e');
     }
   }
 

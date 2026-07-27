@@ -138,10 +138,11 @@ class AlertService {
         allStatuses: allStatuses,
         venueExpenses: venueExpenses,
       );
-    } catch (_) {
-      // Background isolate has no UI to surface this to — a transient
-      // network failure here just means this poll cycle's check is skipped;
-      // the next one retries.
+    } catch (e) {
+      // Was silently ignored before — logged now since a swallowed error
+      // here (network, Supabase, Gemini) looks identical to "no alert
+      // logic ran at all" from the outside.
+      debugPrint('[SmartSpend/Alert] checkVenueAndAlert failed: $e');
     }
   }
 
@@ -155,14 +156,25 @@ class AlertService {
     required List<BudgetStatus> allStatuses,
     required List<ExpenseModel> venueExpenses,
   }) async {
-    if (venue.effectiveIsRoutine) return;
+    if (venue.effectiveIsRoutine) {
+      debugPrint(
+        '[SmartSpend/Alert] ${venue.name}: skipped — marked routine',
+      );
+      return;
+    }
 
     // Step 1: per-venue cooldown.
     final last = _store.getLastAlertForLocation(venue.id);
     if (last != null) {
       final hoursSince =
           DateTime.now().difference(last.createdAt).inMinutes / 60.0;
-      if (hoursSince < AppConstants.alertCooldownHours) return;
+      if (hoursSince < AppConstants.alertCooldownHours) {
+        debugPrint(
+          '[SmartSpend/Alert] ${venue.name}: skipped — cooldown '
+          '(${hoursSince.toStringAsFixed(3)}h / ${AppConstants.alertCooldownHours}h needed)',
+        );
+        return;
+      }
     }
 
     // Step 7: hard daily cap — even with the cooldown, a very long stay
@@ -171,7 +183,13 @@ class AlertService {
       venue.id,
       DateTime.now().subtract(const Duration(hours: 12)),
     );
-    if (sentToday >= AppConstants.maxAlertsPerVenuePerDay) return;
+    if (sentToday >= AppConstants.maxAlertsPerVenuePerDay) {
+      debugPrint(
+        '[SmartSpend/Alert] ${venue.name}: skipped — daily cap reached '
+        '($sentToday/${AppConstants.maxAlertsPerVenuePerDay})',
+      );
+      return;
+    }
 
     // Step 2: the categories the user (or the OSM place-type guess) has
     // actually assigned to this venue — a mall can be tagged with several.
@@ -242,10 +260,13 @@ class AlertService {
         .join('\n');
 
     if (worst.severity == AlertSeverity.green) {
-      // Step 3: informational, no urgency, no AI call needed.
+      // Step 3: informational, no urgency, no AI call needed — but still
+      // uses the same "[icon] [Label] — [venue]" + tip-line shape as the
+      // Caution/Critical tiers below, so every severity reads consistently
+      // instead of green looking like a bare, half-finished notification.
       type = 'green';
-      title = '✅ ${venue.name}';
-      message = remainingLines;
+      title = '✅ All Good — ${venue.name}';
+      message = '$remainingLines\n👍 Nice, your budget here is healthy — keep it up!';
     } else {
       // Step 4-5: Caution/Critical — ask Gemini for a contextual warning.
       type = worst.severity == AlertSeverity.red ? 'red' : 'yellow';
@@ -305,6 +326,10 @@ class AlertService {
     );
 
     await _saveAlert(alert);
+    debugPrint(
+      '[SmartSpend/Alert] ${venue.name}: pushing "$title" '
+      '(locationAlertsEnabled=${_store.locationAlertsEnabled})',
+    );
     await _pushNotification(title, message, _severityColor(worst.severity));
   }
 
@@ -331,7 +356,7 @@ class AlertService {
     // Alerts history regardless) — this only gates the actual OS push, so
     // toggling this off doesn't hide alerts from the app, just from the
     // notification shade.
-    if (!_store.notificationsEnabled) return;
+    if (!_store.locationAlertsEnabled) return;
     await _notifications.show(
       _notifId++,
       title,
@@ -341,6 +366,12 @@ class AlertService {
           'smartspend_alerts',
           'SmartSpend Alerts',
           channelDescription: 'Budget and spending alerts',
+          // Explicit rather than relying on the plugin's defaults — these
+          // ARE swipe-to-dismiss, unlike the "Tracking your location..."
+          // foreground-service notification, which Android forces to stay
+          // pinned for as long as tracking is on regardless of this.
+          ongoing: false,
+          autoCancel: true,
           importance: Importance.high,
           priority: Priority.high,
           color: color,
@@ -369,7 +400,11 @@ class AlertService {
   void _onNotificationTap(NotificationResponse response) {
     final nav = navigatorKey.currentState;
     if (nav == null) return;
-    if (response.actionId == 'record_spending') {
+    // Meal reminders (MealReminderService) have no action buttons — tapping
+    // the notification body itself should jump straight to Add Expense,
+    // same destination as the location alert's "Record Spending" action.
+    if (response.payload == 'meal_reminder' ||
+        response.actionId == 'record_spending') {
       nav.pushNamed('/add-expense');
     } else {
       nav.pushNamed('/alerts');

@@ -11,6 +11,7 @@ import '../../expenses/providers/expense_provider.dart';
 import '../../security/screens/passcode_setup_screen.dart';
 import '../../security/screens/passcode_settings_screen.dart';
 import '../../security/screens/passcode_verify_screen.dart';
+import '../../reminders/services/meal_reminder_service.dart';
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
@@ -30,7 +31,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
   void initState() {
     super.initState();
     _loadWarranties();
-    _pushNotifications = LocalStorageService.instance.notificationsEnabled;
+    _locationAlerts = LocalStorageService.instance.locationAlertsEnabled;
+    _pushNotifications = LocalStorageService.instance.mealRemindersEnabled;
     _aiCategorisation = LocalStorageService.instance.aiCategorisationEnabled;
   }
 
@@ -259,21 +261,29 @@ class _ProfileScreenState extends State<ProfileScreen> {
               iconColor: const Color(0xFFE74C3C),
               iconBg: const Color(0xFFFDECEA),
               title: 'Location alerts',
-              subtitle: 'Detect nearby spending areas',
+              subtitle: 'Notify me when I visit a spending area',
               value: _locationAlerts,
-              onChanged: (v) => setState(() => _locationAlerts = v),
+              onChanged: (v) {
+                setState(() => _locationAlerts = v);
+                LocalStorageService.instance.setLocationAlertsEnabled(v);
+              },
             ),
             _divider(),
             _toggleTile(
-              icon: Icons.notifications_outlined,
+              icon: Icons.restaurant_outlined,
               iconColor: const Color(0xFFF59E0B),
               iconBg: const Color(0xFFFFFBEB),
-              title: 'Push notifications',
-              subtitle: 'Budget warnings and AI insights',
+              title: 'Meal reminders',
+              subtitle: 'Remind me to log spending at meal times',
               value: _pushNotifications,
               onChanged: (v) {
                 setState(() => _pushNotifications = v);
-                LocalStorageService.instance.setNotificationsEnabled(v);
+                LocalStorageService.instance.setMealRemindersEnabled(v);
+                if (v) {
+                  MealReminderService.instance.rescheduleAll();
+                } else {
+                  MealReminderService.instance.cancelAll();
+                }
               },
             ),
             _divider(),

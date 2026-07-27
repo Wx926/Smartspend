@@ -63,6 +63,62 @@ class _LocationScreenState extends State<LocationScreen> {
     }
   }
 
+  /// Single "dot + title/subtitle + switch" tracking indicator, shared by
+  /// both the confirmed-venue header (light-on-dark, [light]=true) and the
+  /// no-venue-yet card (dark-on-white, [light]=false) — one visual language
+  /// for tracking state regardless of which view is currently showing.
+  Widget _trackingStatusRow(LocationProvider lp, {required bool light}) {
+    final titleColor = light ? Colors.white : AppColors.textPrimary;
+    final subtitleColor = light ? Colors.white70 : AppColors.textSecondary;
+    return Row(
+      children: [
+        Container(
+          width: light ? 8 : 12,
+          height: light ? 8 : 12,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: lp.isTracking
+                ? AppColors.budgetGreen
+                : (light ? Colors.white54 : AppColors.textSecondary),
+          ),
+        ),
+        SizedBox(width: light ? 8 : 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                lp.isTracking
+                    ? 'Location Tracking Active'
+                    : 'Location Tracking Off',
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: light ? 13 : 15,
+                  color: titleColor,
+                ),
+              ),
+              Text(
+                lp.isTracking
+                    ? 'Monitoring for known spots within 100m'
+                    : 'Enable to get location-aware alerts',
+                style: TextStyle(fontSize: light ? 11 : 12, color: subtitleColor),
+              ),
+            ],
+          ),
+        ),
+        Transform.scale(
+          scale: light ? 0.8 : 1.0,
+          child: Switch(
+            value: lp.isTracking,
+            onChanged: (_) => _toggleTracking(),
+            activeThumbColor: light ? Colors.white : AppColors.primary,
+            activeTrackColor: light ? Colors.white38 : null,
+          ),
+        ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final lp = context.watch<LocationProvider>();
@@ -187,6 +243,23 @@ class _LocationScreenState extends State<LocationScreen> {
                       fontSize: 22,
                       fontWeight: FontWeight.bold,
                     ),
+                  ),
+                  const SizedBox(height: 10),
+                  // Same dot + title/subtitle + switch language as the
+                  // "Location Tracking Active/Off" card below (used when no
+                  // venue is confirmed) — just condensed to fit the header,
+                  // so tracking state reads identically no matter which view
+                  // is showing instead of this being a bare, unlabeled icon.
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 8,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: _trackingStatusRow(lp, light: true),
                   ),
                   const SizedBox(height: 4),
                   Text(
@@ -526,58 +599,16 @@ class _LocationScreenState extends State<LocationScreen> {
           padding: const EdgeInsets.all(16),
           sliver: SliverList(
             delegate: SliverChildListDelegate([
-              // Tracking toggle card
+              // Tracking toggle card — same _trackingStatusRow used (in
+              // "light" mode) inside the confirmed-venue header above, so
+              // the on/off state reads identically in both places.
               Container(
                 padding: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
                   color: lp.isTracking ? AppColors.alertGreenBg : Colors.white,
                   borderRadius: BorderRadius.circular(14),
                 ),
-                child: Row(
-                  children: [
-                    Container(
-                      width: 12,
-                      height: 12,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: lp.isTracking
-                            ? AppColors.budgetGreen
-                            : AppColors.textSecondary,
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            lp.isTracking
-                                ? 'Location Tracking Active'
-                                : 'Location Tracking Off',
-                            style: const TextStyle(
-                              fontWeight: FontWeight.bold,
-                              fontSize: 15,
-                            ),
-                          ),
-                          Text(
-                            lp.isTracking
-                                ? 'Monitoring for known spots within 100m'
-                                : 'Enable to get location-aware alerts',
-                            style: const TextStyle(
-                              color: AppColors.textSecondary,
-                              fontSize: 12,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    Switch(
-                      value: lp.isTracking,
-                      onChanged: (_) => _toggleTracking(),
-                      activeThumbColor: AppColors.primary,
-                    ),
-                  ],
-                ),
+                child: _trackingStatusRow(lp, light: false),
               ),
               const SizedBox(height: 20),
               ..._buildSavedLocationsSection(context, lp, userId),

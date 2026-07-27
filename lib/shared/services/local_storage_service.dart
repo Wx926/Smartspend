@@ -27,7 +27,8 @@ class LocalStorageService {
   static const _keyCustomCategories = 'ss_custom_categories';
   static const _keyWallets = 'ss_wallets';
   static const _keyPreferredWallet = 'ss_preferred_wallet_id';
-  static const _keyNotificationsEnabled = 'ss_notifications_enabled';
+  static const _keyLocationAlertsEnabled = 'ss_location_alerts_enabled';
+  static const _keyMealRemindersEnabled = 'ss_meal_reminders_enabled';
   static const _keyTrackingEnabled = 'ss_tracking_enabled';
   static const _keyRecentReceipts = 'ss_recent_receipts';
   static const _keyAiCategorisation = 'ss_ai_categorisation_enabled';
@@ -107,12 +108,24 @@ class LocalStorageService {
 
   String get localUserId => _prefs?.getString(_keyDeviceId) ?? 'local_user';
 
-  // ── Notification preference ────────────────────────────────────────────────
-  bool get notificationsEnabled =>
-      _prefs?.getBool(_keyNotificationsEnabled) ?? true;
+  // ── Notification preferences ───────────────────────────────────────────────
+  /// Whether a confirmed venue visit (Algorithm 3) pops an OS notification.
+  /// Independent of [trackingEnabled] — a user can keep tracking running
+  /// (so the Nearby screen still shows live venue/budget status) while
+  /// silencing the popup itself.
+  bool get locationAlertsEnabled =>
+      _prefs?.getBool(_keyLocationAlertsEnabled) ?? true;
 
-  Future<void> setNotificationsEnabled(bool value) async =>
-      _prefs?.setBool(_keyNotificationsEnabled, value);
+  Future<void> setLocationAlertsEnabled(bool value) async =>
+      _prefs?.setBool(_keyLocationAlertsEnabled, value);
+
+  /// Scheduled breakfast/lunch/dinner nudges to log spending — unrelated to
+  /// location tracking.
+  bool get mealRemindersEnabled =>
+      _prefs?.getBool(_keyMealRemindersEnabled) ?? true;
+
+  Future<void> setMealRemindersEnabled(bool value) async =>
+      _prefs?.setBool(_keyMealRemindersEnabled, value);
 
   bool get trackingEnabled => _prefs?.getBool(_keyTrackingEnabled) ?? false;
 

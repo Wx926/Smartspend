@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:uuid/uuid.dart';
 import '../../../shared/constants/app_constants.dart';
 import '../../../shared/models/expense_model.dart';
+import '../../reminders/services/meal_reminder_service.dart';
 import '../services/expense_service.dart';
 
 class ExpenseProvider extends ChangeNotifier {
@@ -112,6 +113,9 @@ class ExpenseProvider extends ChangeNotifier {
     // Optimistic: insert locally and return immediately — don't block on network
     _expenses.insert(0, expense);
     notifyListeners();
+    // Cancel today's meal reminder for whichever window this falls in, if
+    // any — no point nagging about spending that's already logged.
+    MealReminderService.instance.onExpenseLogged(expense);
     // Sync to Supabase in background
     _service
         .addExpense(expense)
