@@ -6,3 +6,4 @@ pytesseract
 supabase
 faster-whisper
 pymupdf
+Pillow

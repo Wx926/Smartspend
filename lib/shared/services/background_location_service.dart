@@ -55,7 +55,14 @@ Future<void> initializeBackgroundService() async {
 /// the app's own process now runs here instead.
 @pragma('vm:entry-point')
 void onServiceStart(ServiceInstance service) async {
-  DartPluginRegistrant.ensureInitialized();
+  try {
+    DartPluginRegistrant.ensureInitialized();
+  } catch (_) {
+    // A hot restart can leave the Android-side background service running
+    // from before the restart — when it reconnects to the new Dart VM, this
+    // call re-runs against stale isolate state and throws. Harmless outside
+    // of Flutter's dev-only hot-restart workflow; safe to ignore here.
+  }
 
   await dotenv.load(fileName: '.env');
   await LocalStorageService.instance.init();

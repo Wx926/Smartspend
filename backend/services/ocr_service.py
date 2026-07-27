@@ -30,10 +30,15 @@ AMOUNT_PATTERN = re.compile(
     r"(?:RM|MYR|USD|SGD|GBP|\$|£|€|¥)?\s*(\d+[.,]\d{2})",
     re.IGNORECASE,
 )
+# Each guarded with (?<!\d)/(?!\d) so it can't match a substring of a LONGER
+# digit run — without this, "2018-03-23" (a real YYYY-MM-DD date) contains
+# "18-03-23" as a substring, which the DD-MM-YY pattern happily matches on
+# its own, misreading the date as "18 Mar 2023" instead of "23 Mar 2018"
+# before the correct YYYY-MM-DD pattern below it ever gets a chance to run.
 DATE_PATTERNS = [
-    r"(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})",   # 27/06/2026 or 27-06-26
-    r"(\d{4}[\/\-]\d{1,2}[\/\-]\d{1,2})",     # 2026-06-27
-    r"(\d{4}\.\d{1,2}\.\d{1,2})",             # 2026.07.15 (dot-separated POS timestamp)
+    r"(?<!\d)(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})(?!\d)",   # 27/06/2026 or 27-06-26
+    r"(?<!\d)(\d{4}[\/\-]\d{1,2}[\/\-]\d{1,2})(?!\d)",     # 2026-06-27
+    r"(?<!\d)(\d{4}\.\d{1,2}\.\d{1,2})(?!\d)",             # 2026.07.15 (dot-separated POS timestamp)
 ]
 
 # Restricted to actual month names/abbreviations (not any 3-9 letter word) —
@@ -123,15 +128,28 @@ def _match_line_item(line: str) -> re.Match | None:
 #   CJK text:                  "干妙海鲜河粉", "豆奶仙草" (no spaces between characters)
 #   dash separator/size descriptor: "Naughty Spare Rib - Full", "HH Asahi 1+1/2"
 _NAME_ONLY = re.compile(
-    rf"^([A-Za-z{_CJK}][A-Za-z0-9{_CJK}\-&'\/\(\)]*"
+    # The first token may also be a digit-run WITH a letter attached (e.g.
+    # "18CT" in "18CT EGGS") — the same allowance already granted to
+    # continuation tokens below, extended to the first position too, since
+    # a real item name can just as easily start with a count/size prefix as
+    # end with one. Still requires an actual letter somewhere in the token
+    # (unlike a bare digit run), so a genuine numbers-only barcode/price row
+    # still can't match this as a false "name".
+    rf"^((?:[A-Za-z{_CJK}][A-Za-z0-9{_CJK}\-&'\/\(\)]*|[0-9]+[A-Za-z][A-Za-z0-9\-&'\/\(\)]*)"
     # A bare 1-4 digit token (no letters at all) is allowed as a continuation
     # word too — product names commonly end in a model/size number that
     # Vision sometimes splits off as its own token with no attached letter,
-    # e.g. "ARTLINE 70" read as "AR TL IN E 70" or "A4 SIZE 20 POCKETS". The
-    # line must still start with a letter (required by the first token
-    # above), so this can't turn a genuine numbers-only barcode/price row
-    # into a false "name" match.
-    rf"(?:\s(?:[A-Za-z{_CJK}][A-Za-z0-9{_CJK}\-&'\/\(\)]*|[0-9]+[A-Za-z][A-Za-z0-9\-&'\/\(\)]*|\d{{1,4}}|{_LOOSE_WORD_SEP}))*)"
+    # e.g. "ARTLINE 70" read as "AR TL IN E 70" or "A4 SIZE 20 POCKETS".
+    rf"(?:\s(?:[A-Za-z{_CJK}][A-Za-z0-9{_CJK}\-&'\/\(\)]*|[0-9]+[A-Za-z][A-Za-z0-9\-&'\/\(\)]*|\d{{1,4}}|{_LOOSE_WORD_SEP}))*"
+    # A trailing " #" specifically at the very end of the line is allowed —
+    # a size/weight-class marker on US grocery receipts (e.g. "MONT JACK
+    # 2#" reconstructed with a space as "MONT JACK 2 #"). Deliberately NOT
+    # added as a general mid-line continuation token: that would also let a
+    # "#" anywhere else (e.g. an address fragment like "Thornton # 629")
+    # falsely match as a plausible item name. Kept inside the capture group
+    # so the "#" is actually included in the extracted name, not just
+    # matched and discarded.
+    r"(?:\s#)?)"
     r"\s*$",
     re.IGNORECASE,
 )
@@ -226,9 +244,15 @@ _BARE_PRICE_LINE = re.compile(
 # its own) — without that requirement it would also match an ordinary
 # name+price single-line item like "FRAP 001200010451 F 5.48 N", silently
 # swallowing the real name "FRAP" as if it were a headerless numbers-row.
+# The column right after the item#/barcode is always QTY on this layout —
+# captured separately (group 1) from the trailing AMOUNT (group 2) so the
+# caller can attach the real printed quantity to the item instead of always
+# defaulting to 1. It's a single token, digit-run or lone letter (the same
+# misread-"1" tolerance as the trailing columns), never a decimal.
 _ALL_NUMBERS_ROW = re.compile(
     r"^(?:\d+(?:[.,]\d+)?|[A-Za-z\-]{0,4}\d[A-Za-z0-9\-]{0,6})\s+"
-    r"(?:(?:\d+(?:[.,]\d+)?|[A-Za-z])\s+){1,}(\d+[.,]\d{2})\s*\*?\s*[A-Z]{0,2}\s*$"
+    r"(\d+|[A-Za-z])\s+"
+    r"(?:(?:\d+(?:[.,]\d+)?|[A-Za-z])\s+)*(\d+[.,]\d{2})\s*\*?\s*[A-Z]{0,2}\s*$"
 )
 
 # A line with two bare 5+ digit barcodes and nothing else — a price-override
@@ -400,7 +424,18 @@ def _reconstruct_reading_order(full_text_annotation: dict) -> str:
     # to drift a word's average Y off its true row — and Vision has already
     # solved the much harder "which characters belong to the same word"
     # problem for us, so there's no need to re-derive it from character gaps.
-    words = []  # (y_center, x_left, x_right, height, text)
+    # Row membership is keyed on each word's TOP edge rather than its
+    # vertical center (a marginally more stable anchor for mixed digit/
+    # letter rows) — but this alone does NOT fix a whole-column vertical
+    # offset between a wide table's far-left and far-right text (e.g. a
+    # name column vs. a price column on a narrow receipt), only borderline
+    # same-row-vs-different-row calls for words that are already close in Y.
+    # A real case of that wider drift was found on a Costco receipt, root-
+    # caused via logged per-word pixel geometry: a price sitting ~9px from
+    # the row above and ~10px from its own true row is genuinely closer to
+    # the WRONG row by pure Y-distance — no Y-only threshold, however
+    # tuned, can resolve that. See _split_price_column below for the fix.
+    words = []  # (y_top, x_left, x_right, height, text)
     for page in full_text_annotation.get("pages", []):
         for block in page.get("blocks", []):
             for paragraph in block.get("paragraphs", []):
@@ -414,24 +449,24 @@ def _reconstruct_reading_order(full_text_annotation: dict) -> str:
                     ys = [v.get("y", 0) for v in vertices]
                     xs = [v.get("x", 0) for v in vertices]
                     words.append((
-                        sum(ys) / len(ys), min(xs), max(xs),
+                        min(ys), min(xs), max(xs),
                         max(ys) - min(ys) or 1, text,
                     ))
 
     if not words:
         return ""
 
-    words.sort(key=lambda w: w[0])  # top to bottom by vertical center
+    words.sort(key=lambda w: w[0])  # top to bottom by top edge
 
-    rows: list[list[tuple]] = []
-    for w in words:
-        if rows:
-            row_y = sum(r[0] for r in rows[-1]) / len(rows[-1])
-            row_h = sum(r[3] for r in rows[-1]) / len(rows[-1])
-            if abs(w[0] - row_y) <= row_h * 0.6:
-                rows[-1].append(w)
-                continue
-        rows.append([w])
+    # Temporary diagnostic dump — one line per word with its actual pixel
+    # geometry, kept so a future case of this same failure can be measured
+    # directly instead of guessed at from the reconstructed text alone.
+    print("\n===== OCR WORD BOUNDING BOXES (y_top, x_left, x_right, height) =====")
+    for y_top, x_left, x_right, height, text in words:
+        print(f"  y={y_top:>5}  x=[{x_left:>5},{x_right:>5}]  h={height:>4}  {text!r}")
+    print("======================================================================\n")
+
+    rows = _split_price_column(words)
 
     lines = []
     for row in rows:
@@ -441,6 +476,145 @@ def _reconstruct_reading_order(full_text_annotation: dict) -> str:
         # a single space always belongs between consecutive words.
         lines.append(" ".join(w[4] for w in row))
     return "\n".join(lines)
+
+
+def _cluster_rows(words: list[tuple]) -> list[list[tuple]]:
+    """Groups words (already sorted by top-edge Y) into physical rows by
+    comparing each word's Y position against the running row's average —
+    the original single-pass reading-order clustering, factored out so it
+    can be applied independently to a sub-region's words (see
+    _split_price_column)."""
+    rows: list[list[tuple]] = []
+    for w in words:
+        if rows:
+            row_y = sum(r[0] for r in rows[-1]) / len(rows[-1])
+            row_h = sum(r[3] for r in rows[-1]) / len(rows[-1])
+            if abs(w[0] - row_y) <= row_h * 0.6:
+                rows[-1].append(w)
+                continue
+        rows.append([w])
+    return rows
+
+
+# A clean decimal amount, e.g. "23.99" — used to detect a recurring price
+# column. Deliberately stricter than AMOUNT_PATTERN (no currency prefix, no
+# surrounding text): a barcode or reference number never matches this on its
+# own, only an actual charged amount does.
+_BARE_DECIMAL = re.compile(r"^\d{1,4}[.,]\d{2}$")
+
+# A standalone totals-section label — used only to cap where the detected
+# price column actually ends. Without this, a subtotal/tax/total figure
+# printed in the same tight right-aligned x-band as the real item prices
+# (extremely common — they're column-aligned on purpose) gets treated as
+# part of the item table, dragging its OWN label (SUBTOTAL/TAX/TOTAL) into
+# the reconstructed "left column" ahead of where the real prices end up —
+# which trips the parser's own totals-boundary detection before it ever
+# reaches the real prices, discarding every item.
+_TOTALS_LABEL = re.compile(
+    r"^(sub[\s\-]?total|total|tax|amount\s*due|balance\s*due)$", re.IGNORECASE
+)
+
+
+def _split_price_column(words: list[tuple]) -> list[list[tuple]]:
+    """Detects a wide item table whose price column sits far enough to the
+    right that Y-only row clustering can misattach a price to the row
+    above its true item (see the Costco case documented above _cluster_rows'
+    caller) — and if found, re-clusters that region's left (name/code) and
+    right (price/tax-code) words independently, rather than as one mixed
+    Y-ordered stream where a price's own Y position can legitimately sit
+    closer to the wrong row than to its true one.
+
+    Falls back to the original single-pass clustering entirely unchanged
+    whenever no such recurring column is detected — every other receipt
+    layout goes through the exact same code as before.
+    """
+    decimals = [w for w in words if _BARE_DECIMAL.match(w[4])]
+    if len(decimals) < 4:
+        return _cluster_rows(words)
+
+    # A genuine price column's amounts share a tight, recurring left edge —
+    # unlike barcodes/reference numbers (excluded by _BARE_DECIMAL already).
+    # Found via the largest tightly-packed run of x_left values rather than
+    # a plain min/max spread: a single unrelated decimal elsewhere on the
+    # page (e.g. the per-unit rate "4.29" in a weight annotation like
+    # "3 @ 4.29", printed in the name column) would otherwise blow out a
+    # naive spread check and hide a real price column behind one outlier.
+    x_lefts = sorted(w[1] for w in decimals)
+    clusters: list[list[int]] = [[x_lefts[0]]]
+    for x in x_lefts[1:]:
+        if x - clusters[-1][-1] <= 25:
+            clusters[-1].append(x)
+        else:
+            clusters.append([x])
+    price_cluster = max(clusters, key=len)
+    if len(price_cluster) < 4:
+        return _cluster_rows(words)
+
+    column_boundary = price_cluster[0] - 15
+    price_decimals = [
+        w for w in decimals if price_cluster[0] - 5 <= w[1] <= price_cluster[-1] + 5
+    ]
+    table_y_min = min(w[0] for w in price_decimals)
+
+    # A subtotal/tax/total figure is very often printed in this exact same
+    # tight x-band (they're column-aligned with the item prices on purpose)
+    # and can sit only a few pixels past the last real item — too close for
+    # a fixed margin to reliably exclude by Y-position alone. Excluding by
+    # the label word's presence instead of a fixed distance handles that
+    # regardless of how tight the gap happens to be.
+    label_ys = [w[0] for w in words if w[0] > table_y_min and _TOTALS_LABEL.match(w[4])]
+    table_margin = 5
+    if label_ys:
+        cutoff = min(label_ys) - 5
+        price_decimals = [w for w in price_decimals if w[0] + w[3] < cutoff]
+        if len(price_decimals) < 4:
+            return _cluster_rows(words)
+        table_margin = 0
+
+    table_y_max = max(w[0] + w[3] for w in price_decimals)
+
+    before = [w for w in words if w[0] < table_y_min - 5]
+    table = [w for w in words if table_y_min - 5 <= w[0] <= table_y_max + table_margin]
+    after = [w for w in words if w[0] > table_y_max + table_margin]
+
+    left_col = [w for w in table if w[1] < column_boundary]
+    right_col = [w for w in table if w[1] >= column_boundary]
+
+    # Require the left column to actually look like a barcode-driven retail
+    # table (several standalone 5+ digit product codes), not just "any
+    # receipt with a right-aligned price column" — which describes most
+    # menu/invoice layouts too (qty + name + tax-code + price all on one
+    # line), and those already reconstruct correctly under plain Y
+    # clustering with no ambiguity to fix. Splitting one of those into
+    # "names now, prices later" anyway doesn't fix anything real and instead
+    # actively breaks it: with no barcode of their own, none of those names
+    # qualify for the reliable `pending_barcode_names` queue, so they fall
+    # into the same speculative queue as any unrelated stray word earlier in
+    # the document (a receipt title, a letterhead line) that also failed to
+    # find a nearby price — and whichever got queued first wins, scrambling
+    # names and prices from completely unrelated items together. Confirmed
+    # on a real menu-style Malaysian receipt (Morganfield's): no barcodes,
+    # split wrongly triggered, items came out paired with fragments of the
+    # letterhead and receipt title instead of their own names.
+    barcode_count = sum(1 for w in left_col if re.match(r"^\d{5,}$", w[4]))
+    if barcode_count < 3:
+        return _cluster_rows(words)
+
+    # All left-column (name/code) rows first, in top-to-bottom order, then
+    # all right-column (price/tax-code) rows — rather than interleaving them
+    # by Y position, which is exactly the unreliable comparison this
+    # function exists to avoid. The downstream item parser already expects
+    # and correctly handles this "names now, prices later" shape (its
+    # deferred-name FIFO queue), as long as each name is recognised as
+    # definitely belonging to its own catalogued item rather than treated as
+    # possibly wrapping into the next line — see `had_barcode_prefix` in
+    # _extract_line_items.
+    return (
+        _cluster_rows(before)
+        + _cluster_rows(left_col)
+        + _cluster_rows(right_col)
+        + _cluster_rows(after)
+    )
 
 
 # ─── Stage 2: Text Extraction via Google Cloud Vision API ───────────────────
@@ -491,6 +665,27 @@ def extract_text(image_bytes: bytes) -> str:
     return text
 
 
+# A correct extraction's line-item prices should sum to something close to
+# (and never much more than) the grand total — the gap is tax/rounding, not
+# the other direction. A badly mis-parsed receipt (missed items, a row's
+# price stolen by the wrong item, etc.) usually shows up as this sum falling
+# far short of the total rather than as a subtly-wrong individual figure, so
+# it's a cheap, general way to catch a failed extraction even when every
+# individual regex matched *something* plausible-looking. Not a tax
+# calculation — just a sanity bound: real receipts commonly land within
+# ~0-15% tax, but a generous floor (0.7) and ceiling (1.05, past which
+# something's double-counted) are used since not every receipt's tax rate or
+# rounding behaviour is known ahead of time.
+def _items_confidence(line_items: list[dict], amount: float | None) -> str:
+    if not amount or amount <= 0 or not line_items:
+        return "low"
+    items_sum = sum(it["price"] for it in line_items)
+    if items_sum <= 0:
+        return "low"
+    ratio = items_sum / amount
+    return "high" if 0.7 <= ratio <= 1.05 else "low"
+
+
 # ─── Stage 3: Post-Processing and Data Structure ────────────────────────────
 def parse_receipt_fields(raw_text: str) -> dict:
     lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
@@ -509,6 +704,7 @@ def parse_receipt_fields(raw_text: str) -> dict:
         "amount": amount,
         "date": receipt_date.isoformat() if receipt_date else None,
         "line_items": line_items,
+        "items_confidence": _items_confidence(line_items, amount),
         "_date_obj": receipt_date,
     }
 
@@ -797,7 +993,24 @@ def _extract_line_items(raw_text: str) -> list[dict]:
     """
     items = []
     pending_names: list[str] = []
+    # Names known to belong to a real catalogued item — their own barcode
+    # was seen and stripped (see `had_barcode_prefix`) — kept separate from
+    # the more speculative `pending_names` (a name-only line that merely
+    # failed to find a nearby price, which can just as easily be a stray
+    # letterhead/tagline word with no real price anywhere). A bare price
+    # line always satisfies this reliable queue first — otherwise a stray
+    # word queued earlier in the document (e.g. a brand tagline like
+    # "WHOLESALE" sitting alone with no price nearby either) would jump the
+    # line ahead of a genuine item and consume its price.
+    pending_barcode_names: list[str] = []
     pending_prices: list[float] = []
+    # Parallel to pending_prices — the real printed quantity for a price
+    # queued from a numbers-row (_ALL_NUMBERS_ROW), or None when a queued
+    # price came from a layout with no qty column of its own (e.g. a bare
+    # price line), so the default-to-1 behaviour in _emit still applies.
+    # Always appended/popped in lockstep with pending_prices so the two
+    # stay index-aligned.
+    pending_qtys: list[int | None] = []
     past_totals = False
     # Set once the table's own "QTY ITEM ... TOTAL" column-header row is seen —
     # a stronger, earlier signal that we're inside the itemised list than
@@ -885,7 +1098,9 @@ def _extract_line_items(raw_text: str) -> list[dict]:
                 # wrongly claimed by the first genuine bare price line inside
                 # the table.
                 pending_names.clear()
+                pending_barcode_names.clear()
                 pending_prices.clear()
+                pending_qtys.clear()
                 pending_qty = None
                 pending_wrapped_name = None
                 seen_header = True
@@ -893,7 +1108,9 @@ def _extract_line_items(raw_text: str) -> list[dict]:
                 # Past the itemised list now — any names/prices still waiting
                 # are unrecoverable; don't let them pair with a totals figure.
                 pending_names.clear()
+                pending_barcode_names.clear()
                 pending_prices.clear()
+                pending_qtys.clear()
                 pending_qty = None
                 pending_wrapped_name = None
                 past_totals = True
@@ -924,6 +1141,34 @@ def _extract_line_items(raw_text: str) -> list[dict]:
         if qty_prefix:
             line = qty_prefix.group(2)
 
+        # A long barcode/SKU number (5+ digits) glued as a bare prefix before
+        # the item's own name on its own line — e.g. Parkson's "438049 ALAIN
+        # DELON BRIEF -" — carries no information useful to the user and,
+        # unlike the 1-3 digit QUANTITY prefix stripped above, doesn't fit
+        # any layout's name grammar at all as a bare digit-run, so the whole
+        # line would otherwise never match anything and the item is silently
+        # dropped entirely.
+        # Guarded against a headerless numbers-row (_ALL_NUMBERS_ROW) whose
+        # QTY column got misread as a single stray letter, e.g. "9557546953990
+        # f 0.85 0.00 0.85 *" — without this guard that single letter looks
+        # exactly like a name starting after the barcode, stripping it down to
+        # "f 0.85 0.00 0.85 *", which then matches NEITHER pattern and silently
+        # loses the row's price. The item name on the next line then finds no
+        # price waiting for it, steals the *following* item's price via its
+        # forward lookahead instead, and every item after that shifts by one.
+        # An optional single tax-flag letter (e.g. "E"/"A") is tolerated
+        # before the barcode too — a US-retail-style receipt (Costco) prints
+        # one immediately to the left of every item's own barcode+name row.
+        # The name itself may start with a digit-run+letter token (e.g.
+        # "18CT" in "18CT EGGS") as well as a plain letter/CJK — same
+        # allowance as _NAME_ONLY's first token, for the same reason.
+        barcode_prefix = re.match(
+            rf"^(?:[A-Za-z]\s+)?\d{{5,}}\s+((?:[A-Za-z{_CJK}]|\d+[A-Za-z]).*)$", line
+        )
+        had_barcode_prefix = bool(barcode_prefix) and not _ALL_NUMBERS_ROW.match(line)
+        if had_barcode_prefix:
+            line = barcode_prefix.group(1)
+
         # A leading "-"/"•" bullet, "*" add-on marker (Chinese receipts prefix
         # a modifier line like "* 加鸡蛋" this way), or "N." menu-numbering
         # prefix (e.g. "1.冬菇肉碎老鼠粉（小）") on an item-description line —
@@ -948,9 +1193,11 @@ def _extract_line_items(raw_text: str) -> list[dict]:
         # happened to be queued first.
         an = _ALL_NUMBERS_ROW.match(line)
         if an:
-            price = float(an.group(1).replace(",", "."))
+            qty_str = an.group(1)
+            price = float(an.group(2).replace(",", "."))
             if price > 0 and not past_totals:
                 pending_prices.append(price)
+                pending_qtys.append(int(qty_str) if qty_str.isdigit() else 1)
             i += 1
             continue
 
@@ -1012,6 +1259,7 @@ def _extract_line_items(raw_text: str) -> list[dict]:
                 # it before this name ever gets its rightful match.
                 if pending_prices:
                     price = pending_prices.pop(0)
+                    row_qty = pending_qtys.pop(0)
                     full_name = name
                     consumed = 1
                     if i + 1 < len(lines):
@@ -1030,8 +1278,26 @@ def _extract_line_items(raw_text: str) -> list[dict]:
                                 and _NAME_ONLY.match(cont)):
                             full_name = f"{full_name} {cont}"
                             consumed = 2
-                    _emit(full_name, price, line_qty)
+                    _emit(full_name, price, line_qty if line_qty is not None else row_qty)
                     i += consumed
+                    continue
+                if had_barcode_prefix:
+                    # This name's own barcode was just stripped off the same
+                    # line, so it's definitely a distinct catalogued item —
+                    # never a same-item wrap fragment, and never worth a
+                    # speculative peek at nearby lines for its price. That
+                    # peek is exactly wrong on a reconstructed two-column
+                    # table (see _split_price_column): every name from that
+                    # region is followed immediately by OTHER names, then
+                    # much later by the whole price column, so the "next few
+                    # lines" a normal lookahead checks belong to different
+                    # items entirely — the closest one being the following
+                    # name, not this item's own price. Queue it (in the
+                    # barcode-confirmed queue, not the speculative one — see
+                    # its declaration) and let Layout 4b's unlimited-distance
+                    # FIFO match the right price whenever it actually appears.
+                    pending_barcode_names.append(name)
+                    i += 1
                     continue
                 price_found = False
                 broke_on_name = False
@@ -1129,7 +1395,8 @@ def _extract_line_items(raw_text: str) -> list[dict]:
                     if not broke_on_name:
                         if pending_prices:
                             # An earlier unclaimed bare price (inverted layout) claims it.
-                            _emit(name, pending_prices.pop(0), line_qty)
+                            row_qty = pending_qtys.pop(0)
+                            _emit(name, pending_prices.pop(0), line_qty if line_qty is not None else row_qty)
                         else:
                             # Price wasn't nearby — defer and keep scanning forward for it.
                             pending_names.append(name)
@@ -1171,7 +1438,8 @@ def _extract_line_items(raw_text: str) -> list[dict]:
                 continue
             if name and 3 <= len(name) <= 40:
                 if pending_prices:
-                    _emit(name, pending_prices.pop(0), line_qty)
+                    row_qty = pending_qtys.pop(0)
+                    _emit(name, pending_prices.pop(0), line_qty if line_qty is not None else row_qty)
                     i += 1
                     continue
                 pending_names.append(name)
@@ -1192,10 +1460,13 @@ def _extract_line_items(raw_text: str) -> list[dict]:
         if bp:
             price = float(bp.group(1).replace(",", ".").replace(" ", ""))
             if price > 0:
-                if pending_names:
+                if pending_barcode_names:
+                    _emit(pending_barcode_names.pop(0), price)
+                elif pending_names:
                     _emit(pending_names.pop(0), price)
                 elif not past_totals:
                     pending_prices.append(price)
+                    pending_qtys.append(None)
             i += 1
             continue
 
@@ -1225,6 +1496,34 @@ def _extract_line_items(raw_text: str) -> list[dict]:
     return list(merged.values())
 
 
+# A phone camera commonly stores a photo in its sensor's native orientation
+# and records how to rotate it for display as an EXIF "Orientation" tag,
+# rather than physically rotating the pixel data — a viewer that honours
+# that tag renders it upright, but Vision's own decoder doesn't reliably
+# apply it every time (confirmed: the exact same receipt, rescanned,
+# sometimes comes back as an unreadable scramble of disconnected text
+# fragments — the same failure mode as genuinely feeding it a sideways
+# image). Baking the rotation into the pixels here removes that ambiguity
+# regardless of how Vision's decoder happens to behave on a given request.
+def _normalize_orientation(image_bytes: bytes) -> bytes:
+    from PIL import Image, ImageOps
+
+    try:
+        image = Image.open(io.BytesIO(image_bytes))
+        transposed = ImageOps.exif_transpose(image)
+        if transposed is image:
+            # No orientation tag, or already upright — skip the lossy
+            # re-encode and hand back the original bytes untouched.
+            return image_bytes
+        out = io.BytesIO()
+        transposed.save(out, format=image.format or "JPEG")
+        return out.getvalue()
+    except Exception:
+        # Anything unreadable as an image here still gets a shot at Vision
+        # as-is, rather than failing the whole request outright.
+        return image_bytes
+
+
 # ─── Orchestration: runs all stages ─────────────────────────────────────────
 def process_receipt(filename: str, file_size_bytes: int, image_bytes: bytes) -> dict:
     validate_image(filename, file_size_bytes)
@@ -1233,6 +1532,8 @@ def process_receipt(filename: str, file_size_bytes: int, image_bytes: bytes) -> 
     extension = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
     if extension == "pdf":
         image_bytes = _pdf_to_image_bytes(image_bytes)
+    else:
+        image_bytes = _normalize_orientation(image_bytes)
 
     raw_text = extract_text(image_bytes)
     parsed = parse_receipt_fields(raw_text)
@@ -1289,5 +1590,6 @@ def process_receipt(filename: str, file_size_bytes: int, image_bytes: bytes) -> 
         "suggested_category_name": receipt_category["category_name"],
         "suggested_category_confidence": receipt_category["confidence"],
         "date_confidence": "high" if parsed["date"] else "low",
+        "items_confidence": parsed["items_confidence"],
         "warranty": warranty_info,
     }
