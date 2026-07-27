@@ -51,9 +51,17 @@ class _ReceiptPickerScreenState extends State<ReceiptPickerScreen> {
       });
       return;
     }
+    // Without an explicit sort order, photo_manager doesn't guarantee
+    // newest-first results (on Android it can fall back to raw MediaStore
+    // row order) — since only the first 30 results are ever fetched below,
+    // an unspecified order can silently exclude the most recently
+    // saved/screenshotted photos from the grid entirely.
     final albums = await PhotoManager.getAssetPathList(
       type: RequestType.image,
       onlyAll: true,
+      filterOption: FilterOptionGroup(
+        orders: [const OrderOption(type: OrderOptionType.createDate, asc: false)],
+      ),
     );
     if (albums.isEmpty) {
       setState(() => _loadingGallery = false);

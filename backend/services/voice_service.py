@@ -66,7 +66,28 @@ _VENDOR_AT_PATTERN = re.compile(
 # whatever text is left after the amount and vendor have been removed — e.g.
 # "I spent  on lunch at " (KFC already removed) -> "lunch".
 _FILLER_WORDS = re.compile(
-    r"\b(?:i|spent|bought|on|for|at|to|today|yesterday)\b", re.IGNORECASE
+    r"\b(?:i|spent|bought|on|for|at|to|in|today|yesterday)\b", re.IGNORECASE
+)
+
+# A bare small number right before the item description (e.g. "I bought 2
+# pants", "2 tickets to KLCC") is the purchase quantity — distinct from the
+# amount, which is already matched separately via a currency word/RM prefix
+# elsewhere in the sentence. Only matches right after an optional purchase
+# verb at the very START of the remaining text (after the amount's own span
+# is already removed), so a stray unrelated number later in the sentence
+# can't be misread as a quantity.
+_QUANTITY_PATTERN = re.compile(
+    r"^\s*(?:i\s+)?(?:bought|got|purchased|ordered)?\s*(\d{1,3})\s+(?=[A-Za-z])",
+    re.IGNORECASE,
+)
+
+# "RM 40 each"/"RM 40 per item"/"RM 40 a piece" all mean the spoken amount is
+# a PER-UNIT rate, not the total charged — the total (what "price" represents
+# everywhere else in this app, e.g. OCR's "2 pc @ 2.50" storing price 5.00,
+# not 2.50) is amount x quantity, computed once a quantity is known rather
+# than leaving a misleadingly-small per-unit figure as the line's price.
+_PER_UNIT_MARKER = re.compile(
+    r"\b(?:each|per\s*(?:item|unit|piece)?|a\s*piece)\b", re.IGNORECASE
 )
 
 # Known merchant/brand names — the fallback for phrasings with no "at X" or
@@ -237,6 +258,24 @@ def _parse_segment(text: str) -> dict | None:
     if amount is None:
         return None
     remainder = text[:amount_span[0]] + text[amount_span[1]:]
+
+    # A bare number right before the description (e.g. "bought 2 pants") is
+    # the quantity — pull it out before vendor/description extraction so it
+    # can't be mistaken for part of the item name.
+    quantity = 1
+    qty_match = _QUANTITY_PATTERN.match(remainder)
+    if qty_match:
+        quantity = int(qty_match.group(1))
+        remainder = remainder[:qty_match.start(1)] + remainder[qty_match.end(1):]
+
+    # "RM 40 each" means 40 is a PER-UNIT rate, not the line's total — scale
+    # it up to match how every other item in this app stores price (the
+    # charged total, not a per-unit figure), and drop the marker word so it
+    # doesn't linger in the item name.
+    if _PER_UNIT_MARKER.search(remainder):
+        amount = round(amount * quantity, 2)
+        remainder = _PER_UNIT_MARKER.sub("", remainder)
+
     found = _extract_vendor(text) or _match_known_vendor(remainder)
     vendor_raw, vendor = found if found else (None, None)
     description = _extract_description(remainder, vendor_raw) or vendor or text.strip()
@@ -247,6 +286,7 @@ def _parse_segment(text: str) -> dict | None:
     return {
         "vendor": vendor,
         "amount": amount,
+        "quantity": quantity,
         "item_name": description,
         "category_id": category["category_id"],
         "category_name": category["category_name"],
@@ -276,7 +316,7 @@ def parse_voice_expense(transcript: str) -> dict:
         {
             "item_name": p["item_name"],
             "price": p["amount"],
-            "quantity": 1,
+            "quantity": p["quantity"],
             "category_id": p["category_id"],
             "category_name": p["category_name"],
         }
