@@ -57,6 +57,7 @@ class OcrResult {
   String? suggestedCategoryConfidence; // "high" | "low"
   String? dateConfidence; // "high" | "low"
   String? itemsConfidence; // "high" | "low" — line items summing close to the total
+  String? extractionMethod; // "regex" | "gemini_fallback"
   WarrantyInfo? warranty;
 
   OcrResult({
@@ -70,6 +71,7 @@ class OcrResult {
     this.suggestedCategoryConfidence,
     this.dateConfidence,
     this.itemsConfidence,
+    this.extractionMethod,
     this.warranty,
   });
 
@@ -89,6 +91,7 @@ class OcrResult {
       suggestedCategoryConfidence: json['suggested_category_confidence'] as String?,
       dateConfidence: json['date_confidence'] as String?,
       itemsConfidence: json['items_confidence'] as String?,
+      extractionMethod: json['extraction_method'] as String?,
       warranty: warrantyJson != null ? WarrantyInfo.fromJson(warrantyJson) : null,
     );
   }

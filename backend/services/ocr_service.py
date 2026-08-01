@@ -23,6 +23,16 @@ from services.warranty_service import detect_warranty
 
 GOOGLE_VISION_API_KEY = os.environ.get("GOOGLE_VISION_API_KEY", "")
 
+# Deliberately a SEPARATE key from the Flutter app's own GEMINI_API_KEY (in
+# the project-root .env, used by the AI Advisor) — a dedicated backend key
+# keeps the two features from competing for the same free-tier rate-limit
+# pool, especially during a live demo. Add it to backend/.env; there's no
+# backend/.env.example yet to update. If unset, the Gemini fallback below is
+# silently skipped (same graceful-no-op philosophy as the Dart-side
+# GeminiService's own empty-key check).
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+GEMINI_MODEL = "gemini-3.5-flash"  # matches the model already used by gemini_service.dart
+
 ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "pdf"}
 MAX_FILE_SIZE_MB = 10
 
@@ -514,6 +524,18 @@ _TOTALS_LABEL = re.compile(
     r"^(sub[\s\-]?total|total|tax|amount\s*due|balance\s*due)$", re.IGNORECASE
 )
 
+# A synthetic line inserted between the left (name) and right (price) blocks
+# by _split_price_column — never real receipt text, so it can't collide with
+# anything Vision would actually produce. Exists purely as a hard stop for
+# the item parser's forward lookahead: a name near the end of the left block
+# has fewer real left-column lines left before the price block starts than
+# its lookahead window is wide, so without an explicit boundary it can reach
+# straight across into the price block and grab the FIRST unrelated price
+# there instead of correctly deferring (confirmed: "ECO HALF PAN" — 3 lines
+# from the boundary — stole "23.99", the true first item's price, via a
+# 4-line lookahead that crossed straight over the boundary).
+_PRICE_COLUMN_BOUNDARY = "\x00SPLIT_PRICE_COLUMN_BOUNDARY\x00"
+
 
 def _split_price_column(words: list[tuple]) -> list[list[tuple]]:
     """Detects a wide item table whose price column sits far enough to the
@@ -600,6 +622,44 @@ def _split_price_column(words: list[tuple]) -> list[list[tuple]]:
     if barcode_count < 3:
         return _cluster_rows(words)
 
+    # Having barcodes isn't itself proof of the misalignment this function
+    # exists to fix — a Malaysian tax invoice's "numbers-row-then-name"
+    # layout (barcode + qty + unit-price + amount ALL on one printed row,
+    # the item's own name on a SEPARATE bulleted row below it) also has one
+    # barcode per item, but each row's price is already correctly attached
+    # to its own barcode under plain Y clustering — there's no cross-column
+    # drift there to begin with, because it was never really a two-column
+    # table (name and price were never on the same physical row in the
+    # first place). Splitting it anyway doesn't fix anything and actively
+    # breaks it: the price gets sliced away from its own barcode row, and a
+    # wrapped item name can get torn apart if part of it lands past the
+    # column boundary (confirmed on a real TED HENG receipt: split
+    # incorrectly triggered — barcode-count alone was satisfied — and an
+    # item's price vanished while a fragment of another item's wrapped name
+    # landed in the price column).
+    #
+    # Detected by re-clustering the table region with the ORIGINAL,
+    # unsplit algorithm and checking whether each price's own row already
+    # matches _ALL_NUMBERS_ROW (a bare "barcode qty ... amount" row with no
+    # real name text in it — Costco-style misaligned rows never match this,
+    # since a real item name's multi-letter words break the pattern; TED
+    # HENG's genuine numbers-rows always do). If most already do, this
+    # table was never actually misaligned — leave it alone.
+    baseline_table_rows = _cluster_rows(table)
+    row_texts = [
+        (row, " ".join(w[4] for w in sorted(row, key=lambda w: w[1])))
+        for row in baseline_table_rows
+    ]
+    already_correct = 0
+    for pd in price_decimals:
+        for row, text in row_texts:
+            if pd in row:
+                if _ALL_NUMBERS_ROW.match(text):
+                    already_correct += 1
+                break
+    if already_correct >= len(price_decimals) * 0.5:
+        return _cluster_rows(words)
+
     # All left-column (name/code) rows first, in top-to-bottom order, then
     # all right-column (price/tax-code) rows — rather than interleaving them
     # by Y position, which is exactly the unreliable comparison this
@@ -609,9 +669,11 @@ def _split_price_column(words: list[tuple]) -> list[list[tuple]]:
     # definitely belonging to its own catalogued item rather than treated as
     # possibly wrapping into the next line — see `had_barcode_prefix` in
     # _extract_line_items.
+    boundary_row = [[(0, 0, 0, 1, _PRICE_COLUMN_BOUNDARY)]]  # one row, one word
     return (
         _cluster_rows(before)
         + _cluster_rows(left_col)
+        + boundary_row
         + _cluster_rows(right_col)
         + _cluster_rows(after)
     )
@@ -666,16 +728,17 @@ def extract_text(image_bytes: bytes) -> str:
 
 
 # A correct extraction's line-item prices should sum to something close to
-# (and never much more than) the grand total — the gap is tax/rounding, not
-# the other direction. A badly mis-parsed receipt (missed items, a row's
-# price stolen by the wrong item, etc.) usually shows up as this sum falling
-# far short of the total rather than as a subtly-wrong individual figure, so
-# it's a cheap, general way to catch a failed extraction even when every
-# individual regex matched *something* plausible-looking. Not a tax
-# calculation — just a sanity bound: real receipts commonly land within
-# ~0-15% tax, but a generous floor (0.7) and ceiling (1.05, past which
-# something's double-counted) are used since not every receipt's tax rate or
-# rounding behaviour is known ahead of time.
+# the grand total — the gap is usually tax (total > items) or a discount/
+# clearance markdown (total < items, e.g. "RTE Clearance 25%" knocking the
+# printed total below the item subtotal — confirmed on a real FamilyMart
+# receipt: items summed to 15.80, printed TOTAL was 14.55 after an -RM1.23
+# discount, a completely correct extraction that the old tighter ceiling
+# wrongly flagged as broken). A badly mis-parsed receipt (missed items, a
+# row's price stolen by the wrong item, etc.) usually shows up as this sum
+# falling far short of the total instead, so the floor (0.7) stays tight —
+# that direction has no legitimate everyday explanation the way a discount
+# does. The ceiling (1.5) is deliberately much more generous than the floor:
+# discounts, unlike tax, can reasonably run into tens of percent.
 def _items_confidence(line_items: list[dict], amount: float | None) -> str:
     if not amount or amount <= 0 or not line_items:
         return "low"
@@ -683,15 +746,19 @@ def _items_confidence(line_items: list[dict], amount: float | None) -> str:
     if items_sum <= 0:
         return "low"
     ratio = items_sum / amount
-    return "high" if 0.7 <= ratio <= 1.05 else "low"
+    return "high" if 0.7 <= ratio <= 1.5 else "low"
 
 
 # ─── Stage 3: Post-Processing and Data Structure ────────────────────────────
 def parse_receipt_fields(raw_text: str) -> dict:
-    lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
+    # _PRICE_COLUMN_BOUNDARY is a synthetic marker _extract_line_items relies
+    # on (see its declaration) — everything else here works off the text a
+    # human would actually expect, with that marker invisible to it.
+    clean_text = raw_text.replace(_PRICE_COLUMN_BOUNDARY, "")
+    lines = [line.strip() for line in clean_text.splitlines() if line.strip()]
 
-    amount = _extract_amount(raw_text)
-    receipt_date = _extract_date(raw_text)
+    amount = _extract_amount(clean_text)
+    receipt_date = _extract_date(clean_text)
     vendor_name = _extract_vendor(lines)
     line_items = _extract_line_items(raw_text)  # FR 4.6
     print("===== EXTRACTED ITEMS =====")
@@ -1071,6 +1138,12 @@ def _extract_line_items(raw_text: str) -> list[dict]:
     i = 0
     while i < len(lines):
         line = lines[i].strip()
+        if line == _PRICE_COLUMN_BOUNDARY:
+            # Purely a marker for the lookahead loop below — never a real
+            # line, skip over it without touching any pending queues (prices
+            # genuinely haven't been reached yet at this point).
+            i += 1
+            continue
         if past_totals:
             # Once we've crossed Sub Total/Total, nothing after it is ever a
             # purchasable item — GST breakdown tables, marketing surveys, and
@@ -1281,30 +1354,24 @@ def _extract_line_items(raw_text: str) -> list[dict]:
                     _emit(full_name, price, line_qty if line_qty is not None else row_qty)
                     i += consumed
                     continue
-                if had_barcode_prefix:
-                    # This name's own barcode was just stripped off the same
-                    # line, so it's definitely a distinct catalogued item —
-                    # never a same-item wrap fragment, and never worth a
-                    # speculative peek at nearby lines for its price. That
-                    # peek is exactly wrong on a reconstructed two-column
-                    # table (see _split_price_column): every name from that
-                    # region is followed immediately by OTHER names, then
-                    # much later by the whole price column, so the "next few
-                    # lines" a normal lookahead checks belong to different
-                    # items entirely — the closest one being the following
-                    # name, not this item's own price. Queue it (in the
-                    # barcode-confirmed queue, not the speculative one — see
-                    # its declaration) and let Layout 4b's unlimited-distance
-                    # FIFO match the right price whenever it actually appears.
-                    pending_barcode_names.append(name)
-                    i += 1
-                    continue
                 price_found = False
                 broke_on_name = False
                 for j in range(i + 1, min(i + 5, len(lines))):
                     ahead = lines[j].strip()
                     if not ahead:
                         continue
+                    if ahead == _PRICE_COLUMN_BOUNDARY:
+                        # Hard stop: the price column genuinely hasn't started
+                        # yet at this point, so nothing beyond this marker
+                        # could possibly be this name's own price — without
+                        # this, a name near the end of the left block (fewer
+                        # real lines left before the boundary than the
+                        # lookahead window is wide) reaches straight across
+                        # into the price block and grabs the FIRST unrelated
+                        # price there instead. Deliberately NOT broke_on_name
+                        # (this isn't "another item's name interrupted us") —
+                        # falls through to the exhausted-lookahead defer path.
+                        break
                     if _is_noise_line(ahead):
                         break
                     # Stop if we hit another standalone item name (next item
@@ -1397,9 +1464,31 @@ def _extract_line_items(raw_text: str) -> list[dict]:
                             # An earlier unclaimed bare price (inverted layout) claims it.
                             row_qty = pending_qtys.pop(0)
                             _emit(name, pending_prices.pop(0), line_qty if line_qty is not None else row_qty)
+                        elif had_barcode_prefix:
+                            # This name's own barcode was just stripped off the
+                            # same line, so it's definitely a distinct
+                            # catalogued item — queue it in the reliable,
+                            # barcode-confirmed queue rather than the
+                            # speculative one, so a later unrelated stray word
+                            # (e.g. a letterhead line that also failed its own
+                            # lookahead) can't jump the line and steal its price.
+                            pending_barcode_names.append(name)
                         else:
                             # Price wasn't nearby — defer and keep scanning forward for it.
                             pending_names.append(name)
+                    elif had_barcode_prefix:
+                        # What looked like a different item's name came next —
+                        # but unlike the generic case below, this name's own
+                        # barcode was already confirmed, so it can't be a
+                        # same-item wrap fragment (a wrap fragment never has
+                        # its own barcode). This is exactly what happens on a
+                        # reconstructed two-column table (see
+                        # _split_price_column): every barcode-confirmed name
+                        # from that region is immediately followed by MORE
+                        # names, not its own price, so the lookahead above
+                        # was never going to find it — defer to the reliable
+                        # queue instead of misfiling it as a wrap fragment.
+                        pending_barcode_names.append(name)
                     else:
                         # Dropped because what looked like a different item's
                         # name/price row came next — but this is often really
@@ -1524,6 +1613,123 @@ def _normalize_orientation(image_bytes: bytes) -> bytes:
         return image_bytes
 
 
+# Structured-output schema for the Gemini fallback below (Gemini's schema
+# format — a Google-specific, upper-cased subset of OpenAPI, NOT the same
+# casing as JSON Schema). Requesting responseMimeType "application/json"
+# against this schema, rather than free-form prose, means the response is
+# reliably parseable JSON with no markdown-fence stripping or ad-hoc regex
+# needed — appropriate here specifically because this call's whole purpose
+# is structured extraction, unlike gemini_service.dart's prose-advice calls.
+_GEMINI_RECEIPT_SCHEMA = {
+    "type": "OBJECT",
+    "properties": {
+        "vendor_name": {"type": "STRING"},
+        "date": {"type": "STRING", "description": "ISO 8601 date, YYYY-MM-DD"},
+        "total": {"type": "NUMBER"},
+        "line_items": {
+            "type": "ARRAY",
+            "items": {
+                "type": "OBJECT",
+                "properties": {
+                    "item_name": {"type": "STRING"},
+                    "quantity": {"type": "INTEGER"},
+                    "price": {"type": "NUMBER"},
+                },
+                "required": ["item_name", "price"],
+            },
+        },
+    },
+    "required": ["line_items"],
+}
+
+_GEMINI_RECEIPT_PROMPT = """You are reading a photo of a purchase receipt. Extract the following as JSON matching the given schema:
+
+- vendor_name: the store/merchant name
+- date: the receipt's date, in YYYY-MM-DD format
+- total: the final grand total actually charged (after tax, not the subtotal)
+- line_items: each individual purchased item, with:
+  - item_name: the product/item description as printed
+  - quantity: the number of units purchased (use 1 if not shown separately)
+  - price: the TOTAL charged for that line (quantity x unit price), not a per-unit rate
+
+Read the receipt's actual column layout carefully — an item's name and its price may be printed on the same physical row, or wrap across nearby rows, depending on how this particular receipt is laid out. Do not guess or invent items that aren't printed. If a value truly isn't legible, omit it rather than fabricating one."""
+
+
+# Called only when the regex-based extraction above looks unreliable (see
+# `items_confidence` in parse_receipt_fields) — sent the ORIGINAL PHOTO, not
+# the already-reconstructed OCR text, so it can bypass whatever reading-order
+# mistake caused the low-confidence result in the first place, rather than
+# re-parsing the same already-scrambled text a second time. Never raises: on
+# any failure (no key configured, network error, malformed response) this
+# returns None and the caller keeps the original regex result — the same
+# graceful-degradation philosophy already used by gemini_service.dart on the
+# Dart side and by _normalize_orientation just above.
+def _gemini_fallback_extract(image_bytes: bytes) -> dict | None:
+    if not GEMINI_API_KEY:
+        return None
+
+    from PIL import Image
+
+    try:
+        image_format = (Image.open(io.BytesIO(image_bytes)).format or "JPEG").upper()
+    except Exception:
+        image_format = "JPEG"
+    mime_type = "image/png" if image_format == "PNG" else "image/jpeg"
+
+    payload = json.dumps({
+        "contents": [{
+            "parts": [
+                {"inline_data": {"mime_type": mime_type, "data": base64.b64encode(image_bytes).decode()}},
+                {"text": _GEMINI_RECEIPT_PROMPT},
+            ],
+        }],
+        "generationConfig": {
+            "temperature": 0.1,
+            "maxOutputTokens": 2048,
+            "responseMimeType": "application/json",
+            "responseSchema": _GEMINI_RECEIPT_SCHEMA,
+        },
+    }).encode()
+
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
+    req = urllib.request.Request(
+        url, data=payload,
+        headers={"Content-Type": "application/json", "x-goog-api-key": GEMINI_API_KEY},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            result = json.loads(resp.read())
+        text = result["candidates"][0]["content"]["parts"][0]["text"]
+        extracted = json.loads(text)
+        line_items = extracted.get("line_items")
+        if not isinstance(line_items, list) or not line_items:
+            return None
+        clean_items = []
+        for it in line_items:
+            name = str(it.get("item_name", "")).strip()
+            price = it.get("price")
+            if not name or not isinstance(price, (int, float)) or price <= 0:
+                continue
+            qty = it.get("quantity")
+            clean_items.append({
+                "item_name": name,
+                "price": float(price),
+                "quantity": int(qty) if isinstance(qty, (int, float)) and qty >= 1 else 1,
+            })
+        if not clean_items:
+            return None
+        print(f"===== GEMINI FALLBACK: {len(clean_items)} item(s) extracted =====")
+        return {
+            "vendor_name": extracted.get("vendor_name"),
+            "date": extracted.get("date"),
+            "total": extracted.get("total"),
+            "line_items": clean_items,
+        }
+    except Exception as e:
+        print(f"Gemini fallback failed, keeping regex result: {e}")
+        return None
+
+
 # ─── Orchestration: runs all stages ─────────────────────────────────────────
 def process_receipt(filename: str, file_size_bytes: int, image_bytes: bytes) -> dict:
     validate_image(filename, file_size_bytes)
@@ -1537,6 +1743,32 @@ def process_receipt(filename: str, file_size_bytes: int, image_bytes: bytes) -> 
 
     raw_text = extract_text(image_bytes)
     parsed = parse_receipt_fields(raw_text)
+
+    # Hybrid extraction, step 2: regex already ran above (fast, free, handles
+    # the common case). If it looks unreliable, fall back to Gemini reading
+    # the actual photo — see _gemini_fallback_extract's own docstring for why
+    # that's the photo and not the OCR text. Checked BEFORE the "not a
+    # receipt" rejection below (not after) so a receipt regex found zero
+    # items on — including because it found no date either — still gets a
+    # chance at Gemini rescuing it; a genuinely non-receipt photo just costs
+    # one harmless wasted call (_gemini_fallback_extract returns None when
+    # it can't find real items either) and still gets correctly rejected.
+    extraction_method = "regex"
+    if parsed["items_confidence"] == "low":
+        fallback = _gemini_fallback_extract(image_bytes)
+        if fallback and fallback.get("line_items"):
+            parsed["vendor_name"] = fallback.get("vendor_name") or parsed["vendor_name"]
+            parsed["amount"] = fallback.get("total") or parsed["amount"]
+            fallback_date = fallback.get("date")
+            if fallback_date:
+                try:
+                    parsed["_date_obj"] = datetime.strptime(fallback_date, "%Y-%m-%d").date()
+                    parsed["date"] = parsed["_date_obj"].isoformat()
+                except ValueError:
+                    pass  # unparseable — keep regex's own date, if any
+            parsed["line_items"] = fallback["line_items"]
+            parsed["items_confidence"] = _items_confidence(parsed["line_items"], parsed["amount"])
+            extraction_method = "gemini_fallback"
 
     # Vision succeeds at "finding text" on ANY text-heavy photo — a
     # screenshot of an unrelated app screen, a document, a poster — not just
@@ -1584,12 +1816,13 @@ def process_receipt(filename: str, file_size_bytes: int, image_bytes: bytes) -> 
         "vendor_name": parsed["vendor_name"],
         "amount": parsed["amount"],                     # FR 4.10: receipt total summary
         "date": parsed["date"],
-        "raw_text": raw_text,
+        "raw_text": raw_text.replace(_PRICE_COLUMN_BOUNDARY, ""),
         "line_items": line_items_with_categories,       # FR 4.6, 4.7, 4.8, 4.9
         "suggested_category_id": receipt_category["category_id"],
         "suggested_category_name": receipt_category["category_name"],
         "suggested_category_confidence": receipt_category["confidence"],
         "date_confidence": "high" if parsed["date"] else "low",
         "items_confidence": parsed["items_confidence"],
+        "extraction_method": extraction_method,          # "regex" | "gemini_fallback"
         "warranty": warranty_info,
     }

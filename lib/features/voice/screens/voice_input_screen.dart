@@ -1,14 +1,17 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:record/record.dart';
+import 'package:flutter_tts/flutter_tts.dart';
 import 'package:path_provider/path_provider.dart';
 import '../../../shared/theme/app_colors.dart';
 import '../../ocr/screens/receipt_review_screen.dart';
 import '../services/voice_api_service.dart';
 
-/// A few canned phrases the "Demo" button cycles through — lets the feature
-/// be shown end-to-end when the mic/network isn't available (e.g. during a
-/// live demo), and doubles as the FR 5.12/5.13 fallback path.
+/// A few canned phrases the "Demo" button speaks aloud (cycling through them
+/// on each tap) as a guide for how to phrase a voice entry — purely a
+/// narrated example, it does NOT fill the transcript or submit anything.
+/// The no-mic fallback (FR 5.12/5.13) is the always-editable transcript box
+/// below: a user can type their entry directly and press Continue.
 const _demoPhrases = [
   'I spent RM 25 on lunch at KFC',
   'RM 12.50 for Grab to KLCC today',
@@ -30,11 +33,17 @@ class _VoiceInputScreenState extends State<VoiceInputScreen>
     with SingleTickerProviderStateMixin {
   final _recorder = AudioRecorder();
   final _transcriptCtrl = TextEditingController();
+  // Narrates the Demo guide phrases (see _runDemo) — entirely separate from
+  // the mic/Whisper pipeline, so a TTS hiccup (missing engine/voice on a
+  // given device) can never break actual voice entry, only silence the
+  // spoken example.
+  final _tts = FlutterTts();
   late final AnimationController _pulseCtrl;
 
   bool _recording = false;
   bool _transcribing = false;
   bool _processing = false;
+  bool _speaking = false;
   int _demoIndex = 0;
   String? _error;
 
@@ -45,6 +54,16 @@ class _VoiceInputScreenState extends State<VoiceInputScreen>
       vsync: this,
       duration: const Duration(seconds: 2),
     )..repeat();
+    // speak()'s own Future isn't a reliable "finished talking" signal on
+    // every platform — these handlers are the actual source of truth for
+    // _speaking, used to keep the Demo button disabled for the phrase's
+    // full duration instead of just its start.
+    _tts.setCompletionHandler(() {
+      if (mounted) setState(() => _speaking = false);
+    });
+    _tts.setErrorHandler((_) {
+      if (mounted) setState(() => _speaking = false);
+    });
   }
 
   @override
@@ -52,6 +71,7 @@ class _VoiceInputScreenState extends State<VoiceInputScreen>
     _pulseCtrl.dispose();
     _transcriptCtrl.dispose();
     _recorder.dispose();
+    _tts.stop();
     super.dispose();
   }
 
@@ -69,7 +89,7 @@ class _VoiceInputScreenState extends State<VoiceInputScreen>
 
     if (!await _recorder.hasPermission()) {
       setState(() => _error =
-          'Microphone permission was denied — try the Demo button instead, or type in the box below.');
+          'Microphone permission was denied — type your expense in the box below instead.');
       return;
     }
 
@@ -98,7 +118,7 @@ class _VoiceInputScreenState extends State<VoiceInputScreen>
     try {
       // A hung native stop() must not be able to strand the user here
       // forever (FR 5.12/5.13) — give up after 10s and surface it as a
-      // failed recording so they can immediately retry or use Demo.
+      // failed recording so they can immediately retry or type it instead.
       path = await _recorder.stop().timeout(const Duration(seconds: 10));
     } catch (_) {
       path = null;
@@ -109,7 +129,7 @@ class _VoiceInputScreenState extends State<VoiceInputScreen>
       setState(() {
         _transcribing = false;
         _error =
-            'Recording failed — try the Demo button instead, or type in the box below.';
+            'Recording failed — try again, or type your expense in the box below.';
       });
       return;
     }
@@ -128,13 +148,45 @@ class _VoiceInputScreenState extends State<VoiceInputScreen>
     }
   }
 
-  void _runDemo() {
+  /// Pure guide/example — speaks a sample phrase aloud so the user hears how
+  /// to phrase their own entry. Deliberately does NOT touch the transcript
+  /// or submit anything: the real entry still has to come from the mic (or
+  /// typing), so this can never be mistaken for a way to log a fake expense.
+  /// `_speaking` is cleared by the completion/error handlers registered in
+  /// initState, not here — speak()'s own Future can resolve once playback
+  /// merely *starts* on some platforms, not when it actually finishes.
+  Future<void> _runDemo() async {
+    final phrase = _demoPhrases[_demoIndex % _demoPhrases.length];
     setState(() {
-      _transcriptCtrl.text = _demoPhrases[_demoIndex % _demoPhrases.length];
       _demoIndex++;
       _error = null;
+      _speaking = true;
     });
-    _submit();
+    try {
+      await _tts.speak(phrase);
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _speaking = false;
+          _error = 'Could not play the example — this device may have no '
+              'text-to-speech engine installed, or media volume is muted.';
+        });
+      }
+      return;
+    }
+    // Safety net: setCompletionHandler is unreliable on some devices —
+    // confirmed in testing, it can simply never fire even though the audio
+    // played correctly, so its absence is NOT evidence of a real failure and
+    // must not be reported as an error (a false "something's wrong" banner
+    // after a phrase that played fine is worse than no banner at all — and
+    // a bad look mid-demo). This only exists to stop the button getting
+    // stuck on "Speaking…" forever; it clears _speaking silently.
+    // 4s comfortably covers these phrases' actual speaking time (all under
+    // 10 words, ~2-3s at a normal TTS rate) without leaving the button
+    // stuck disabled long after the audio has actually finished.
+    Future.delayed(const Duration(seconds: 4), () {
+      if (mounted && _speaking) setState(() => _speaking = false);
+    });
   }
 
   /// Stage 3/4 + 5: parses the transcript (description/amount/category) and
@@ -430,7 +482,7 @@ class _VoiceInputScreenState extends State<VoiceInputScreen>
           const SizedBox(width: 12),
           Expanded(
             child: ElevatedButton(
-              onPressed: _busy
+              onPressed: _busy || (!hasTranscript && _speaking)
                   ? null
                   : hasTranscript
                       ? _submit
@@ -449,7 +501,11 @@ class _VoiceInputScreenState extends State<VoiceInputScreen>
                       child: CircularProgressIndicator(
                           strokeWidth: 2, color: Colors.white),
                     )
-                  : Text(hasTranscript ? 'Continue' : '▶ Demo'),
+                  : Text(hasTranscript
+                      ? 'Continue'
+                      : _speaking
+                          ? '🔊 Speaking…'
+                          : '🔊 Hear Example'),
             ),
           ),
         ],

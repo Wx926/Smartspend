@@ -50,6 +50,20 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
   late final TextEditingController _notesCtrl;
   late DateTime _date;
   late List<_EditableItem> _items;
+  /// Tax/discount/rounding that the backend's own extracted total
+  /// (`OcrResult.amount`) accounts for but that never shows up as a
+  /// separate line item — captured once at load time as (backend total −
+  /// sum of the initially-extracted items), so the displayed total isn't
+  /// silently wrong just because tax/discount isn't itself a line item.
+  /// Can be positive (tax/service charge on top of the items) OR negative
+  /// (a discount/clearance markdown below the item subtotal — confirmed on
+  /// a real FamilyMart receipt: items summed to RM15.80, printed TOTAL was
+  /// RM14.55 after a -RM1.23 discount; clamping this to non-negative, as an
+  /// earlier version of this fix did, silently threw the discount away and
+  /// showed RM15.80 again). Stays fixed even as the user edits item prices
+  /// afterward — editing an item's price corrects that item, not the
+  /// receipt's separately-printed tax/discount figure.
+  double _extraCharges = 0.0;
   String? _selectedCategoryId;
   String _selectedCategoryName = 'Others';
   bool _saving = false;
@@ -128,6 +142,13 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
             ),
           )
           .toList();
+      if (result.amount != null) {
+        final itemsSum = _items.fold(
+          0.0,
+          (s, i) => s + (double.tryParse(i.priceCtrl.text) ?? 0),
+        );
+        _extraCharges = result.amount! - itemsSum;
+      }
     } else {
       _items = [
         _EditableItem(
@@ -200,7 +221,8 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
   }
 
   double get _total =>
-      _items.fold(0.0, (s, i) => s + (double.tryParse(i.priceCtrl.text) ?? 0));
+      _items.fold(0.0, (s, i) => s + (double.tryParse(i.priceCtrl.text) ?? 0)) +
+      _extraCharges;
 
   Future<void> _save() async {
     setState(() => _saving = true);
@@ -926,6 +948,37 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
                     ],
                   ),
                 ),
+                if (!_isEditMode && widget.result?.extractionMethod == 'gemini_fallback')
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFEDE7F6),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: const Color(0xFFB39DDB)),
+                      ),
+                      child: const Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Icon(Icons.auto_awesome,
+                              color: Color(0xFF5E35B1), size: 16),
+                          SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              "Re-extracted with AI — the standard reader "
+                              "struggled with this receipt's layout, so Gemini "
+                              "read it directly from the photo instead.",
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Color(0xFF5E35B1),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
                 if (!_isEditMode && widget.result?.itemsConfidence == 'low')
                   Padding(
                     padding: const EdgeInsets.only(top: 8),
