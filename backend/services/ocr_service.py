@@ -739,7 +739,18 @@ def extract_text(image_bytes: bytes) -> str:
 # that direction has no legitimate everyday explanation the way a discount
 # does. The ceiling (1.5) is deliberately much more generous than the floor:
 # discounts, unlike tax, can reasonably run into tens of percent.
-def _items_confidence(line_items: list[dict], amount: float | None) -> str:
+#
+# Shared with voice_service.parse_voice_expense (hence no leading underscore
+# despite being internal to this package) — the same "do the parsed items
+# actually add up" question applies just as much to a voice-parsed entry as
+# an OCR one, and the confidence UI on the Flutter side defaults to treating
+# a MISSING items_confidence field as high/trustworthy rather than low — so
+# leaving it unset for voice results (as it originally was) isn't neutral,
+# it's actively misleading (confirmed: saying "Hello!" with no expense
+# content produced a synthetic RM0.00 placeholder item that still showed a
+# green "HIGH" confidence badge, while every other field on the same result
+# correctly showed LOW for genuinely having nothing to go on).
+def items_confidence(line_items: list[dict], amount: float | None) -> str:
     if not amount or amount <= 0 or not line_items:
         return "low"
     items_sum = sum(it["price"] for it in line_items)
@@ -771,7 +782,7 @@ def parse_receipt_fields(raw_text: str) -> dict:
         "amount": amount,
         "date": receipt_date.isoformat() if receipt_date else None,
         "line_items": line_items,
-        "items_confidence": _items_confidence(line_items, amount),
+        "items_confidence": items_confidence(line_items, amount),
         "_date_obj": receipt_date,
     }
 
@@ -1767,7 +1778,7 @@ def process_receipt(filename: str, file_size_bytes: int, image_bytes: bytes) -> 
                 except ValueError:
                     pass  # unparseable — keep regex's own date, if any
             parsed["line_items"] = fallback["line_items"]
-            parsed["items_confidence"] = _items_confidence(parsed["line_items"], parsed["amount"])
+            parsed["items_confidence"] = items_confidence(parsed["line_items"], parsed["amount"])
             extraction_method = "gemini_fallback"
 
     # Vision succeeds at "finding text" on ANY text-heavy photo — a
