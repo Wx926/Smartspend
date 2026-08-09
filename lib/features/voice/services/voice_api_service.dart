@@ -2,7 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:http/http.dart' as http;
 import '../../ocr/models/ocr_result.dart';
-import '../../../shared/constants/app_constants.dart';
+import '../../../shared/services/backend_connection.dart';
 
 class VoiceApiException implements Exception {
   final String message;
@@ -20,11 +20,21 @@ class VoiceApiService {
   /// the backend, which transcribes it via the WhisperAI API, and returns
   /// the resulting text.
   Future<String> transcribeAudio(File audioFile) async {
-    final uri = Uri.parse('${AppConstants.ocrBackendUrl}/api/transcribe-voice');
-    final request = http.MultipartRequest('POST', uri)
-      ..files.add(await http.MultipartFile.fromPath('audio', audioFile.path));
+    final http.StreamedResponse streamed;
+    try {
+      streamed = await BackendConnection.instance.send(
+        (baseUrl) async {
+          final uri = Uri.parse('$baseUrl/api/transcribe-voice');
+          return http.MultipartRequest('POST', uri)
+            ..files.add(
+                await http.MultipartFile.fromPath('audio', audioFile.path));
+        },
+        timeout: const Duration(seconds: 30),
+      );
+    } on BackendUnreachableException catch (e) {
+      throw VoiceApiException(e.message);
+    }
 
-    final streamed = await request.send().timeout(const Duration(seconds: 30));
     final body = await streamed.stream.bytesToString();
     final json = jsonDecode(body) as Map<String, dynamic>;
 
@@ -41,18 +51,26 @@ class VoiceApiService {
   /// returns (vendor/amount/date/category/line items), so the result can be
   /// reviewed in the same ReceiptReviewScreen.
   Future<OcrResult> parseTranscript(String transcript) async {
-    final uri = Uri.parse('${AppConstants.ocrBackendUrl}/api/parse-voice');
-    final response = await http
-        .post(
-          uri,
-          headers: {'Content-Type': 'application/json'},
-          body: jsonEncode({'transcript': transcript}),
-        )
-        .timeout(const Duration(seconds: 15));
+    final http.StreamedResponse streamed;
+    try {
+      streamed = await BackendConnection.instance.send(
+        (baseUrl) async {
+          final uri = Uri.parse('$baseUrl/api/parse-voice');
+          final request = http.Request('POST', uri);
+          request.headers['Content-Type'] = 'application/json';
+          request.body = jsonEncode({'transcript': transcript});
+          return request;
+        },
+        timeout: const Duration(seconds: 15),
+      );
+    } on BackendUnreachableException catch (e) {
+      throw VoiceApiException(e.message);
+    }
 
-    final json = jsonDecode(response.body) as Map<String, dynamic>;
+    final body = await streamed.stream.bytesToString();
+    final json = jsonDecode(body) as Map<String, dynamic>;
 
-    if (response.statusCode != 200) {
+    if (streamed.statusCode != 200) {
       throw VoiceApiException(json['error'] as String? ?? 'Could not understand that.');
     }
 
