@@ -19,13 +19,18 @@ class VoiceApiService {
   /// Stage 2 (FYP report Ch. 3.1.3): uploads the recorded voice message to
   /// the backend, which transcribes it via the WhisperAI API, and returns
   /// the resulting text.
-  Future<String> transcribeAudio(File audioFile) async {
+  /// [language] is an optional ISO 639-1 hint ('en', 'ms', 'zh') from the
+  /// Profile screen's "Voice input language" setting, or 'auto'/null to let
+  /// Whisper auto-detect — see whisper_service.transcribe_audio's docstring
+  /// for why a mismatched hint degrades accuracy but never errors.
+  Future<String> transcribeAudio(File audioFile, {String? language}) async {
     final http.StreamedResponse streamed;
     try {
       streamed = await BackendConnection.instance.send(
         (baseUrl) async {
           final uri = Uri.parse('$baseUrl/api/transcribe-voice');
           return http.MultipartRequest('POST', uri)
+            ..fields['language'] = language ?? 'auto'
             ..files.add(
                 await http.MultipartFile.fromPath('audio', audioFile.path));
         },

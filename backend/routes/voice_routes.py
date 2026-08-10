@@ -19,8 +19,16 @@ def transcribe_voice():
     if not audio_bytes:
         return jsonify({"error": "Empty audio recording."}), 400
 
+    # Optional language hint from the Profile screen's "Voice input
+    # language" setting — 'auto' (or the field simply being absent, for
+    # older app builds that predate this) maps to None so Whisper
+    # auto-detects exactly as it always did before this setting existed.
+    language = request.form.get("language")
+    if language == "auto" or not language:
+        language = None
+
     try:
-        transcript = transcribe_audio(audio_bytes, file.filename)
+        transcript = transcribe_audio(audio_bytes, file.filename, language=language)
         return jsonify({"transcript": transcript}), 200
 
     except WhisperTranscriptionError as e:

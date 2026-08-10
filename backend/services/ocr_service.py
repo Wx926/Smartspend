@@ -732,13 +732,21 @@ def extract_text(image_bytes: bytes) -> str:
 # clearance markdown (total < items, e.g. "RTE Clearance 25%" knocking the
 # printed total below the item subtotal — confirmed on a real FamilyMart
 # receipt: items summed to 15.80, printed TOTAL was 14.55 after an -RM1.23
-# discount, a completely correct extraction that the old tighter ceiling
-# wrongly flagged as broken). A badly mis-parsed receipt (missed items, a
-# row's price stolen by the wrong item, etc.) usually shows up as this sum
-# falling far short of the total instead, so the floor (0.7) stays tight —
-# that direction has no legitimate everyday explanation the way a discount
-# does. The ceiling (1.5) is deliberately much more generous than the floor:
-# discounts, unlike tax, can reasonably run into tens of percent.
+# discount, ratio 1.086, a completely correct extraction that the old
+# tighter ceiling wrongly flagged as broken). A badly mis-parsed receipt
+# (missed items, a row's price stolen by the wrong item, etc.) usually shows
+# up as this sum falling far short of the total instead, so the floor (0.7)
+# stays tight — that direction has no legitimate everyday explanation the
+# way a discount does. The ceiling only needs enough headroom to clear that
+# confirmed 1.086 case with margin (1.2) — NOT the 1.5 this was briefly
+# widened to: that wide a window let moderately-wrong regex extractions
+# (missing/duplicated items, a stray extra row) slide through as "high"
+# confidence purely by coincidental ratio, silently skipping the Gemini
+# fallback below and quietly regressing accuracy with no visible warning —
+# matches a real regression report: once the ceiling was loosened that far,
+# the "Re-extracted with AI" badge stopped appearing across a retest of
+# receipts that had previously triggered it, and accuracy dropped to ~80-90%
+# (pure regex, uncorrected) with no low-confidence warning either.
 #
 # Shared with voice_service.parse_voice_expense (hence no leading underscore
 # despite being internal to this package) — the same "do the parsed items
@@ -757,7 +765,7 @@ def items_confidence(line_items: list[dict], amount: float | None) -> str:
     if items_sum <= 0:
         return "low"
     ratio = items_sum / amount
-    return "high" if 0.7 <= ratio <= 1.5 else "low"
+    return "high" if 0.7 <= ratio <= 1.2 else "low"
 
 
 # ─── Stage 3: Post-Processing and Data Structure ────────────────────────────
