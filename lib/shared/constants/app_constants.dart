@@ -13,8 +13,17 @@ class AppConstants {
 
   // Location tracking (Algorithm 1)
   static const double geofenceRadiusMeters = 100.0;
-  static const int dwellTimeMinutes = 1;
+  static const int dwellTimeMinutes = 15; // should be 15 (15 minutes, spec value) — shortened 1 for easy testing
   static const int locationIntervalSeconds = 30;
+
+  // Routine location learning - a visit this long, repeated on this many
+  // distinct days, is treated as a candidate Home/Work location
+  static const int routineMinDwellMinutes = 60;
+  static const int routineMinDistinctDays = 3;
+
+  // Spending habit detection (derived from expense history, not GPS)
+  static const int habitMinOccurrences = 3;
+  static const int habitLookbackWeeks = 8;
 
   // Budget alert thresholds (Algorithm 2 & 3)
   static const double yellowThreshold = 0.80;
@@ -22,10 +31,11 @@ class AppConstants {
 
   // Algorithm 3 Step 1/7: per-venue cooldown between repeat alerts, and a
   // hard daily cap so a long stay at one place can't spam indefinitely.
-  static const double alertCooldownHours = 0.025;
-  static const int maxAlertsPerVenuePerDay = 100;
+  static const double alertCooldownHours = 2; // should be 2 (2 hours, spec value) — 0.25 shortened for easy testing
+  static const int maxAlertsPerVenuePerDay = 5; //should be 5 (min 5times per 24hour)100
 
   static const String appName = 'SmartSpend';
+
 
   // Category IDs used to tag internal money movement (wallet-to-wallet,
   // wallet-to-savings-goal, wallet-to-loan) that must never be counted as
