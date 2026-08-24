@@ -7,6 +7,7 @@ import 'package:pdfx/pdfx.dart';
 import 'package:uuid/uuid.dart';
 import '../../../shared/theme/app_colors.dart';
 import '../../../shared/models/budget_model.dart';
+import '../../../shared/models/category_model.dart';
 import '../../../shared/models/expense_model.dart';
 import '../../../shared/services/supabase_service.dart';
 import '../../../features/auth/providers/auth_provider.dart';
@@ -111,6 +112,10 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
           priceCtrl: TextEditingController(text: e.amount.toStringAsFixed(2)),
           qtyCtrl: TextEditingController(text: '${parsed.quantity}'),
           originalId: e.id,
+          // Each saved row already carries its own category — reopening an
+          // edit must not collapse a multi-category batch back down to a
+          // single shared category (FR 4.8).
+          categoryId: e.categoryId,
         );
       }).toList();
       _notesCtrl = TextEditingController(text: sharedNotes);
@@ -139,6 +144,13 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
                 text: li.price.toStringAsFixed(2),
               ),
               qtyCtrl: TextEditingController(text: '${li.quantity}'),
+              // The backend already computed a per-line-item category (OCR
+              // and voice both share the same categorisation logic) — carry
+              // it through instead of collapsing every item to one shared
+              // category, so a single voice/receipt input spanning several
+              // categories (e.g. "KFC RM20, GSC cinema RM30") saves each
+              // item under its own category (FR 4.8).
+              categoryId: li.categoryId,
             ),
           )
           .toList();
@@ -156,6 +168,7 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
           priceCtrl: TextEditingController(
             text: (result.amount ?? 0.0).toStringAsFixed(2),
           ),
+          categoryId: result.suggestedCategoryId,
         ),
       ];
     }
@@ -368,10 +381,14 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
       // screen uses — writing straight to Supabase here (as before) left
       // the record orphaned from the app's own Transactions/Budget views,
       // which read from local storage.
+      // Each item saves under its OWN category (FR 4.8) — falling back to
+      // the screen's overall selected category only for a row that never
+      // got one of its own (e.g. a manually added blank row).
+      final itemCatId = item.categoryId ?? catId;
       final saved = needsWarranty && firstExpenseId == null
           ? await expenseProvider.addExpenseSynced(
               userId: uid,
-              categoryId: catId,
+              categoryId: itemCatId,
               amount: price,
               description: _describeItem(item, qty, notes),
               date: _date,
@@ -382,7 +399,7 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
             )
           : await expenseProvider.addExpense(
               userId: uid,
-              categoryId: catId,
+              categoryId: itemCatId,
               amount: price,
               description: _describeItem(item, qty, notes),
               date: _date,
@@ -423,13 +440,16 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
       if (price <= 0) continue;
       final qty = int.tryParse(item.qtyCtrl.text) ?? 1;
       final desc = _describeItem(item, qty, notes);
+      // Each item keeps its OWN category (FR 4.8) rather than being
+      // overwritten by the screen's single overall category on every edit.
+      final itemCatId = item.categoryId ?? catId;
 
       if (item.originalId != null) {
         presentOriginalIds.add(item.originalId!);
         final base = original.firstWhere((e) => e.id == item.originalId);
         await expenseProvider.updateExpense(
           base.copyWith(
-            categoryId: catId,
+            categoryId: itemCatId,
             amount: price,
             description: desc,
             date: _date,
@@ -439,7 +459,7 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
       } else {
         await expenseProvider.addExpense(
           userId: uid,
-          categoryId: catId,
+          categoryId: itemCatId,
           amount: price,
           description: desc,
           date: _date,
@@ -1047,6 +1067,7 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
                                 _EditableItem(
                                   nameCtrl: TextEditingController(),
                                   priceCtrl: TextEditingController(),
+                                  categoryId: _selectedCategoryId,
                                 ),
                               ),
                             ),
@@ -1111,6 +1132,7 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
                       for (int i = 0; i < _items.length; i++) ...[
                         _ItemRow(
                           item: _items[i],
+                          categories: categories,
                           onDelete: _items.length > 1
                               ? () => setState(() {
                                   _items[i].nameCtrl.dispose();
@@ -1120,6 +1142,8 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
                                 })
                               : null,
                           onChanged: () => setState(() {}),
+                          onCategoryChanged: (id) =>
+                              setState(() => _items[i].categoryId = id),
                         ),
                         if (i < _items.length - 1)
                           const Divider(height: 1, color: Color(0xFFF0F0F0)),
@@ -1223,12 +1247,23 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       const Text(
-                        'Category',
+                        'Default Category',
                         style: TextStyle(
                           fontWeight: FontWeight.w600,
                           fontSize: 14,
                         ),
                       ),
+                      if (_items.length > 1) ...[
+                        const SizedBox(height: 2),
+                        const Text(
+                          'Applies to all items below — tap an item to '
+                          'set its own category instead.',
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: Color(0xFF888888),
+                          ),
+                        ),
+                      ],
                       const SizedBox(height: 10),
                       if (categories.isEmpty)
                         const Text(
@@ -1252,6 +1287,14 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
                               onTap: () => setState(() {
                                 _selectedCategoryId = cat.id;
                                 _selectedCategoryName = cat.name;
+                                // Bulk-apply as the default for every item —
+                                // still overridable per item via the badge
+                                // on each row (FR 4.8), so this stays a
+                                // convenient default rather than forcing one
+                                // category on a multi-category entry.
+                                for (final item in _items) {
+                                  item.categoryId = cat.id;
+                                }
                               }),
                               child: Container(
                                 padding: const EdgeInsets.symmetric(
@@ -1569,6 +1612,16 @@ class _EditableItem {
   /// mode) — null for a freshly-scanned or manually added row.
   final String? originalId;
 
+  /// This item's OWN category — each line item is independently
+  /// categorised (FR 4.8), rather than every item in a multi-item
+  /// receipt/voice entry sharing one overall category. Defaults to
+  /// whatever the backend's rule-based categoriser assigned this specific
+  /// item (see OcrResult.LineItem.categoryId); null only for a manually
+  /// added blank row before the user (or the "apply to all" bulk action)
+  /// picks one, in which case the UI/save path falls back to the screen's
+  /// overall selected category.
+  String? categoryId;
+
   /// The quantity priceCtrl's current value was last computed for — the
   /// basis for rescaling price when qty next changes (see _ItemRow's qty
   /// field), since priceCtrl holds the LINE TOTAL (qty x unit price), not a
@@ -1582,6 +1635,7 @@ class _EditableItem {
     required this.priceCtrl,
     TextEditingController? qtyCtrl,
     this.originalId,
+    this.categoryId,
   }) : qtyCtrl = qtyCtrl ?? TextEditingController(text: '1'),
        lastQty = int.tryParse(qtyCtrl?.text ?? '1') ?? 1;
 }
@@ -1590,21 +1644,114 @@ class _EditableItem {
 
 class _ItemRow extends StatelessWidget {
   final _EditableItem item;
+  final List<CategoryModel> categories;
   final VoidCallback? onDelete;
   final VoidCallback onChanged;
+  final ValueChanged<String> onCategoryChanged;
 
   const _ItemRow({
     required this.item,
+    required this.categories,
     required this.onDelete,
     required this.onChanged,
+    required this.onCategoryChanged,
   });
+
+  CategoryModel? get _category =>
+      categories.where((c) => c.id == item.categoryId).firstOrNull;
+
+  /// Opens a chip picker (same visual style as the screen's overall
+  /// "Category" selector) scoped to just this one item, so a multi-category
+  /// voice/receipt entry (e.g. "KFC RM20, GSC cinema RM30, Uniqlo RM50")
+  /// can have each line item saved under its own correct category (FR 4.8)
+  /// instead of every item inheriting one shared category.
+  Future<void> _pickCategory(BuildContext context) async {
+    final itemName = item.nameCtrl.text.trim();
+    final picked = await showModalBottomSheet<CategoryModel>(
+      context: context,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (_) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Category for "${itemName.isEmpty ? 'this item' : itemName}"',
+                style: const TextStyle(
+                  fontWeight: FontWeight.w600,
+                  fontSize: 15,
+                ),
+              ),
+              const SizedBox(height: 12),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: categories.map((cat) {
+                  final selected = cat.id == item.categoryId;
+                  return GestureDetector(
+                    onTap: () => Navigator.pop(context, cat),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 8,
+                      ),
+                      decoration: BoxDecoration(
+                        color: selected
+                            ? const Color(0xFF1B4332)
+                            : Colors.white,
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(
+                          color: selected
+                              ? const Color(0xFF1B4332)
+                              : const Color(0xFFDDDDDD),
+                        ),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(cat.icon, style: const TextStyle(fontSize: 14)),
+                          const SizedBox(width: 6),
+                          Text(
+                            cat.name,
+                            style: TextStyle(
+                              color: selected
+                                  ? Colors.white
+                                  : const Color(0xFF333333),
+                              fontSize: 13,
+                              fontWeight: selected
+                                  ? FontWeight.w600
+                                  : FontWeight.normal,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                }).toList(),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (picked != null) onCategoryChanged(picked.id);
+  }
 
   @override
   Widget build(BuildContext context) {
+    final cat = _category;
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 8),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          Row(
+            children: [
           Expanded(
             flex: 3,
             child: TextFormField(
@@ -1692,6 +1839,47 @@ class _ItemRow extends StatelessWidget {
                     ),
                   )
                 : const SizedBox(),
+          ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          // Per-item category badge — each line item is saved under its
+          // OWN category (FR 4.8), not one category shared by the whole
+          // receipt/voice entry. Defaults to whatever the backend's
+          // rule-based categoriser assigned this item; tap to override.
+          GestureDetector(
+            onTap: categories.isEmpty ? null : () => _pickCategory(context),
+            child: Container(
+              padding: const EdgeInsets.symmetric(
+                horizontal: 10,
+                vertical: 4,
+              ),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF5F5F5),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: const Color(0xFFE0E0E0)),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(cat?.icon ?? '📦', style: const TextStyle(fontSize: 12)),
+                  const SizedBox(width: 4),
+                  Text(
+                    cat?.name ?? 'Others',
+                    style: const TextStyle(
+                      fontSize: 11,
+                      color: Color(0xFF555555),
+                    ),
+                  ),
+                  const SizedBox(width: 2),
+                  const Icon(
+                    Icons.arrow_drop_down,
+                    size: 14,
+                    color: Color(0xFF888888),
+                  ),
+                ],
+              ),
+            ),
           ),
         ],
       ),

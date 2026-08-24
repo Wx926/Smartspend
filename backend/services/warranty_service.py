@@ -8,12 +8,20 @@ then computes a green/yellow/red validity status based on the receipt date.
 """
 
 import re
-from datetime import date
+from datetime import date, timedelta
 
 # "wrty" covers the common Malaysian electronics-retail abbreviation, e.g.
 # "*5-Yrs LTD Wrty*" printed inline in an item description rather than as its
 # own labelled line.
 WARRANTY_KEYWORDS = ["warranty", "guarantee", "valid until", "expiry date", "wrty"]
+
+# A collection/claim deadline (e.g. an optical shop's custom-made glasses
+# order: "All products must be claimed within 90 days from the date above
+# otherwise this order will be considered null and void") never says
+# "warranty" anywhere, so it's invisible to WARRANTY_KEYWORDS above — but it
+# has the exact same "act before this date or lose your rights" shape a
+# warranty does, and deserves the same visible validity indicator.
+CLAIM_KEYWORDS = ["claimed within", "claim within", "collected within", "collect within"]
 
 # Descriptive duration words -> number of months
 WORD_TO_MONTHS = {
@@ -37,28 +45,68 @@ DESCRIPTIVE_DURATION_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+# Matches "90 days", "30-day", etc. Deliberately kept separate from the
+# month/year pattern above rather than added as another unit there: a claim
+# deadline's day count is used directly (via timedelta) for an EXACT expiry
+# date, not converted through the lossy month-based approximation
+# _add_months uses — precision matters here since this is typically a
+# legally-binding cutoff printed on the receipt itself.
+DAY_DURATION_PATTERN = re.compile(r"(\d+)[\s-]*(day|days)\b", re.IGNORECASE)
+
 
 def detect_warranty(raw_text: str, receipt_date: date) -> dict | None:
     """
-    Scans raw OCR text for warranty info. Returns None if no warranty keyword found.
+    Scans raw OCR text for warranty info, or (failing that) a collection/claim
+    deadline. Returns None if neither is found.
 
     Returns:
         {
             "has_warranty": True,
-            "duration_months": int,
+            "duration_months": int | None,  # None for a day-denominated claim deadline
             "expiry_date": "YYYY-MM-DD",
             "status": "green" | "yellow" | "red",
             "days_remaining": int
         }
     """
     normalised = raw_text.lower()
+    has_warranty_kw = any(keyword in normalised for keyword in WARRANTY_KEYWORDS)
 
-    if not any(keyword in normalised for keyword in WARRANTY_KEYWORDS):
-        return None
+    if has_warranty_kw:
+        duration_months = _extract_duration_months(normalised)
+        if duration_months is not None:
+            try:
+                expiry_date = _add_months(receipt_date, duration_months)
+            except ValueError:
+                # Belt-and-suspenders: the _MAX_PLAUSIBLE_MONTHS cap above
+                # should already rule this out, but a receipt_date close to
+                # date.max could still overflow — fail gracefully instead of
+                # crashing the request.
+                return {
+                    "has_warranty": True,
+                    "duration_months": duration_months,
+                    "expiry_date": None,
+                    "status": "unknown",
+                    "days_remaining": None,
+                }
+            status, days_remaining = _compute_status(expiry_date)
+            return {
+                "has_warranty": True,
+                "duration_months": duration_months,
+                "expiry_date": expiry_date.isoformat(),
+                "status": status,
+                "days_remaining": days_remaining,
+            }
 
-    duration_months = _extract_duration_months(normalised)
-    if duration_months is None:
-        # Warranty keyword present but no parsable duration — flag for manual review
+    # No month/year warranty duration found (either no warranty keyword at
+    # all, or one was present with an unparsable duration) — try a
+    # day-denominated claim/collection deadline before giving up.
+    claim_result = _detect_claim_deadline(normalised, receipt_date)
+    if claim_result is not None:
+        return claim_result
+
+    if has_warranty_kw:
+        # Warranty keyword present but no parsable duration of either kind —
+        # flag for manual review rather than silently dropping it.
         return {
             "has_warranty": True,
             "duration_months": None,
@@ -67,24 +115,23 @@ def detect_warranty(raw_text: str, receipt_date: date) -> dict | None:
             "days_remaining": None,
         }
 
-    try:
-        expiry_date = _add_months(receipt_date, duration_months)
-    except ValueError:
-        # Belt-and-suspenders: the _MAX_PLAUSIBLE_MONTHS cap above should
-        # already rule this out, but a receipt_date close to date.max could
-        # still overflow — fail gracefully instead of crashing the request.
-        return {
-            "has_warranty": True,
-            "duration_months": duration_months,
-            "expiry_date": None,
-            "status": "unknown",
-            "days_remaining": None,
-        }
-    status, days_remaining = _compute_status(expiry_date)
+    return None
 
+
+def _detect_claim_deadline(normalised_text: str, receipt_date: date) -> dict | None:
+    if not any(keyword in normalised_text for keyword in CLAIM_KEYWORDS):
+        return None
+    match = DAY_DURATION_PATTERN.search(normalised_text)
+    if not match:
+        return None
+    days = int(match.group(1))
+    if days > _MAX_PLAUSIBLE_MONTHS * 30:
+        return None
+    expiry_date = receipt_date + timedelta(days=days)
+    status, days_remaining = _compute_status(expiry_date)
     return {
         "has_warranty": True,
-        "duration_months": duration_months,
+        "duration_months": None,
         "expiry_date": expiry_date.isoformat(),
         "status": status,
         "days_remaining": days_remaining,

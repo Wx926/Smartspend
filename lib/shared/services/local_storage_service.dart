@@ -32,6 +32,7 @@ class LocalStorageService {
   static const _keyTrackingEnabled = 'ss_tracking_enabled';
   static const _keyRecentReceipts = 'ss_recent_receipts';
   static const _keyAiCategorisation = 'ss_ai_categorisation_enabled';
+  static const _keyVoiceInputLanguage = 'ss_voice_input_language';
   static const _keyLocationHistory = 'ss_location_history';
   static const _keyPasscodeEnabled = 'ss_passcode_enabled';
   static const _keyPasscodeHash = 'ss_passcode_hash';
@@ -137,6 +138,16 @@ class LocalStorageService {
 
   Future<void> setAiCategorisationEnabled(bool value) async =>
       _prefs?.setBool(_keyAiCategorisation, value);
+
+  /// Whisper language hint for voice-input transcription — an ISO 639-1 code
+  /// ('en', 'ms', 'zh') or 'auto' to let Whisper detect it per-recording.
+  /// Defaults to 'auto' so existing behaviour (before this setting existed)
+  /// is unchanged for anyone who never opens this setting.
+  String get voiceInputLanguage =>
+      _prefs?.getString(_keyVoiceInputLanguage) ?? 'auto';
+
+  Future<void> setVoiceInputLanguage(String code) async =>
+      _prefs?.setString(_keyVoiceInputLanguage, code);
 
   // ── App passcode lock ──────────────────────────────────────────────────────
   bool get passcodeEnabled => _prefs?.getBool(_keyPasscodeEnabled) ?? false;

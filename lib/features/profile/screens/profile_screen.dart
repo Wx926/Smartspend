@@ -24,8 +24,21 @@ class _ProfileScreenState extends State<ProfileScreen> {
   bool _locationAlerts = true;
   bool _pushNotifications = true;
   bool _aiCategorisation = true;
+  String _voiceInputLanguage = 'auto';
   int _warrantyCount = 0;
   int _expiringCount = 0;
+
+  // Malaysia's three predominant spoken languages, plus auto-detect — covers
+  // "the system shall support multiple languages" (FR 5.3) without forcing
+  // an exhaustive language list a Malaysian expense-tracking app has no real
+  // use for. Whisper (backend/services/whisper_service.py) recognises all
+  // three natively via their ISO 639-1 codes.
+  static const Map<String, String> _voiceLanguages = {
+    'auto': 'Auto-detect',
+    'en': 'English',
+    'ms': 'Malay',
+    'zh': 'Chinese',
+  };
 
   @override
   void initState() {
@@ -34,6 +47,47 @@ class _ProfileScreenState extends State<ProfileScreen> {
     _locationAlerts = LocalStorageService.instance.locationAlertsEnabled;
     _pushNotifications = LocalStorageService.instance.mealRemindersEnabled;
     _aiCategorisation = LocalStorageService.instance.aiCategorisationEnabled;
+    _voiceInputLanguage = LocalStorageService.instance.voiceInputLanguage;
+  }
+
+  Future<void> _showVoiceLanguagePicker(BuildContext context) async {
+    final selected = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (sheetContext) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Padding(
+              padding: EdgeInsets.fromLTRB(20, 20, 20, 8),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  'Voice input language',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                ),
+              ),
+            ),
+            for (final entry in _voiceLanguages.entries)
+              ListTile(
+                title: Text(entry.value),
+                trailing: entry.key == _voiceInputLanguage
+                    ? const Icon(Icons.check, color: AppColors.primary)
+                    : null,
+                onTap: () => Navigator.pop(sheetContext, entry.key),
+              ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+    if (selected != null && selected != _voiceInputLanguage) {
+      setState(() => _voiceInputLanguage = selected);
+      await LocalStorageService.instance.setVoiceInputLanguage(selected);
+    }
   }
 
   Future<void> _loadWarranties() async {
@@ -181,10 +235,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
               iconColor: const Color(0xFF8B5CF6),
               iconBg: const Color(0xFFF5F3FF),
               title: 'Voice input language',
-              subtitle: 'English (Malaysia)',
-              onTap: () => ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Voice input — coming soon')),
-              ),
+              subtitle: _voiceLanguages[_voiceInputLanguage] ?? 'Auto-detect',
+              onTap: () => _showVoiceLanguagePicker(context),
             ),
             _divider(),
             _toggleTile(

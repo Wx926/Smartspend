@@ -4,6 +4,7 @@ import 'package:record/record.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:path_provider/path_provider.dart';
 import '../../../shared/theme/app_colors.dart';
+import '../../../shared/services/local_storage_service.dart';
 import '../../ocr/screens/receipt_review_screen.dart';
 import '../services/voice_api_service.dart';
 
@@ -135,7 +136,10 @@ class _VoiceInputScreenState extends State<VoiceInputScreen>
     }
 
     try {
-      final transcript = await VoiceApiService.instance.transcribeAudio(File(path));
+      final transcript = await VoiceApiService.instance.transcribeAudio(
+        File(path),
+        language: LocalStorageService.instance.voiceInputLanguage,
+      );
       if (!mounted) return;
       setState(() => _transcriptCtrl.text = transcript);
     } on VoiceApiException catch (e) {

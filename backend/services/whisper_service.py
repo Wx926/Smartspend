@@ -66,20 +66,35 @@ _BAK_KUT_TEH_MISHEARDS = re.compile(
 )
 
 
-def transcribe_audio(audio_bytes: bytes, filename: str) -> str:
+def transcribe_audio(
+    audio_bytes: bytes, filename: str, language: str | None = None
+) -> str:
     """Returns the transcribed text for a recorded voice message.
 
     `filename` is unused here (kept for interface parity with the previous
     API-based implementation) — faster-whisper decodes the audio via PyAV's
     bundled FFmpeg libraries directly from the in-memory buffer, with no
     format hint needed.
+
+    `language` is an optional ISO 639-1 hint ('en', 'ms', 'zh') matching the
+    Profile screen's "Voice input language" setting — biases decoding toward
+    that language's phonetics/vocabulary for better accuracy on short clips.
+    None (the default, "Auto-detect" in the UI) lets Whisper infer it from
+    the audio itself, same as before this setting existed. This is only a
+    HINT, not a validation: passing the wrong language for what was actually
+    spoken never raises an error — Whisper still returns its best-effort
+    transcription, just a less accurate one (it tries to force-fit the
+    audio's actual phonetics into the hinted language's vocabulary).
     """
     model = _get_model()
     audio_io = io.BytesIO(audio_bytes)
 
     try:
         segments, _info = model.transcribe(
-            audio_io, beam_size=5, initial_prompt=_INITIAL_PROMPT
+            audio_io,
+            beam_size=5,
+            initial_prompt=_INITIAL_PROMPT,
+            language=language,
         )
         text = " ".join(segment.text.strip() for segment in segments).strip()
     except Exception as e:
