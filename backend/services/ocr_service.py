@@ -732,21 +732,40 @@ def extract_text(image_bytes: bytes) -> str:
 # clearance markdown (total < items, e.g. "RTE Clearance 25%" knocking the
 # printed total below the item subtotal — confirmed on a real FamilyMart
 # receipt: items summed to 15.80, printed TOTAL was 14.55 after an -RM1.23
-# discount, a completely correct extraction that the old tighter ceiling
-# wrongly flagged as broken). A badly mis-parsed receipt (missed items, a
-# row's price stolen by the wrong item, etc.) usually shows up as this sum
-# falling far short of the total instead, so the floor (0.7) stays tight —
-# that direction has no legitimate everyday explanation the way a discount
-# does. The ceiling (1.5) is deliberately much more generous than the floor:
-# discounts, unlike tax, can reasonably run into tens of percent.
-def _items_confidence(line_items: list[dict], amount: float | None) -> str:
+# discount, ratio 1.086, a completely correct extraction that the old
+# tighter ceiling wrongly flagged as broken). A badly mis-parsed receipt
+# (missed items, a row's price stolen by the wrong item, etc.) usually shows
+# up as this sum falling far short of the total instead, so the floor (0.7)
+# stays tight — that direction has no legitimate everyday explanation the
+# way a discount does. The ceiling only needs enough headroom to clear that
+# confirmed 1.086 case with margin (1.2) — NOT the 1.5 this was briefly
+# widened to: that wide a window let moderately-wrong regex extractions
+# (missing/duplicated items, a stray extra row) slide through as "high"
+# confidence purely by coincidental ratio, silently skipping the Gemini
+# fallback below and quietly regressing accuracy with no visible warning —
+# matches a real regression report: once the ceiling was loosened that far,
+# the "Re-extracted with AI" badge stopped appearing across a retest of
+# receipts that had previously triggered it, and accuracy dropped to ~80-90%
+# (pure regex, uncorrected) with no low-confidence warning either.
+#
+# Shared with voice_service.parse_voice_expense (hence no leading underscore
+# despite being internal to this package) — the same "do the parsed items
+# actually add up" question applies just as much to a voice-parsed entry as
+# an OCR one, and the confidence UI on the Flutter side defaults to treating
+# a MISSING items_confidence field as high/trustworthy rather than low — so
+# leaving it unset for voice results (as it originally was) isn't neutral,
+# it's actively misleading (confirmed: saying "Hello!" with no expense
+# content produced a synthetic RM0.00 placeholder item that still showed a
+# green "HIGH" confidence badge, while every other field on the same result
+# correctly showed LOW for genuinely having nothing to go on).
+def items_confidence(line_items: list[dict], amount: float | None) -> str:
     if not amount or amount <= 0 or not line_items:
         return "low"
     items_sum = sum(it["price"] for it in line_items)
     if items_sum <= 0:
         return "low"
     ratio = items_sum / amount
-    return "high" if 0.7 <= ratio <= 1.5 else "low"
+    return "high" if 0.7 <= ratio <= 1.2 else "low"
 
 
 # ─── Stage 3: Post-Processing and Data Structure ────────────────────────────
@@ -771,7 +790,7 @@ def parse_receipt_fields(raw_text: str) -> dict:
         "amount": amount,
         "date": receipt_date.isoformat() if receipt_date else None,
         "line_items": line_items,
-        "items_confidence": _items_confidence(line_items, amount),
+        "items_confidence": items_confidence(line_items, amount),
         "_date_obj": receipt_date,
     }
 
@@ -1767,7 +1786,7 @@ def process_receipt(filename: str, file_size_bytes: int, image_bytes: bytes) -> 
                 except ValueError:
                     pass  # unparseable — keep regex's own date, if any
             parsed["line_items"] = fallback["line_items"]
-            parsed["items_confidence"] = _items_confidence(parsed["line_items"], parsed["amount"])
+            parsed["items_confidence"] = items_confidence(parsed["line_items"], parsed["amount"])
             extraction_method = "gemini_fallback"
 
     # Vision succeeds at "finding text" on ANY text-heavy photo — a

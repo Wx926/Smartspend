@@ -22,6 +22,7 @@ import re
 from datetime import date, timedelta
 
 from services.categorisation_service import categorise_text, category_result_for
+from services.ocr_service import items_confidence
 
 # "RM 25", "RM25.00", or a bare number followed by a currency word. "dollars"/
 # "bucks" are accepted as colloquial stand-ins for ringgit, and so are the
@@ -298,7 +299,14 @@ def parse_voice_expense(transcript: str) -> dict:
     if not text:
         raise VoiceParseError("Empty transcript — nothing to parse.")
 
+    print(f"\n===== VOICE RAW TRANSCRIPT =====\n{text!r}\n=================================")
+
     segments = _split_segments(text)
+    print(f"===== VOICE SEGMENTS ({len(segments)}) =====")
+    for s in segments:
+        print(f"  {s!r}")
+    print("==============================\n")
+
     parsed = [p for s in (segments or [text]) if (p := _parse_segment(s)) is not None]
 
     if not parsed:
@@ -323,6 +331,11 @@ def parse_voice_expense(transcript: str) -> dict:
         for p in parsed
     ]
     total_amount = sum(p["amount"] for p in parsed) if parsed else None
+
+    print(f"===== VOICE PARSED ITEMS (total={total_amount}) =====")
+    for it in line_items:
+        print(f"  x{it['quantity']}  {it['item_name']}  ->  {it['price']}")
+    print("=======================================\n")
 
     # Overall vendor: the first segment that actually named one. Unlike a
     # physical receipt (always exactly one vendor for every line on it), a
@@ -354,5 +367,6 @@ def parse_voice_expense(transcript: str) -> dict:
         "suggested_category_name": category["category_name"],
         "suggested_category_confidence": category["confidence"],
         "date_confidence": "high" if date_explicit else "low",
+        "items_confidence": items_confidence(line_items, total_amount),
         "warranty": None,
     }
