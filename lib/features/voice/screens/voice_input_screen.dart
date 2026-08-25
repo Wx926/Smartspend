@@ -303,9 +303,19 @@ class _VoiceInputScreenState extends State<VoiceInputScreen>
                           color: AppColors.primaryDark),
                     ),
                     const SizedBox(height: 4),
-                    const Text(
-                      'Tap the mic and describe your expense',
-                      style: TextStyle(
+                    Text(
+                      // Transcription runs on a free-tier server with
+                      // limited CPU, so it's genuinely slower than an
+                      // instant response -- without this, a slow-but-
+                      // working wait looks identical to something stuck or
+                      // broken, especially to someone testing the app for
+                      // the first time who has no context for why it's
+                      // taking a moment.
+                      _transcribing
+                          ? 'This can take a moment on our server — please wait'
+                          : 'Tap the mic and describe your expense',
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
                           fontSize: 12, color: AppColors.textSecondary),
                     ),
                     const Spacer(),
