@@ -1,0 +1,40 @@
+# Render Blueprint for the SmartSpend backend (Flask + OCR/voice services).
+# This file lets Render auto-configure the service when you connect this
+# GitHub repo — see the deployment instructions given alongside this file
+# for the manual steps that still need doing on Render's dashboard
+# (creating the account, connecting the repo, and filling in the actual
+# secret values below, which are deliberately NOT stored in this file since
+# it's committed to git).
+#
+# rootDir tells Render this Python service lives in the backend/ subfolder,
+# not the repo root (the repo root is the Flutter app).
+services:
+  - type: web
+    name: smartspend-backend
+    runtime: python
+    rootDir: backend
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python app.py
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
+      # Fill in the actual values on Render's dashboard (Environment tab) —
+      # never commit real secrets into this file.
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
+      - key: GOOGLE_VISION_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: WHISPER_MODEL_SIZE
+        # 'base' is a deliberate size-down from the 'medium' used in local
+        # dev — Render's free tier caps memory at 512MB, and 'medium' would
+        # not reliably fit alongside Flask and the rest of the process. This
+        # trades some transcription accuracy for the deployment actually
+        # staying up; your local backend/.env is untouched and can keep
+        # 'medium' for your own testing.
+        value: base
