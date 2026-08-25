@@ -18,7 +18,11 @@ from datetime import datetime, date
 from dotenv import load_dotenv
 load_dotenv()
 
-from services.categorisation_service import categorise_text, category_result_for
+from services.categorisation_service import (
+    categorise_text,
+    category_result_for,
+    majority_category,
+)
 from services.warranty_service import detect_warranty
 
 GOOGLE_VISION_API_KEY = os.environ.get("GOOGLE_VISION_API_KEY", "")
@@ -1824,7 +1828,7 @@ def process_receipt(filename: str, file_size_bytes: int, image_bytes: bytes) -> 
         item_cats = [i["category_name"] for i in line_items_with_categories
                      if i["category_name"] != "Others"]
         if item_cats:
-            majority = max(set(item_cats), key=item_cats.count)
+            majority = majority_category(item_cats)
             receipt_category = category_result_for(majority)
         else:
             receipt_category = categorise_text(parsed["vendor_name"] or "")

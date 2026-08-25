@@ -145,8 +145,11 @@ class _VoiceInputScreenState extends State<VoiceInputScreen>
     } on VoiceApiException catch (e) {
       setState(() => _error = e.message);
     } catch (e) {
-      setState(() => _error =
-          'Could not reach the server. Make sure the Flask backend is running.');
+      // Not a network failure (that's the branch above) -- most likely the
+      // recorded audio file itself couldn't be read when building the
+      // upload request. Show the real exception rather than a generic
+      // "check your backend" message that would be misleading here.
+      setState(() => _error = 'Could not read or upload the recording.\n\n$e');
     } finally {
       if (mounted) setState(() => _transcribing = false);
     }
@@ -228,8 +231,11 @@ class _VoiceInputScreenState extends State<VoiceInputScreen>
     } on VoiceApiException catch (e) {
       setState(() => _error = e.message);
     } catch (e) {
-      setState(() => _error =
-          'Could not reach the server. Make sure the Flask backend is running.');
+      // Not a network failure (that's the branch above) -- this call sends
+      // plain JSON with no file involved, so an unexpected error here is
+      // worth seeing in full rather than masking it with a networking
+      // message that doesn't fit what actually happened.
+      setState(() => _error = 'Something went wrong processing that.\n\n$e');
     } finally {
       if (mounted) setState(() => _processing = false);
     }

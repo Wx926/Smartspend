@@ -34,7 +34,11 @@ class OcrApiService {
               filename: file.name,
             ));
         },
-        timeout: const Duration(seconds: 30),
+        // 90s, not 30 — the hosted backend's free tier can take 50+ seconds
+        // to wake from a cold start (Render's own stated worst case) before
+        // it even starts the actual OCR/Gemini work, and 30s wasn't enough
+        // headroom for both.
+        timeout: const Duration(seconds: 90),
       );
     } on BackendUnreachableException catch (e) {
       throw OcrApiException(e.message);

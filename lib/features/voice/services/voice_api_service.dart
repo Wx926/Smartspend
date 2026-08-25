@@ -34,7 +34,10 @@ class VoiceApiService {
             ..files.add(
                 await http.MultipartFile.fromPath('audio', audioFile.path));
         },
-        timeout: const Duration(seconds: 30),
+        // 90s — same reasoning as ocr_api_service.dart's scanReceipt: the
+        // hosted backend's free tier can take 50+ seconds to wake from a
+        // cold start before Whisper transcription even begins.
+        timeout: const Duration(seconds: 90),
       );
     } on BackendUnreachableException catch (e) {
       throw VoiceApiException(e.message);
@@ -66,7 +69,10 @@ class VoiceApiService {
           request.body = jsonEncode({'transcript': transcript});
           return request;
         },
-        timeout: const Duration(seconds: 15),
+        // 60s, not 15 — this call can still land on a cold instance if it's
+        // the first request of a session (e.g. a manually-typed transcript
+        // submitted without a prior transcribeAudio call to warm it up).
+        timeout: const Duration(seconds: 60),
       );
     } on BackendUnreachableException catch (e) {
       throw VoiceApiException(e.message);

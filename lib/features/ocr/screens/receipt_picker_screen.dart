@@ -82,8 +82,25 @@ class _ReceiptPickerScreenState extends State<ReceiptPickerScreen> {
         type: FileType.custom,
         allowedExtensions: ['pdf'],
       );
-      final path = result?.files.single.path;
-      if (path == null) return;
+      final pickedPath = result?.files.single.path;
+      if (pickedPath == null) return;
+
+      // file_picker caches the picked file under its OWN internal cache
+      // folder (.../cache/file_picker/...), which Android is free to clear
+      // at any time with no warning -- confirmed in the wild: a user's scan
+      // failed with PathNotFoundException because that cached copy was
+      // already gone by the time the file was read for upload, well after
+      // it had been sitting selected in this picker (thumbnail rendering,
+      // browsing Recents, then whatever the upload's own network retries
+      // took). Copying it immediately into the app's own documents
+      // directory -- which the OS does not clear the same way -- and using
+      // THAT path everywhere downstream (thumbnail, Recents storage, the
+      // eventual upload) removes that race entirely rather than just
+      // reporting it better.
+      final docsDir = await getApplicationDocumentsDirectory();
+      final path =
+          '${docsDir.path}/receipt_pdf_${DateTime.now().millisecondsSinceEpoch}.pdf';
+      await File(pickedPath).copy(path);
 
       final thumbPath = await _renderPdfThumbnail(path);
       final receipt = RecentReceiptModel(
