@@ -1003,6 +1003,20 @@ def _extract_vendor(lines: list[str]) -> str | None:
 
     window = lines[:10]
     if any(_BHD_LINE.search(ln) for ln in window):
+        # A clean, plausible-brand candidate line seen just before reaching
+        # the Sdn Bhd line itself — used as a fallback below when that line
+        # doesn't recur elsewhere (the ONLY signal the loop otherwise has
+        # for preferring it). Malaysian receipts overwhelmingly print the
+        # trading name directly above the legal entity's registered name
+        # (confirmed: "FARM TO PLATE" / "MALAYSIA FOOD CORPORATION SDN
+        # BHD", with no recurrence anywhere else on the receipt and no
+        # "trading as" disclosure either — the recurrence check alone left
+        # this case falling straight through to the legal entity name).
+        # Deliberately only the line IMMEDIATELY prior, not just any
+        # earlier candidate — an unrelated tagline further up (the exact
+        # "PERI-PERI CHICKEN" case the recurrence check itself already
+        # guards against) must not win this way too.
+        immediately_prior_candidate: str | None = None
         for idx, line in enumerate(lines[:5]):
             stripped = line.strip()
             if (any(c in stripped for c in "#:*")
@@ -1018,6 +1032,8 @@ def _extract_vendor(lines: list[str]) -> str | None:
             # digit-free address fragment ("Selangor U13, Shah Alam") win by
             # default through a looser fallback further down.
             if _BHD_LINE.search(stripped):
+                if immediately_prior_candidate is not None:
+                    return immediately_prior_candidate
                 # A company name never legitimately starts with a lowercase
                 # word — that's always a stray fragment of unrelated text
                 # (e.g. an address block wrapping into the same reconstructed
@@ -1029,11 +1045,13 @@ def _extract_vendor(lines: list[str]) -> str | None:
                     words.pop(0)
                 return " ".join(words)
             if re.search(r"\d{3,}", stripped):
+                immediately_prior_candidate = None
                 continue
             normalised = stripped.lower()
             rest = " ".join(window[:idx] + window[idx + 1:]).lower()
             if normalised in rest:
                 return stripped
+            immediately_prior_candidate = stripped
 
     for line in lines[:5]:
         if (not re.search(r"\d{3,}", line)
@@ -1657,6 +1675,22 @@ _GEMINI_RECEIPT_SCHEMA = {
                     "item_name": {"type": "STRING"},
                     "quantity": {"type": "INTEGER"},
                     "price": {"type": "NUMBER"},
+                    # Piggybacked onto this same call rather than a separate
+                    # categorisation request — costs nothing extra against
+                    # the tight daily quota, and Gemini's actual language
+                    # understanding of a menu item ("Seafood Pomodoro
+                    # Risotto") meaningfully beats the rule-based keyword
+                    # matcher (categorisation_service.py) for exactly the
+                    # cases that reach this fallback in the first place:
+                    # unusual receipts the simple regex/keyword layers
+                    # already struggled with. enum constrains it to the
+                    # app's actual category set so it can never invent a
+                    # category name the rest of the system doesn't know.
+                    "category": {
+                        "type": "STRING",
+                        "enum": ["Food & Dining", "Transport", "Shopping",
+                                 "Entertainment", "Health", "Utilities", "Others"],
+                    },
                 },
                 "required": ["item_name", "price"],
             },
@@ -1674,6 +1708,9 @@ _GEMINI_RECEIPT_PROMPT = """You are reading a photo of a purchase receipt. Extra
   - item_name: the product/item description as printed
   - quantity: the number of units purchased (use 1 if not shown separately)
   - price: the TOTAL charged for that line (quantity x unit price), not a per-unit rate
+  - category: your best guess at which ONE of these categories this item belongs to,
+    based on what the item actually is (not the store it's from): Food & Dining, Transport,
+    Shopping, Entertainment, Health, Utilities, Others. Use "Others" only if none plausibly fit.
 
 Read the receipt's actual column layout carefully — an item's name and its price may be printed on the same physical row, or wrap across nearby rows, depending on how this particular receipt is laid out. Do not guess or invent items that aren't printed. If a value truly isn't legible, omit it rather than fabricating one."""
 
@@ -1727,6 +1764,14 @@ def _gemini_fallback_extract(image_bytes: bytes) -> dict | None:
         line_items = extracted.get("line_items")
         if not isinstance(line_items, list) or not line_items:
             return None
+        # Belt-and-suspenders even with the schema's enum constraint --
+        # constraints on model output are strong but not absolute, and a
+        # category name outside this set must not silently propagate to
+        # category_result_for() and fail its own Supabase lookup later.
+        _valid_categories = {
+            "Food & Dining", "Transport", "Shopping",
+            "Entertainment", "Health", "Utilities", "Others",
+        }
         clean_items = []
         for it in line_items:
             name = str(it.get("item_name", "")).strip()
@@ -1734,10 +1779,12 @@ def _gemini_fallback_extract(image_bytes: bytes) -> dict | None:
             if not name or not isinstance(price, (int, float)) or price <= 0:
                 continue
             qty = it.get("quantity")
+            category = it.get("category")
             clean_items.append({
                 "item_name": name,
                 "price": float(price),
                 "quantity": int(qty) if isinstance(qty, (int, float)) and qty >= 1 else 1,
+                "category_name": category if category in _valid_categories else None,
             })
         if not clean_items:
             return None
@@ -1811,13 +1858,24 @@ def process_receipt(filename: str, file_size_bytes: int, image_bytes: bytes) -> 
     receipt_date = parsed.pop("_date_obj") or date.today()
     warranty_info = detect_warranty(raw_text, receipt_date)
 
-    # FR 4.8: assign a category to each line item based on its description
+    # FR 4.8: assign a category to each line item based on its description.
+    # A Gemini-sourced item may already carry its own category suggestion
+    # (see _gemini_fallback_extract) -- prefer that over re-running the
+    # keyword matcher on the same name, since Gemini already read the item
+    # in context and its language understanding covers cases (obscure menu
+    # dish names, etc.) the rule-based matcher structurally can't. Regex-
+    # sourced items never have this key at all, so .get() naturally falls
+    # through to the keyword matcher for them, unchanged from before.
     line_items_with_categories = [
         {
             "item_name": item["item_name"],
             "price": item["price"],
             "quantity": item["quantity"],
-            "category_id": (cat := categorise_text(item["item_name"]))["category_id"],
+            "category_id": (cat := (
+                category_result_for(item["category_name"])
+                if item.get("category_name")
+                else categorise_text(item["item_name"])
+            ))["category_id"],
             "category_name": cat["category_name"],
         }
         for item in parsed["line_items"]
