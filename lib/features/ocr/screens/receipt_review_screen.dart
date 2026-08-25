@@ -7,7 +7,6 @@ import 'package:pdfx/pdfx.dart';
 import 'package:uuid/uuid.dart';
 import '../../../shared/theme/app_colors.dart';
 import '../../../shared/models/budget_model.dart';
-import '../../../shared/models/category_model.dart';
 import '../../../shared/models/expense_model.dart';
 import '../../../shared/services/supabase_service.dart';
 import '../../../features/auth/providers/auth_provider.dart';
@@ -1132,7 +1131,6 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
                       for (int i = 0; i < _items.length; i++) ...[
                         _ItemRow(
                           item: _items[i],
-                          categories: categories,
                           onDelete: _items.length > 1
                               ? () => setState(() {
                                   _items[i].nameCtrl.dispose();
@@ -1142,8 +1140,6 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
                                 })
                               : null,
                           onChanged: () => setState(() {}),
-                          onCategoryChanged: (id) =>
-                              setState(() => _items[i].categoryId = id),
                         ),
                         if (i < _items.length - 1)
                           const Divider(height: 1, color: Color(0xFFF0F0F0)),
@@ -1644,107 +1640,17 @@ class _EditableItem {
 
 class _ItemRow extends StatelessWidget {
   final _EditableItem item;
-  final List<CategoryModel> categories;
   final VoidCallback? onDelete;
   final VoidCallback onChanged;
-  final ValueChanged<String> onCategoryChanged;
 
   const _ItemRow({
     required this.item,
-    required this.categories,
     required this.onDelete,
     required this.onChanged,
-    required this.onCategoryChanged,
   });
-
-  CategoryModel? get _category =>
-      categories.where((c) => c.id == item.categoryId).firstOrNull;
-
-  /// Opens a chip picker (same visual style as the screen's overall
-  /// "Category" selector) scoped to just this one item, so a multi-category
-  /// voice/receipt entry (e.g. "KFC RM20, GSC cinema RM30, Uniqlo RM50")
-  /// can have each line item saved under its own correct category (FR 4.8)
-  /// instead of every item inheriting one shared category.
-  Future<void> _pickCategory(BuildContext context) async {
-    final itemName = item.nameCtrl.text.trim();
-    final picked = await showModalBottomSheet<CategoryModel>(
-      context: context,
-      backgroundColor: Colors.white,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
-      builder: (_) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'Category for "${itemName.isEmpty ? 'this item' : itemName}"',
-                style: const TextStyle(
-                  fontWeight: FontWeight.w600,
-                  fontSize: 15,
-                ),
-              ),
-              const SizedBox(height: 12),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: categories.map((cat) {
-                  final selected = cat.id == item.categoryId;
-                  return GestureDetector(
-                    onTap: () => Navigator.pop(context, cat),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 14,
-                        vertical: 8,
-                      ),
-                      decoration: BoxDecoration(
-                        color: selected
-                            ? const Color(0xFF1B4332)
-                            : Colors.white,
-                        borderRadius: BorderRadius.circular(20),
-                        border: Border.all(
-                          color: selected
-                              ? const Color(0xFF1B4332)
-                              : const Color(0xFFDDDDDD),
-                        ),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text(cat.icon, style: const TextStyle(fontSize: 14)),
-                          const SizedBox(width: 6),
-                          Text(
-                            cat.name,
-                            style: TextStyle(
-                              color: selected
-                                  ? Colors.white
-                                  : const Color(0xFF333333),
-                              fontSize: 13,
-                              fontWeight: selected
-                                  ? FontWeight.w600
-                                  : FontWeight.normal,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  );
-                }).toList(),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-    if (picked != null) onCategoryChanged(picked.id);
-  }
 
   @override
   Widget build(BuildContext context) {
-    final cat = _category;
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 8),
       child: Column(
@@ -1841,45 +1747,6 @@ class _ItemRow extends StatelessWidget {
                 : const SizedBox(),
           ),
             ],
-          ),
-          const SizedBox(height: 6),
-          // Per-item category badge — each line item is saved under its
-          // OWN category (FR 4.8), not one category shared by the whole
-          // receipt/voice entry. Defaults to whatever the backend's
-          // rule-based categoriser assigned this item; tap to override.
-          GestureDetector(
-            onTap: categories.isEmpty ? null : () => _pickCategory(context),
-            child: Container(
-              padding: const EdgeInsets.symmetric(
-                horizontal: 10,
-                vertical: 4,
-              ),
-              decoration: BoxDecoration(
-                color: const Color(0xFFF5F5F5),
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: const Color(0xFFE0E0E0)),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(cat?.icon ?? '📦', style: const TextStyle(fontSize: 12)),
-                  const SizedBox(width: 4),
-                  Text(
-                    cat?.name ?? 'Others',
-                    style: const TextStyle(
-                      fontSize: 11,
-                      color: Color(0xFF555555),
-                    ),
-                  ),
-                  const SizedBox(width: 2),
-                  const Icon(
-                    Icons.arrow_drop_down,
-                    size: 14,
-                    color: Color(0xFF888888),
-                  ),
-                ],
-              ),
-            ),
           ),
         ],
       ),
