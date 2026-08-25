@@ -75,6 +75,21 @@ _MONTH_NAME_DATE = re.compile(
     rf"({_MONTH_NAME})\s*(\d{{1,2}}),?\s*(\d{{4}})", re.IGNORECASE
 )
 
+# Day-Month-Year order, e.g. "07 Jun 2026" — the convention most Malaysian
+# receipts actually use, as opposed to the American "Month Day, Year" order
+# _MONTH_NAME_DATE above handles. A receipt printing this order fell
+# through both this and every numeric DATE_PATTERN entirely (none of them
+# expect a month NAME), silently defaulting to today's date with no
+# indication anything had gone wrong — confirmed on a real receipt ("07
+# Jun 2026" parsed as None, only "Jun 07, 2026" worked). Day and month
+# swap position relative to _MONTH_NAME_DATE's groups, handled separately
+# in _extract_date rather than trying to force one pattern to cover both
+# orders, since that would make an already-dense regex harder to reason
+# about for a fairly small gain.
+_DAY_MONTH_NAME_DATE = re.compile(
+    rf"(\d{{1,2}})\s*(?:st|nd|rd|th)?,?\s*({_MONTH_NAME})\s*,?\s*(\d{{4}})", re.IGNORECASE
+)
+
 _CURRENCY = r"(?:RM|MYR|USD|SGD|GBP|\$|£|€|¥)?\s*"
 
 # CJK Unicode ranges (common + extension-A) — Malaysian receipts are frequently
@@ -936,6 +951,19 @@ def _extract_date(raw_text: str) -> date | None:
         if month_num:
             try:
                 return date(int(match.group(3)), month_num, int(match.group(2)))
+            except ValueError:
+                pass
+
+    # Day-Month-Year order (e.g. "07 Jun 2026") -- see _DAY_MONTH_NAME_DATE's
+    # own comment for why this needs its own pattern rather than reusing
+    # _MONTH_NAME_DATE above, which expects the opposite word order.
+    match = _DAY_MONTH_NAME_DATE.search(raw_text)
+    if match:
+        month_key = re.sub(r"\s+", "", match.group(2)).lower()[:3]
+        month_num = _MONTH_TO_NUM.get(month_key)
+        if month_num:
+            try:
+                return date(int(match.group(3)), month_num, int(match.group(1)))
             except ValueError:
                 pass
 

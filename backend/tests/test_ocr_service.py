@@ -13,6 +13,7 @@ from services.ocr_service import (
     items_confidence,
     _extract_line_items,
     _extract_vendor,
+    _extract_date,
 )
 
 
@@ -24,6 +25,23 @@ class TestDateExtraction:
         text = "SOME STORE\nDate: 2018-03-23\nTOTAL 12.00"
         result = parse_receipt_fields(text)
         assert result["date"] == "2018-03-23"
+
+    def test_day_month_name_year_order(self):
+        """"07 Jun 2026" (day-month-year, the convention most Malaysian
+        receipts actually use) previously matched NEITHER the numeric
+        DATE_PATTERNS (no month name involved) NOR _MONTH_NAME_DATE (which
+        only expects the opposite, "Month Day, Year" order) -- silently
+        fell through to defaulting the whole receipt to today's date, with
+        no indication anything had gone wrong."""
+        assert _extract_date("Order No. : ONL3191   07 Jun 2026") == date(2026, 6, 7)
+
+    def test_day_month_name_year_with_ordinal_suffix(self):
+        assert _extract_date("Receipt dated 7th Jun 2026") == date(2026, 6, 7)
+
+    def test_month_name_day_year_order_still_works(self):
+        """Regression guard: the day-month-year fix must not break the
+        opposite (American) word order it coexists with."""
+        assert _extract_date("Mar 30,2026") == date(2026, 3, 30)
 
     def test_genuine_dd_mm_yy_still_parses(self):
         text = "SOME STORE\nDate: 27-06-26\nTOTAL 12.00"
