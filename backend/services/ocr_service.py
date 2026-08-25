@@ -1773,7 +1773,18 @@ def _gemini_fallback_extract(image_bytes: bytes) -> dict | None:
         }],
         "generationConfig": {
             "temperature": 0.1,
-            "maxOutputTokens": 2048,
+            # 2048 was too tight and silently truncated the response mid-
+            # JSON on a real 10-item receipt (confirmed via the backend log:
+            # "Gemini fallback failed... Expecting value: line 31 column 19"
+            # -- the classic json.loads() error for a string that just
+            # stops partway through, not malformed content). This model
+            # spends some of its output budget on internal reasoning before
+            # ever emitting the actual JSON answer, and adding a `category`
+            # field to every line item (for the categorisation piggyback)
+            # made each item's JSON longer too -- both eating into the same
+            # budget. Raised well past what even a large receipt needs,
+            # rather than tuning a fragile exact number.
+            "maxOutputTokens": 8192,
             "responseMimeType": "application/json",
             "responseSchema": _GEMINI_RECEIPT_SCHEMA,
         },
