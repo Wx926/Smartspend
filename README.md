@@ -100,6 +100,35 @@ flutter run            # launches on connected Android device/emulator
 
 Requires a `.env` (see `.env.example`) with Supabase and Gemini API keys — never commit `.env`.
 
+## OCR / Voice backend (Yen Han Soon's modules)
+
+The Receipt Digitisation and Voice-Assisted Expense modules call a separate Python/Flask
+backend, hosted on Render — **no local setup is needed to test these features**, on any
+device, on any network:
+
+```
+https://smartspend-backend-i32o.onrender.com
+```
+
+**⏱️ First request may take up to ~50–60 seconds — this is expected, not a bug.**
+The backend runs on Render's free tier, which shuts the server down after 15 minutes of
+no traffic to save resources. The *first* scan/recording after a period of inactivity has
+to wait for it to wake back up; every request after that is fast again until it goes idle
+once more. If a test session is time-sensitive (e.g. a live grading walkthrough), open the
+app and do one scan a few minutes beforehand to "warm it up" first.
+
+**If a low-confidence receipt doesn't get AI-corrected:** the Gemini vision fallback (used
+to re-read a receipt Google Vision + regex parsing struggled with) shares a free-tier quota
+of **20 requests/day across all usage of this backend**. If that's been used up by testing,
+the app does **not** show an error — it silently keeps the regular (regex-based) extraction
+result instead, which is usually still correct for well-formatted receipts. This is a
+deliberate graceful-degradation design, not a crash.
+
+**Voice input** transcribes locally on the Render server itself (no external API, no
+quota) — it'll always work given enough time, but is noticeably slower than a local
+machine would be, since the free tier has limited CPU. Not a bug either, just the tradeoff
+of free hosting.
+
 ---
 
 *This README is a working summary generated from `proposal.pdf` and `RSW2S3G2_KooWeeXuan_Project_1_Report.pdf`. If anything here is wrong or out of date as the implementation evolves, let me know and I'll fix it.*
