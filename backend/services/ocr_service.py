@@ -1329,8 +1329,22 @@ def _extract_line_items(raw_text: str) -> list[dict]:
         # without this gate: stripping "4 " just leaves "NANDOS3 76 SYAFIQ 2",
         # which still fails every layout's name pattern (a bare "76" token
         # breaks the name-continuation rules), so nothing false gets emitted.
-        qty_prefix = re.match(r"^(\d{1,3})\s+([A-Za-z\d].*)$", line)
-        line_qty = int(qty_prefix.group(1)) if qty_prefix else None
+        #
+        # The leading digit itself is also allowed to be a stray punctuation
+        # mark or look-alike letter standing in for a misread "1" -- the same
+        # tolerance _ALL_NUMBERS_ROW above already needs for its own qty
+        # column, for the same reason (a partially obscured "1" degrades to
+        # whatever vertical-stroke-shaped glyph Vision guesses instead).
+        # Confirmed on a real receipt with a physical fold across the item
+        # table: "1 PARMESAN TRUFFLE FRIES 29.00" came back as "! MESAN
+        # TRUFFLE FRIES 29.00" (the fold ate the "PAR" too) -- without this,
+        # the "!" fails every layout's name-start check and the entire line,
+        # price included, silently vanishes rather than just losing its qty.
+        qty_prefix = re.match(r"^(\d{1,3}|[!|lI])\s+([A-Za-z\d].*)$", line)
+        line_qty = (
+            int(qty_prefix.group(1)) if qty_prefix and qty_prefix.group(1).isdigit()
+            else 1 if qty_prefix else None
+        )
         if qty_prefix:
             line = qty_prefix.group(2)
 

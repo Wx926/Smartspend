@@ -122,6 +122,30 @@ class TestLineItemExtraction:
         assert len(items) == 1
         assert items[0]["price"] == 49.90
 
+    def test_farm_to_plate_folded_receipt_misread_qty_as_exclamation(self):
+        """Real Render production log capture: a physical crease across the
+        item table made Vision misread "1 PARMESAN TRUFFLE FRIES 29.00" as
+        "! MESAN TRUFFLE FRIES 29.00" (the fold ate "PAR" too, which is
+        unrecoverable -- the pixels themselves never reached Vision). The
+        leading "!" isn't a digit, so the qty-prefix strip never fired, "!"
+        failed every layout's name-start check, and the whole line --
+        price included, not just its name -- silently vanished from an
+        11-item receipt. Confirmed via this exact raw text pulled from the
+        backend's own log output for the real failing scan."""
+        raw = (
+            "FARM TO PLATE\n"
+            "1 FARM TO PLATE SALAD 29.00\n"
+            "! MESAN TRUFFLE FRIES 29.00\n"
+            "1 ITALIAN PORK SAUSAGE PIZZ 46.00\n"
+            "TOTAL 537.90\n"
+        )
+        items = _extract_line_items(raw)
+        names = [it["item_name"] for it in items]
+        assert any("TRUFFLE FRIES" in n for n in names)
+        fries = next(it for it in items if "TRUFFLE FRIES" in it["item_name"])
+        assert fries["price"] == 29.00
+        assert fries["quantity"] == 1
+
 
 class TestVendorExtraction:
     def test_brand_disclosed_via_recurrence(self):
