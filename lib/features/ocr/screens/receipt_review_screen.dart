@@ -1294,14 +1294,23 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
                               onTap: () => setState(() {
                                 _selectedCategoryId = cat.id;
                                 _selectedCategoryName = cat.name;
-                                // Bulk-apply as the default for every item —
-                                // still overridable per item via the badge
-                                // on each row (FR 4.8), so this stays a
-                                // convenient default rather than forcing one
-                                // category on a multi-category entry.
-                                for (final item in _items) {
-                                  item.categoryId = cat.id;
-                                }
+                                // Deliberately NOT touching item.categoryId
+                                // here anymore. This used to bulk-overwrite
+                                // every item's own category, on the
+                                // assumption there was still a per-item
+                                // badge to fix it back afterwards (FR 4.8) —
+                                // that badge was removed, so this became a
+                                // silent "tap once, lose every item's
+                                // individual category with no way back"
+                                // bug. _selectedCategoryId already reaches
+                                // the save logic as `catId` (see _save()),
+                                // which each item falls back to only when
+                                // it has no category of its own
+                                // (`item.categoryId ?? catId`) — so this
+                                // selection still correctly acts as the
+                                // default for category-less rows (e.g. a
+                                // manually added blank row) without needing
+                                // to overwrite rows that already have one.
                               }),
                               child: Container(
                                 padding: const EdgeInsets.symmetric(
