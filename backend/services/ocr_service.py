@@ -814,14 +814,17 @@ def parse_receipt_fields(raw_text: str) -> dict:
     }
 
 
-def _extract_amount(raw_text: str) -> float | None:
+def _find_reliable_total(raw_text: str) -> float | None:
     """
-    FR 4.10: Extract the receipt grand total.
-    Scans bottom-up so the grand total line (always near the end of the
-    receipt) is found before any 'TOTAL' column header in the items table.
-    Strategy 1: last 'Total / Amount Due' line that carries an amount on
-                 the same line or within the next 2 lines.
-    Strategy 2: fallback to the largest amount in the receipt.
+    Strategies 1+2 of _extract_amount (see its docstring) -- an amount found
+    because a 'Total'/'Amount Due' keyword was actually seen nearby, as
+    opposed to Strategy 3's blind "largest 2-decimal number anywhere" guess.
+    Split out so the not-a-receipt check in process_receipt can require
+    *this* specific kind of evidence -- a keyword-anchored total -- without
+    letting the blind guess (which fires on ANY document containing two
+    decimal-formatted numbers, receipt or not) count as proof something is
+    a receipt at all. See _looks_like_non_receipt_report's docstring for the
+    real case (a gym body-scan printout) this was guarding against.
     """
     lines = [ln.strip() for ln in raw_text.splitlines()]
 
@@ -919,12 +922,42 @@ def _extract_amount(raw_text: str) -> float | None:
                 midline_amount = float(m.group(1).replace(" ", "").replace(",", "."))
                 break
 
-    if midline_amount is not None:
-        return midline_amount
+    return midline_amount
+
+
+def _extract_amount(raw_text: str) -> float | None:
+    """
+    FR 4.10: Extract the receipt grand total.
+    Scans bottom-up so the grand total line (always near the end of the
+    receipt) is found before any 'TOTAL' column header in the items table.
+    Strategy 1+2: see _find_reliable_total.
+    Strategy 3: fallback to the largest amount anywhere in the text.
+    """
+    reliable = _find_reliable_total(raw_text)
+    if reliable is not None:
+        return reliable
 
     # Fallback: largest amount in the receipt
     matches = AMOUNT_PATTERN.findall(raw_text)
     return max(float(m.replace(",", ".")) for m in matches) if matches else None
+
+
+# A "[52.9 - 64.7]" / "[15 - 20]" / "[70%]" style bracketed reference range is
+# how body-composition scans, lab/blood-test results, and similar health
+# reports print the "normal" band next to a measured value -- e.g. Anytime
+# Fitness's Evolt 360 body scan printout, which was confirmed to slip past
+# the not-a-receipt check entirely: it has a genuine printed date (so the
+# old date-or-items check alone was satisfied) and enough 2-decimal numbers
+# scattered through its measurement columns (e.g. "25.17", "8.90") that
+# _extract_amount's blind Strategy 3 fallback confidently, but wrongly,
+# treated one of them as a grand total. No real purchase receipt prints this
+# bracketed-range convention, so its presence is treated as strong,
+# standalone proof this is a report rather than a receipt.
+_BRACKETED_RANGE = re.compile(r"\[\s*\d+(?:\.\d+)?\s*(?:-\s*\d+(?:\.\d+)?\s*)?%?\s*\]")
+
+
+def _looks_like_non_receipt_report(raw_text: str) -> bool:
+    return len(_BRACKETED_RANGE.findall(raw_text)) >= 2
 
 
 def _extract_date(raw_text: str) -> date | None:
@@ -1815,7 +1848,14 @@ def _gemini_fallback_extract(image_bytes: bytes) -> dict | None:
         for it in line_items:
             name = str(it.get("item_name", "")).strip()
             price = it.get("price")
-            if not name or not isinstance(price, (int, float)) or price <= 0:
+            # len(name) < 2 rejects single-character placeholders (e.g. "Y")
+            # that the model occasionally emits on a hard-to-read photo
+            # (stained/creased paper, glare) instead of a real item name --
+            # confirmed on a real receipt where this fired inconsistently
+            # from one attempt to the next on the same image. A genuine
+            # printed item name is never one character, so this can't
+            # reject a real item, only a hallucinated placeholder.
+            if not name or len(name) < 2 or not isinstance(price, (int, float)) or price <= 0:
                 continue
             qty = it.get("quantity")
             category = it.get("category")
@@ -1827,9 +1867,21 @@ def _gemini_fallback_extract(image_bytes: bytes) -> dict | None:
             })
         if not clean_items:
             return None
+
+        # Same placeholder guard for vendor_name -- caller does
+        # `fallback.get("vendor_name") or parsed["vendor_name"]`, so
+        # returning None here (instead of a garbage "Y") correctly makes it
+        # fall through to the regex parser's own vendor guess rather than
+        # overwriting a plausible answer with an implausible one.
+        vendor_name = extracted.get("vendor_name")
+        if isinstance(vendor_name, str):
+            vendor_name = vendor_name.strip()
+        if not vendor_name or len(vendor_name) < 2:
+            vendor_name = None
+
         print(f"===== GEMINI FALLBACK: {len(clean_items)} item(s) extracted =====")
         return {
-            "vendor_name": extracted.get("vendor_name"),
+            "vendor_name": vendor_name,
             "date": extracted.get("date"),
             "total": extracted.get("total"),
             "line_items": clean_items,
@@ -1851,6 +1903,21 @@ def process_receipt(filename: str, file_size_bytes: int, image_bytes: bytes) -> 
         image_bytes = _normalize_orientation(image_bytes)
 
     raw_text = extract_text(image_bytes)
+
+    # Checked before anything else (and before the Gemini fallback call, so
+    # an obvious non-receipt doesn't waste one of the scarce daily quota
+    # calls on it): a real purchase receipt never prints bracketed reference
+    # ranges next to its numbers, so seeing that pattern is conclusive on
+    # its own regardless of what the regex parser below manages to guess for
+    # a date/amount/items from the surrounding text. See
+    # _looks_like_non_receipt_report's own docstring for the real case (a
+    # gym body-composition scan) this closes off.
+    if _looks_like_non_receipt_report(raw_text):
+        raise OcrExtractionError(
+            "This looks like a report or document, not a purchase receipt. "
+            "Please retake the photo or choose a clearer image."
+        )
+
     parsed = parse_receipt_fields(raw_text)
 
     # Hybrid extraction, step 2: regex already ran above (fast, free, handles
@@ -1888,7 +1955,17 @@ def process_receipt(filename: str, file_size_bytes: int, image_bytes: bytes) -> 
     # a hard-to-read one, so it's rejected here instead of silently handing
     # back a plausible-looking but meaningless result (e.g. a stray "RM
     # 12.50" from unrelated UI text getting treated as the total).
-    if parsed["date"] is None and not parsed["line_items"]:
+    #
+    # A date alone is deliberately NOT enough on its own anymore -- plenty
+    # of non-receipt documents print a date too (forms, reports, printouts).
+    # It must be corroborated by either real extracted line items, or a
+    # total actually anchored to a "Total"/"Amount Due"-style keyword
+    # (_find_reliable_total) rather than _extract_amount's own blind
+    # "largest 2-decimal number anywhere" fallback, which can and did latch
+    # onto an unrelated measurement on a non-receipt document.
+    has_items = bool(parsed["line_items"])
+    has_reliable_total = _find_reliable_total(raw_text) is not None
+    if not has_items and not (parsed["date"] is not None and has_reliable_total):
         raise OcrExtractionError(
             "This doesn't look like a receipt — no date or items were "
             "found. Please retake the photo or choose a clearer image."
