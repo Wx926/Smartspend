@@ -355,6 +355,22 @@ class TestNonReceiptReportDetection:
         text = "TOMO VISION SETAPAK\n23/07/2026\nTotal 290.00\nE-PAY 290.00\n"
         assert _looks_like_non_receipt_report(text) is False
 
+    def test_flags_via_vocabulary_alone_when_brackets_are_lost(self):
+        """Regression guard for a real crop of just this document's lower
+        half: Vision's reading order interleaved unrelated text between
+        each "[" and its numbers, so the bracket signal alone didn't fire.
+        Section headings unique to this report type must catch it on
+        their own even with the bracket punctuation stripped out entirely."""
+        text = (
+            "5. TOTAL BODY WATER KG/LBS\n"
+            "42.5 / Optimal\n"
+            "10. TOTAL BODY FAT PERCENTAGE\n"
+            "17.6% / Optimal\n"
+            "18. SEGMENTAL ANALYSIS\n"
+            "ANYTIME FITNESS\n"
+        )
+        assert _looks_like_non_receipt_report(text) is True
+
 
 class TestNonReceiptRejectionEndToEnd:
     """Regression guard for a real false-accept: Anytime Fitness's Evolt 360
@@ -378,6 +394,26 @@ class TestNonReceiptRejectionEndToEnd:
             "TORSO\n"
             "LEAN MASS 25.17 / Optimal [21.68 - 26.50]\n"
             "FAT MASS 7.12 / High [4.67 - 7.00]\n"
+        )
+        png = _tiny_png()
+        with pytest.raises(OcrExtractionError):
+            process_receipt("scan.jpg", len(png), png)
+
+    @patch("services.ocr_service.extract_text")
+    def test_cropped_lower_half_with_no_date_and_no_intact_brackets_is_rejected(self, mock_extract_text):
+        """The exact real-world failure that got past the first version of
+        this fix: a photo of just this document's lower half (no date/name
+        header at all this time) whose OCR text also happened not to
+        preserve clean bracket pairs -- only the section-heading vocabulary
+        was left to catch it."""
+        mock_extract_text.return_value = (
+            "5. TOTAL BODY WATER KG/LBS\n"
+            "42.5 / Optimal\n"
+            "10. TOTAL BODY FAT PERCENTAGE\n"
+            "17.6% / Optimal\n"
+            "18. SEGMENTAL ANALYSIS\n"
+            "ANYTIME FITNESS\n"
+            "26.50\n"
         )
         png = _tiny_png()
         with pytest.raises(OcrExtractionError):

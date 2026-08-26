@@ -942,22 +942,40 @@ def _extract_amount(raw_text: str) -> float | None:
     return max(float(m.replace(",", ".")) for m in matches) if matches else None
 
 
-# A "[52.9 - 64.7]" / "[15 - 20]" / "[70%]" style bracketed reference range is
-# how body-composition scans, lab/blood-test results, and similar health
-# reports print the "normal" band next to a measured value -- e.g. Anytime
-# Fitness's Evolt 360 body scan printout, which was confirmed to slip past
-# the not-a-receipt check entirely: it has a genuine printed date (so the
-# old date-or-items check alone was satisfied) and enough 2-decimal numbers
-# scattered through its measurement columns (e.g. "25.17", "8.90") that
-# _extract_amount's blind Strategy 3 fallback confidently, but wrongly,
-# treated one of them as a grand total. No real purchase receipt prints this
-# bracketed-range convention, so its presence is treated as strong,
-# standalone proof this is a report rather than a receipt.
-_BRACKETED_RANGE = re.compile(r"\[\s*\d+(?:\.\d+)?\s*(?:-\s*\d+(?:\.\d+)?\s*)?%?\s*\]")
+# Two independent signals distinguish a body-composition/lab-report style
+# document (e.g. Anytime Fitness's Evolt 360 body scan printout) from a real
+# purchase receipt -- kept separate because either one surviving Vision's
+# reading-order reconstruction alone is enough:
+#
+# 1. Bracketed reference ranges ("[52.9 - 64.7]", "[70%]") printed next to a
+#    measured value. The FULL "[number - number]" pattern turned out to be
+#    fragile in practice: confirmed on a real photo of just this document's
+#    lower half where Vision's block-based reconstruction interleaved
+#    unrelated text between the "[" and its numbers, breaking the sequence
+#    apart even though the bracket characters themselves survived intact.
+#    Counting bare "[" characters is a looser but sturdier proxy for the
+#    same signal -- a real receipt essentially never prints a square
+#    bracket at all, so 2+ of them anywhere is still strong evidence.
+# 2. Large, clearly-printed section headings unique to this report type
+#    ("SEGMENTAL ANALYSIS", "TOTAL BODY WATER", ...). Confirmed necessary
+#    against that same lower-half crop, which had no visible date/name
+#    header and still needed a second, independent signal once the bracket
+#    check alone proved fragile. Large printed headings are far less prone
+#    to the character-level noise that breaks up small bracket punctuation.
+_NON_RECEIPT_REPORT_PHRASES = [
+    "body composition", "body scan", "segmental analysis",
+    "skeletal muscle mass", "visceral fat", "lean body mass",
+    "total body water", "total body fat percentage",
+    "intracellular fluid", "extracellular fluid", "bio age", "bwi score",
+    "basal metabolic rate", "waist to hip ratio", "abdominal circumference",
+]
 
 
 def _looks_like_non_receipt_report(raw_text: str) -> bool:
-    return len(_BRACKETED_RANGE.findall(raw_text)) >= 2
+    if raw_text.count("[") >= 2:
+        return True
+    lowered = raw_text.lower()
+    return sum(1 for phrase in _NON_RECEIPT_REPORT_PHRASES if phrase in lowered) >= 2
 
 
 def _extract_date(raw_text: str) -> date | None:
