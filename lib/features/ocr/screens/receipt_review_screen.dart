@@ -9,6 +9,7 @@ import '../../../shared/theme/app_colors.dart';
 import '../../../shared/models/budget_model.dart';
 import '../../../shared/models/expense_model.dart';
 import '../../../shared/services/supabase_service.dart';
+import '../../../features/alerts/services/alert_service.dart';
 import '../../../features/auth/providers/auth_provider.dart';
 import '../../../features/budget/providers/budget_provider.dart';
 import '../../../features/expenses/providers/expense_provider.dart';
@@ -418,6 +419,16 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
         expiryDate: w.expiryDate,
         status: w.status,
       );
+      // FR 4.15: the warranty row above only ever shows its status if the
+      // user happens to open Warranty Records and look — this is what
+      // actually surfaces it proactively, before the expiry date arrives.
+      if (w.expiryDate != null) {
+        await AlertService.instance.scheduleWarrantyReminder(
+          expenseId: firstExpenseId,
+          vendorName: vendor,
+          expiryDateIso: w.expiryDate!,
+        );
+      }
     }
   }
 

@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:timezone/data/latest.dart' as tz_data;
+import 'package:timezone/timezone.dart' as tz;
 import 'package:uuid/uuid.dart';
 import '../../../shared/constants/app_constants.dart';
 import '../../../shared/models/alert_log_model.dart';
@@ -13,6 +15,32 @@ import '../../../shared/services/navigation_service.dart';
 import '../../../shared/services/supabase_service.dart';
 import '../../budget/services/budget_service.dart';
 import '../../expenses/services/expense_service.dart';
+import '../../ocr/screens/warranty_records_screen.dart';
+
+/// Pure date math for FR 4.15's warranty reminder, kept as a standalone
+/// top-level function (rather than folded into scheduleWarrantyReminder
+/// below) specifically so it's unit-testable without touching the
+/// notification plugin, a real device, or the system clock's actual "now" —
+/// the plugin call itself needs none of this function's branching, just the
+/// DateTime it decides on.
+///
+/// If the "N days before" point has already passed by the time this runs
+/// (a short-duration warranty, or the item was scanned close to its own
+/// expiry), still remind the user as soon as possible rather than silently
+/// never firing at all — the caller is responsible for not calling this at
+/// all once the warranty has fully expired (see scheduleWarrantyReminder).
+DateTime computeWarrantyReminderFireDate(
+  DateTime expiryDate, {
+  int daysBeforeExpiry = 7,
+  DateTime? now,
+}) {
+  final effectiveNow = now ?? DateTime.now();
+  final candidate = expiryDate.subtract(Duration(days: daysBeforeExpiry));
+  if (candidate.isBefore(effectiveNow)) {
+    return effectiveNow.add(const Duration(seconds: 10));
+  }
+  return candidate;
+}
 
 /// Algorithm 3: Smart Alert Trigger.
 ///
@@ -35,6 +63,11 @@ class AlertService {
 
   Future<void> initNotifications() async {
     if (_notificationsInitialised) return;
+    // Required once before any zonedSchedule call (warranty reminders) can
+    // resolve tz.local — .show() (the budget/location alerts above) never
+    // needed this since those fire immediately, with no timezone-aware
+    // future date involved.
+    tz_data.initializeTimeZones();
     // Must be a plain white silhouette with real transparency — Android
     // forces monochrome rendering on this icon regardless of what's given,
     // and the full-color @mipmap/ic_launcher (opaque background, no alpha)
@@ -63,6 +96,69 @@ class AlertService {
           IOSFlutterLocalNotificationsPlugin
         >()
         ?.requestPermissions(alert: true, badge: true, sound: true);
+  }
+
+  /// FR 4.15: reminds the user before a warranty detected on a scanned
+  /// receipt expires, rather than the status only ever being visible if
+  /// they happen to open Warranty Records and look. Fires once, [daysBeforeExpiry]
+  /// days ahead of [expiryDateIso] (see computeWarrantyReminderFireDate for
+  /// what happens when that point has already passed by the time this is
+  /// called). Silently does nothing for an unparsable or already-expired
+  /// date — there's nothing left to usefully warn about in either case.
+  ///
+  /// [expenseId] seeds a stable notification id so re-saving the same
+  /// receipt reschedules (overwrites) rather than stacking duplicate
+  /// reminders — flutter_local_notifications treats a repeat id as
+  /// "replace the existing one", not "add another".
+  Future<void> scheduleWarrantyReminder({
+    required String expenseId,
+    required String vendorName,
+    required String expiryDateIso,
+    int daysBeforeExpiry = 7,
+  }) async {
+    final expiryDate = DateTime.tryParse(expiryDateIso);
+    if (expiryDate == null || !expiryDate.isAfter(DateTime.now())) return;
+
+    await initNotifications();
+    final fireDate = computeWarrantyReminderFireDate(
+      expiryDate,
+      daysBeforeExpiry: daysBeforeExpiry,
+    );
+    final formattedExpiry =
+        '${expiryDate.day}/${expiryDate.month}/${expiryDate.year}';
+
+    await _notifications.zonedSchedule(
+      // & 0x7fffffff keeps this a valid positive 32-bit id (Android's
+      // notification id type) regardless of what Dart's own hashCode
+      // (a full 64-bit int) happens to produce for this string.
+      expenseId.hashCode & 0x7fffffff,
+      '🛡️ Warranty Reminder',
+      'Your warranty from $vendorName expires on $formattedExpiry — '
+          'act soon if you still need to make a claim.',
+      tz.TZDateTime.from(fireDate, tz.local),
+      const NotificationDetails(
+        android: AndroidNotificationDetails(
+          'smartspend_warranty',
+          'Warranty Reminders',
+          channelDescription: 'Reminders before a scanned warranty expires',
+          importance: Importance.high,
+          priority: Priority.high,
+        ),
+        iOS: DarwinNotificationDetails(),
+      ),
+      // "inexact" avoids Android 12+'s SCHEDULE_EXACT_ALARM permission
+      // prompt entirely -- a reminder pitched in whole days doesn't need
+      // to-the-minute precision, so there's nothing worth trading a
+      // permission dialog for.
+      androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
+      // Required by this plugin version's API even though the app is
+      // Android-only (per README) -- this parameter is iOS-specific
+      // (absolute vs. wall-clock interpretation across timezone changes)
+      // and has no effect on Android's own scheduling path.
+      uiLocalNotificationDateInterpretation:
+          UILocalNotificationDateInterpretation.absoluteTime,
+      payload: 'warranty_reminder',
+    );
   }
 
   /// Local-first, same pattern as ExpenseService: read the cache instantly,
@@ -406,6 +502,13 @@ class AlertService {
     if (response.payload == 'meal_reminder' ||
         response.actionId == 'record_spending') {
       nav.pushNamed('/add-expense');
+    } else if (response.payload == 'warranty_reminder') {
+      // No named route exists for this screen (only ever reached via a
+      // direct MaterialPageRoute push from Profile) -- pushed the same way
+      // here rather than adding a route registration just for this.
+      nav.push(
+        MaterialPageRoute(builder: (_) => const WarrantyRecordsScreen()),
+      );
     } else {
       nav.pushNamed('/alerts');
     }
