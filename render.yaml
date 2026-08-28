@@ -1,0 +1,44 @@
+# Render Blueprint for the SmartSpend backend (Flask + OCR/voice services).
+# This file lets Render auto-configure the service when you connect this
+# GitHub repo — see the deployment instructions given alongside this file
+# for the manual steps that still need doing on Render's dashboard
+# (creating the account, connecting the repo, and filling in the actual
+# secret values below, which are deliberately NOT stored in this file since
+# it's committed to git).
+#
+# rootDir tells Render this Python service lives in the backend/ subfolder,
+# not the repo root (the repo root is the Flutter app).
+services:
+  - type: web
+    name: smartspend-backend
+    runtime: python
+    rootDir: backend
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python app.py
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
+      # Fill in the actual values on Render's dashboard (Environment tab) —
+      # never commit real secrets into this file.
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
+      - key: GOOGLE_VISION_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: WHISPER_MODEL_SIZE
+        # Started at 'base' (a size-down from the 'medium' used in local
+        # dev, since Render's free tier caps memory at 512MB), but even
+        # 'base' proved too slow on the free tier's limited/shared CPU --
+        # confirmed on a real multi-sentence recording that timed out
+        # entirely despite a 90s client timeout, with even a single short
+        # phrase noticeably slower than the same call locally. Sized down
+        # further to 'tiny' to prioritise the deployment actually
+        # responding in a reasonable time over maximum accuracy -- your
+        # local backend/.env is untouched and can keep 'medium' for your
+        # own testing.
+        value: tiny

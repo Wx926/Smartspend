@@ -7,9 +7,9 @@ import 'package:pdfx/pdfx.dart';
 import 'package:uuid/uuid.dart';
 import '../../../shared/theme/app_colors.dart';
 import '../../../shared/models/budget_model.dart';
-import '../../../shared/models/category_model.dart';
 import '../../../shared/models/expense_model.dart';
 import '../../../shared/services/supabase_service.dart';
+import '../../../features/alerts/services/alert_service.dart';
 import '../../../features/auth/providers/auth_provider.dart';
 import '../../../features/budget/providers/budget_provider.dart';
 import '../../../features/expenses/providers/expense_provider.dart';
@@ -419,6 +419,16 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
         expiryDate: w.expiryDate,
         status: w.status,
       );
+      // FR 4.15: the warranty row above only ever shows its status if the
+      // user happens to open Warranty Records and look — this is what
+      // actually surfaces it proactively, before the expiry date arrives.
+      if (w.expiryDate != null) {
+        await AlertService.instance.scheduleWarrantyReminder(
+          expenseId: firstExpenseId,
+          vendorName: vendor,
+          expiryDateIso: w.expiryDate!,
+        );
+      }
     }
   }
 
@@ -1132,7 +1142,6 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
                       for (int i = 0; i < _items.length; i++) ...[
                         _ItemRow(
                           item: _items[i],
-                          categories: categories,
                           onDelete: _items.length > 1
                               ? () => setState(() {
                                   _items[i].nameCtrl.dispose();
@@ -1142,8 +1151,6 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
                                 })
                               : null,
                           onChanged: () => setState(() {}),
-                          onCategoryChanged: (id) =>
-                              setState(() => _items[i].categoryId = id),
                         ),
                         if (i < _items.length - 1)
                           const Divider(height: 1, color: Color(0xFFF0F0F0)),
@@ -1287,14 +1294,23 @@ class _ReceiptReviewScreenState extends State<ReceiptReviewScreen> {
                               onTap: () => setState(() {
                                 _selectedCategoryId = cat.id;
                                 _selectedCategoryName = cat.name;
-                                // Bulk-apply as the default for every item —
-                                // still overridable per item via the badge
-                                // on each row (FR 4.8), so this stays a
-                                // convenient default rather than forcing one
-                                // category on a multi-category entry.
-                                for (final item in _items) {
-                                  item.categoryId = cat.id;
-                                }
+                                // Deliberately NOT touching item.categoryId
+                                // here anymore. This used to bulk-overwrite
+                                // every item's own category, on the
+                                // assumption there was still a per-item
+                                // badge to fix it back afterwards (FR 4.8) —
+                                // that badge was removed, so this became a
+                                // silent "tap once, lose every item's
+                                // individual category with no way back"
+                                // bug. _selectedCategoryId already reaches
+                                // the save logic as `catId` (see _save()),
+                                // which each item falls back to only when
+                                // it has no category of its own
+                                // (`item.categoryId ?? catId`) — so this
+                                // selection still correctly acts as the
+                                // default for category-less rows (e.g. a
+                                // manually added blank row) without needing
+                                // to overwrite rows that already have one.
                               }),
                               child: Container(
                                 padding: const EdgeInsets.symmetric(
@@ -1644,107 +1660,17 @@ class _EditableItem {
 
 class _ItemRow extends StatelessWidget {
   final _EditableItem item;
-  final List<CategoryModel> categories;
   final VoidCallback? onDelete;
   final VoidCallback onChanged;
-  final ValueChanged<String> onCategoryChanged;
 
   const _ItemRow({
     required this.item,
-    required this.categories,
     required this.onDelete,
     required this.onChanged,
-    required this.onCategoryChanged,
   });
-
-  CategoryModel? get _category =>
-      categories.where((c) => c.id == item.categoryId).firstOrNull;
-
-  /// Opens a chip picker (same visual style as the screen's overall
-  /// "Category" selector) scoped to just this one item, so a multi-category
-  /// voice/receipt entry (e.g. "KFC RM20, GSC cinema RM30, Uniqlo RM50")
-  /// can have each line item saved under its own correct category (FR 4.8)
-  /// instead of every item inheriting one shared category.
-  Future<void> _pickCategory(BuildContext context) async {
-    final itemName = item.nameCtrl.text.trim();
-    final picked = await showModalBottomSheet<CategoryModel>(
-      context: context,
-      backgroundColor: Colors.white,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
-      builder: (_) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'Category for "${itemName.isEmpty ? 'this item' : itemName}"',
-                style: const TextStyle(
-                  fontWeight: FontWeight.w600,
-                  fontSize: 15,
-                ),
-              ),
-              const SizedBox(height: 12),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: categories.map((cat) {
-                  final selected = cat.id == item.categoryId;
-                  return GestureDetector(
-                    onTap: () => Navigator.pop(context, cat),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 14,
-                        vertical: 8,
-                      ),
-                      decoration: BoxDecoration(
-                        color: selected
-                            ? const Color(0xFF1B4332)
-                            : Colors.white,
-                        borderRadius: BorderRadius.circular(20),
-                        border: Border.all(
-                          color: selected
-                              ? const Color(0xFF1B4332)
-                              : const Color(0xFFDDDDDD),
-                        ),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text(cat.icon, style: const TextStyle(fontSize: 14)),
-                          const SizedBox(width: 6),
-                          Text(
-                            cat.name,
-                            style: TextStyle(
-                              color: selected
-                                  ? Colors.white
-                                  : const Color(0xFF333333),
-                              fontSize: 13,
-                              fontWeight: selected
-                                  ? FontWeight.w600
-                                  : FontWeight.normal,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  );
-                }).toList(),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-    if (picked != null) onCategoryChanged(picked.id);
-  }
 
   @override
   Widget build(BuildContext context) {
-    final cat = _category;
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 8),
       child: Column(
@@ -1841,45 +1767,6 @@ class _ItemRow extends StatelessWidget {
                 : const SizedBox(),
           ),
             ],
-          ),
-          const SizedBox(height: 6),
-          // Per-item category badge — each line item is saved under its
-          // OWN category (FR 4.8), not one category shared by the whole
-          // receipt/voice entry. Defaults to whatever the backend's
-          // rule-based categoriser assigned this item; tap to override.
-          GestureDetector(
-            onTap: categories.isEmpty ? null : () => _pickCategory(context),
-            child: Container(
-              padding: const EdgeInsets.symmetric(
-                horizontal: 10,
-                vertical: 4,
-              ),
-              decoration: BoxDecoration(
-                color: const Color(0xFFF5F5F5),
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: const Color(0xFFE0E0E0)),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(cat?.icon ?? '📦', style: const TextStyle(fontSize: 12)),
-                  const SizedBox(width: 4),
-                  Text(
-                    cat?.name ?? 'Others',
-                    style: const TextStyle(
-                      fontSize: 11,
-                      color: Color(0xFF555555),
-                    ),
-                  ),
-                  const SizedBox(width: 2),
-                  const Icon(
-                    Icons.arrow_drop_down,
-                    size: 14,
-                    color: Color(0xFF888888),
-                  ),
-                ],
-              ),
-            ),
           ),
         ],
       ),

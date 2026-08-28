@@ -18,7 +18,11 @@ from datetime import datetime, date
 from dotenv import load_dotenv
 load_dotenv()
 
-from services.categorisation_service import categorise_text, category_result_for
+from services.categorisation_service import (
+    categorise_text,
+    category_result_for,
+    majority_category,
+)
 from services.warranty_service import detect_warranty
 
 GOOGLE_VISION_API_KEY = os.environ.get("GOOGLE_VISION_API_KEY", "")
@@ -69,6 +73,21 @@ _MONTH_TO_NUM = {
 _MONTH_NAME = "(?:" + "|".join(_loose(abbr) for abbr in _MONTH_TO_NUM) + r")[A-Za-z]*"
 _MONTH_NAME_DATE = re.compile(
     rf"({_MONTH_NAME})\s*(\d{{1,2}}),?\s*(\d{{4}})", re.IGNORECASE
+)
+
+# Day-Month-Year order, e.g. "07 Jun 2026" — the convention most Malaysian
+# receipts actually use, as opposed to the American "Month Day, Year" order
+# _MONTH_NAME_DATE above handles. A receipt printing this order fell
+# through both this and every numeric DATE_PATTERN entirely (none of them
+# expect a month NAME), silently defaulting to today's date with no
+# indication anything had gone wrong — confirmed on a real receipt ("07
+# Jun 2026" parsed as None, only "Jun 07, 2026" worked). Day and month
+# swap position relative to _MONTH_NAME_DATE's groups, handled separately
+# in _extract_date rather than trying to force one pattern to cover both
+# orders, since that would make an already-dense regex harder to reason
+# about for a fairly small gain.
+_DAY_MONTH_NAME_DATE = re.compile(
+    rf"(\d{{1,2}})\s*(?:st|nd|rd|th)?,?\s*({_MONTH_NAME})\s*,?\s*(\d{{4}})", re.IGNORECASE
 )
 
 _CURRENCY = r"(?:RM|MYR|USD|SGD|GBP|\$|£|€|¥)?\s*"
@@ -795,14 +814,17 @@ def parse_receipt_fields(raw_text: str) -> dict:
     }
 
 
-def _extract_amount(raw_text: str) -> float | None:
+def _find_reliable_total(raw_text: str) -> float | None:
     """
-    FR 4.10: Extract the receipt grand total.
-    Scans bottom-up so the grand total line (always near the end of the
-    receipt) is found before any 'TOTAL' column header in the items table.
-    Strategy 1: last 'Total / Amount Due' line that carries an amount on
-                 the same line or within the next 2 lines.
-    Strategy 2: fallback to the largest amount in the receipt.
+    Strategies 1+2 of _extract_amount (see its docstring) -- an amount found
+    because a 'Total'/'Amount Due' keyword was actually seen nearby, as
+    opposed to Strategy 3's blind "largest 2-decimal number anywhere" guess.
+    Split out so the not-a-receipt check in process_receipt can require
+    *this* specific kind of evidence -- a keyword-anchored total -- without
+    letting the blind guess (which fires on ANY document containing two
+    decimal-formatted numbers, receipt or not) count as proof something is
+    a receipt at all. See _looks_like_non_receipt_report's docstring for the
+    real case (a gym body-scan printout) this was guarding against.
     """
     lines = [ln.strip() for ln in raw_text.splitlines()]
 
@@ -900,12 +922,60 @@ def _extract_amount(raw_text: str) -> float | None:
                 midline_amount = float(m.group(1).replace(" ", "").replace(",", "."))
                 break
 
-    if midline_amount is not None:
-        return midline_amount
+    return midline_amount
+
+
+def _extract_amount(raw_text: str) -> float | None:
+    """
+    FR 4.10: Extract the receipt grand total.
+    Scans bottom-up so the grand total line (always near the end of the
+    receipt) is found before any 'TOTAL' column header in the items table.
+    Strategy 1+2: see _find_reliable_total.
+    Strategy 3: fallback to the largest amount anywhere in the text.
+    """
+    reliable = _find_reliable_total(raw_text)
+    if reliable is not None:
+        return reliable
 
     # Fallback: largest amount in the receipt
     matches = AMOUNT_PATTERN.findall(raw_text)
     return max(float(m.replace(",", ".")) for m in matches) if matches else None
+
+
+# Two independent signals distinguish a body-composition/lab-report style
+# document (e.g. Anytime Fitness's Evolt 360 body scan printout) from a real
+# purchase receipt -- kept separate because either one surviving Vision's
+# reading-order reconstruction alone is enough:
+#
+# 1. Bracketed reference ranges ("[52.9 - 64.7]", "[70%]") printed next to a
+#    measured value. The FULL "[number - number]" pattern turned out to be
+#    fragile in practice: confirmed on a real photo of just this document's
+#    lower half where Vision's block-based reconstruction interleaved
+#    unrelated text between the "[" and its numbers, breaking the sequence
+#    apart even though the bracket characters themselves survived intact.
+#    Counting bare "[" characters is a looser but sturdier proxy for the
+#    same signal -- a real receipt essentially never prints a square
+#    bracket at all, so 2+ of them anywhere is still strong evidence.
+# 2. Large, clearly-printed section headings unique to this report type
+#    ("SEGMENTAL ANALYSIS", "TOTAL BODY WATER", ...). Confirmed necessary
+#    against that same lower-half crop, which had no visible date/name
+#    header and still needed a second, independent signal once the bracket
+#    check alone proved fragile. Large printed headings are far less prone
+#    to the character-level noise that breaks up small bracket punctuation.
+_NON_RECEIPT_REPORT_PHRASES = [
+    "body composition", "body scan", "segmental analysis",
+    "skeletal muscle mass", "visceral fat", "lean body mass",
+    "total body water", "total body fat percentage",
+    "intracellular fluid", "extracellular fluid", "bio age", "bwi score",
+    "basal metabolic rate", "waist to hip ratio", "abdominal circumference",
+]
+
+
+def _looks_like_non_receipt_report(raw_text: str) -> bool:
+    if raw_text.count("[") >= 2:
+        return True
+    lowered = raw_text.lower()
+    return sum(1 for phrase in _NON_RECEIPT_REPORT_PHRASES if phrase in lowered) >= 2
 
 
 def _extract_date(raw_text: str) -> date | None:
@@ -932,6 +1002,19 @@ def _extract_date(raw_text: str) -> date | None:
         if month_num:
             try:
                 return date(int(match.group(3)), month_num, int(match.group(2)))
+            except ValueError:
+                pass
+
+    # Day-Month-Year order (e.g. "07 Jun 2026") -- see _DAY_MONTH_NAME_DATE's
+    # own comment for why this needs its own pattern rather than reusing
+    # _MONTH_NAME_DATE above, which expects the opposite word order.
+    match = _DAY_MONTH_NAME_DATE.search(raw_text)
+    if match:
+        month_key = re.sub(r"\s+", "", match.group(2)).lower()[:3]
+        month_num = _MONTH_TO_NUM.get(month_key)
+        if month_num:
+            try:
+                return date(int(match.group(3)), month_num, int(match.group(1)))
             except ValueError:
                 pass
 
@@ -999,6 +1082,20 @@ def _extract_vendor(lines: list[str]) -> str | None:
 
     window = lines[:10]
     if any(_BHD_LINE.search(ln) for ln in window):
+        # A clean, plausible-brand candidate line seen just before reaching
+        # the Sdn Bhd line itself — used as a fallback below when that line
+        # doesn't recur elsewhere (the ONLY signal the loop otherwise has
+        # for preferring it). Malaysian receipts overwhelmingly print the
+        # trading name directly above the legal entity's registered name
+        # (confirmed: "FARM TO PLATE" / "MALAYSIA FOOD CORPORATION SDN
+        # BHD", with no recurrence anywhere else on the receipt and no
+        # "trading as" disclosure either — the recurrence check alone left
+        # this case falling straight through to the legal entity name).
+        # Deliberately only the line IMMEDIATELY prior, not just any
+        # earlier candidate — an unrelated tagline further up (the exact
+        # "PERI-PERI CHICKEN" case the recurrence check itself already
+        # guards against) must not win this way too.
+        immediately_prior_candidate: str | None = None
         for idx, line in enumerate(lines[:5]):
             stripped = line.strip()
             if (any(c in stripped for c in "#:*")
@@ -1014,6 +1111,8 @@ def _extract_vendor(lines: list[str]) -> str | None:
             # digit-free address fragment ("Selangor U13, Shah Alam") win by
             # default through a looser fallback further down.
             if _BHD_LINE.search(stripped):
+                if immediately_prior_candidate is not None:
+                    return immediately_prior_candidate
                 # A company name never legitimately starts with a lowercase
                 # word — that's always a stray fragment of unrelated text
                 # (e.g. an address block wrapping into the same reconstructed
@@ -1025,11 +1124,13 @@ def _extract_vendor(lines: list[str]) -> str | None:
                     words.pop(0)
                 return " ".join(words)
             if re.search(r"\d{3,}", stripped):
+                immediately_prior_candidate = None
                 continue
             normalised = stripped.lower()
             rest = " ".join(window[:idx] + window[idx + 1:]).lower()
             if normalised in rest:
                 return stripped
+            immediately_prior_candidate = stripped
 
     for line in lines[:5]:
         if (not re.search(r"\d{3,}", line)
@@ -1228,8 +1329,22 @@ def _extract_line_items(raw_text: str) -> list[dict]:
         # without this gate: stripping "4 " just leaves "NANDOS3 76 SYAFIQ 2",
         # which still fails every layout's name pattern (a bare "76" token
         # breaks the name-continuation rules), so nothing false gets emitted.
-        qty_prefix = re.match(r"^(\d{1,3})\s+([A-Za-z\d].*)$", line)
-        line_qty = int(qty_prefix.group(1)) if qty_prefix else None
+        #
+        # The leading digit itself is also allowed to be a stray punctuation
+        # mark or look-alike letter standing in for a misread "1" -- the same
+        # tolerance _ALL_NUMBERS_ROW above already needs for its own qty
+        # column, for the same reason (a partially obscured "1" degrades to
+        # whatever vertical-stroke-shaped glyph Vision guesses instead).
+        # Confirmed on a real receipt with a physical fold across the item
+        # table: "1 PARMESAN TRUFFLE FRIES 29.00" came back as "! MESAN
+        # TRUFFLE FRIES 29.00" (the fold ate the "PAR" too) -- without this,
+        # the "!" fails every layout's name-start check and the entire line,
+        # price included, silently vanishes rather than just losing its qty.
+        qty_prefix = re.match(r"^(\d{1,3}|[!|lI])\s+([A-Za-z\d].*)$", line)
+        line_qty = (
+            int(qty_prefix.group(1)) if qty_prefix and qty_prefix.group(1).isdigit()
+            else 1 if qty_prefix else None
+        )
         if qty_prefix:
             line = qty_prefix.group(2)
 
@@ -1653,6 +1768,22 @@ _GEMINI_RECEIPT_SCHEMA = {
                     "item_name": {"type": "STRING"},
                     "quantity": {"type": "INTEGER"},
                     "price": {"type": "NUMBER"},
+                    # Piggybacked onto this same call rather than a separate
+                    # categorisation request — costs nothing extra against
+                    # the tight daily quota, and Gemini's actual language
+                    # understanding of a menu item ("Seafood Pomodoro
+                    # Risotto") meaningfully beats the rule-based keyword
+                    # matcher (categorisation_service.py) for exactly the
+                    # cases that reach this fallback in the first place:
+                    # unusual receipts the simple regex/keyword layers
+                    # already struggled with. enum constrains it to the
+                    # app's actual category set so it can never invent a
+                    # category name the rest of the system doesn't know.
+                    "category": {
+                        "type": "STRING",
+                        "enum": ["Food & Dining", "Transport", "Shopping",
+                                 "Entertainment", "Health", "Utilities", "Others"],
+                    },
                 },
                 "required": ["item_name", "price"],
             },
@@ -1670,6 +1801,9 @@ _GEMINI_RECEIPT_PROMPT = """You are reading a photo of a purchase receipt. Extra
   - item_name: the product/item description as printed
   - quantity: the number of units purchased (use 1 if not shown separately)
   - price: the TOTAL charged for that line (quantity x unit price), not a per-unit rate
+  - category: your best guess at which ONE of these categories this item belongs to,
+    based on what the item actually is (not the store it's from): Food & Dining, Transport,
+    Shopping, Entertainment, Health, Utilities, Others. Use "Others" only if none plausibly fit.
 
 Read the receipt's actual column layout carefully — an item's name and its price may be printed on the same physical row, or wrap across nearby rows, depending on how this particular receipt is laid out. Do not guess or invent items that aren't printed. If a value truly isn't legible, omit it rather than fabricating one."""
 
@@ -1704,7 +1838,18 @@ def _gemini_fallback_extract(image_bytes: bytes) -> dict | None:
         }],
         "generationConfig": {
             "temperature": 0.1,
-            "maxOutputTokens": 2048,
+            # 2048 was too tight and silently truncated the response mid-
+            # JSON on a real 10-item receipt (confirmed via the backend log:
+            # "Gemini fallback failed... Expecting value: line 31 column 19"
+            # -- the classic json.loads() error for a string that just
+            # stops partway through, not malformed content). This model
+            # spends some of its output budget on internal reasoning before
+            # ever emitting the actual JSON answer, and adding a `category`
+            # field to every line item (for the categorisation piggyback)
+            # made each item's JSON longer too -- both eating into the same
+            # budget. Raised well past what even a large receipt needs,
+            # rather than tuning a fragile exact number.
+            "maxOutputTokens": 8192,
             "responseMimeType": "application/json",
             "responseSchema": _GEMINI_RECEIPT_SCHEMA,
         },
@@ -1723,23 +1868,52 @@ def _gemini_fallback_extract(image_bytes: bytes) -> dict | None:
         line_items = extracted.get("line_items")
         if not isinstance(line_items, list) or not line_items:
             return None
+        # Belt-and-suspenders even with the schema's enum constraint --
+        # constraints on model output are strong but not absolute, and a
+        # category name outside this set must not silently propagate to
+        # category_result_for() and fail its own Supabase lookup later.
+        _valid_categories = {
+            "Food & Dining", "Transport", "Shopping",
+            "Entertainment", "Health", "Utilities", "Others",
+        }
         clean_items = []
         for it in line_items:
             name = str(it.get("item_name", "")).strip()
             price = it.get("price")
-            if not name or not isinstance(price, (int, float)) or price <= 0:
+            # len(name) < 2 rejects single-character placeholders (e.g. "Y")
+            # that the model occasionally emits on a hard-to-read photo
+            # (stained/creased paper, glare) instead of a real item name --
+            # confirmed on a real receipt where this fired inconsistently
+            # from one attempt to the next on the same image. A genuine
+            # printed item name is never one character, so this can't
+            # reject a real item, only a hallucinated placeholder.
+            if not name or len(name) < 2 or not isinstance(price, (int, float)) or price <= 0:
                 continue
             qty = it.get("quantity")
+            category = it.get("category")
             clean_items.append({
                 "item_name": name,
                 "price": float(price),
                 "quantity": int(qty) if isinstance(qty, (int, float)) and qty >= 1 else 1,
+                "category_name": category if category in _valid_categories else None,
             })
         if not clean_items:
             return None
+
+        # Same placeholder guard for vendor_name -- caller does
+        # `fallback.get("vendor_name") or parsed["vendor_name"]`, so
+        # returning None here (instead of a garbage "Y") correctly makes it
+        # fall through to the regex parser's own vendor guess rather than
+        # overwriting a plausible answer with an implausible one.
+        vendor_name = extracted.get("vendor_name")
+        if isinstance(vendor_name, str):
+            vendor_name = vendor_name.strip()
+        if not vendor_name or len(vendor_name) < 2:
+            vendor_name = None
+
         print(f"===== GEMINI FALLBACK: {len(clean_items)} item(s) extracted =====")
         return {
-            "vendor_name": extracted.get("vendor_name"),
+            "vendor_name": vendor_name,
             "date": extracted.get("date"),
             "total": extracted.get("total"),
             "line_items": clean_items,
@@ -1761,6 +1935,21 @@ def process_receipt(filename: str, file_size_bytes: int, image_bytes: bytes) -> 
         image_bytes = _normalize_orientation(image_bytes)
 
     raw_text = extract_text(image_bytes)
+
+    # Checked before anything else (and before the Gemini fallback call, so
+    # an obvious non-receipt doesn't waste one of the scarce daily quota
+    # calls on it): a real purchase receipt never prints bracketed reference
+    # ranges next to its numbers, so seeing that pattern is conclusive on
+    # its own regardless of what the regex parser below manages to guess for
+    # a date/amount/items from the surrounding text. See
+    # _looks_like_non_receipt_report's own docstring for the real case (a
+    # gym body-composition scan) this closes off.
+    if _looks_like_non_receipt_report(raw_text):
+        raise OcrExtractionError(
+            "This looks like a report or document, not a purchase receipt. "
+            "Please retake the photo or choose a clearer image."
+        )
+
     parsed = parse_receipt_fields(raw_text)
 
     # Hybrid extraction, step 2: regex already ran above (fast, free, handles
@@ -1798,7 +1987,17 @@ def process_receipt(filename: str, file_size_bytes: int, image_bytes: bytes) -> 
     # a hard-to-read one, so it's rejected here instead of silently handing
     # back a plausible-looking but meaningless result (e.g. a stray "RM
     # 12.50" from unrelated UI text getting treated as the total).
-    if parsed["date"] is None and not parsed["line_items"]:
+    #
+    # A date alone is deliberately NOT enough on its own anymore -- plenty
+    # of non-receipt documents print a date too (forms, reports, printouts).
+    # It must be corroborated by either real extracted line items, or a
+    # total actually anchored to a "Total"/"Amount Due"-style keyword
+    # (_find_reliable_total) rather than _extract_amount's own blind
+    # "largest 2-decimal number anywhere" fallback, which can and did latch
+    # onto an unrelated measurement on a non-receipt document.
+    has_items = bool(parsed["line_items"])
+    has_reliable_total = _find_reliable_total(raw_text) is not None
+    if not has_items and not (parsed["date"] is not None and has_reliable_total):
         raise OcrExtractionError(
             "This doesn't look like a receipt — no date or items were "
             "found. Please retake the photo or choose a clearer image."
@@ -1807,13 +2006,24 @@ def process_receipt(filename: str, file_size_bytes: int, image_bytes: bytes) -> 
     receipt_date = parsed.pop("_date_obj") or date.today()
     warranty_info = detect_warranty(raw_text, receipt_date)
 
-    # FR 4.8: assign a category to each line item based on its description
+    # FR 4.8: assign a category to each line item based on its description.
+    # A Gemini-sourced item may already carry its own category suggestion
+    # (see _gemini_fallback_extract) -- prefer that over re-running the
+    # keyword matcher on the same name, since Gemini already read the item
+    # in context and its language understanding covers cases (obscure menu
+    # dish names, etc.) the rule-based matcher structurally can't. Regex-
+    # sourced items never have this key at all, so .get() naturally falls
+    # through to the keyword matcher for them, unchanged from before.
     line_items_with_categories = [
         {
             "item_name": item["item_name"],
             "price": item["price"],
             "quantity": item["quantity"],
-            "category_id": (cat := categorise_text(item["item_name"]))["category_id"],
+            "category_id": (cat := (
+                category_result_for(item["category_name"])
+                if item.get("category_name")
+                else categorise_text(item["item_name"])
+            ))["category_id"],
             "category_name": cat["category_name"],
         }
         for item in parsed["line_items"]
@@ -1824,7 +2034,7 @@ def process_receipt(filename: str, file_size_bytes: int, image_bytes: bytes) -> 
         item_cats = [i["category_name"] for i in line_items_with_categories
                      if i["category_name"] != "Others"]
         if item_cats:
-            majority = max(set(item_cats), key=item_cats.count)
+            majority = majority_category(item_cats)
             receipt_category = category_result_for(majority)
         else:
             receipt_category = categorise_text(parsed["vendor_name"] or "")

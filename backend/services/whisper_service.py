@@ -18,6 +18,12 @@ from faster_whisper import WhisperModel
 
 _model: WhisperModel | None = None
 
+# Same RENDER-var check app.py already uses to distinguish the hosted free
+# tier from local dev. Only the hosted tier gets the memory-constrained
+# settings below -- local dev has its own "medium" model and ample RAM, and
+# gains nothing from trading accuracy away.
+_IS_HOSTED = os.environ.get("RENDER") is not None
+
 
 class WhisperTranscriptionError(Exception):
     """Raised when the local model fails to transcribe the recording."""
@@ -29,7 +35,18 @@ def _get_model() -> WhisperModel:
     if _model is None:
         size = os.environ.get("WHISPER_MODEL_SIZE", "small")
         # int8 quantization keeps CPU inference fast with minimal accuracy loss.
-        _model = WhisperModel(size, device="cpu", compute_type="int8")
+        # cpu_threads left at CTranslate2's own default (0 = auto-detect and
+        # use every available core) for local dev, but pinned to 1 on Render:
+        # a confirmed OOM crash (used over 512MB) happened 2 minutes after
+        # this model was deployed, and CTranslate2's default of spinning up
+        # a thread per detected core inflates per-thread working-memory
+        # overhead rather than actually speeding things up on a shared,
+        # already-thin vCPU -- it doesn't have the dedicated cores that
+        # default assumes.
+        cpu_threads = 1 if _IS_HOSTED else 0
+        _model = WhisperModel(
+            size, device="cpu", compute_type="int8", cpu_threads=cpu_threads
+        )
     return _model
 
 
@@ -92,7 +109,15 @@ def transcribe_audio(
     try:
         segments, _info = model.transcribe(
             audio_io,
-            beam_size=5,
+            # Beam search keeps this many candidate hypotheses in memory
+            # simultaneously -- a real multiplier against Render's 512MB
+            # cap, and part of what's suspected to have caused the OOM
+            # crash above. Dropped to greedy decoding (1) only when hosted;
+            # local dev keeps the original 5 since it isn't memory-bound.
+            # Also cuts inference time, which matters more here than the
+            # marginal accuracy loss, now that the model itself is already
+            # sized down to "tiny" for speed on this same free tier.
+            beam_size=1 if _IS_HOSTED else 5,
             initial_prompt=_INITIAL_PROMPT,
             language=language,
         )

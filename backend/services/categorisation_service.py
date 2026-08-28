@@ -8,6 +8,7 @@ Food & Dining, Transport, Shopping, Entertainment, Health, Utilities, Others
 """
 
 import re
+from collections import Counter
 
 from utils.supabase_client import get_category_id
 
@@ -39,6 +40,12 @@ CATEGORY_KEYWORDS: dict[str, list[str]] = {
         # WORD_BOUNDARY_KEYWORDS below since it's also a substring of
         # unrelated words like "scrabble".
         "duck", "beef", "pork", "mutton", "lamb", "prawn", "squid", "crab",
+        # "tom yum" is an equally common transliteration of the same Thai
+        # dish as "tom yam" above (confirmed: a real receipt printed "Tom
+        # Yum") -- kept as a separate keyword rather than merged, since
+        # substring matching means the two must both be listed to cover
+        # both spellings.
+        "tom yum", "oden",
         # F&B chain brand names (same pattern as mcdonald/kfc/starbucks above)
         "nando", "chic", "chicken", "grill", "chargrill", "coleslaw",
         "wingstop", "subway", "domino", "texas chicken",
@@ -64,12 +71,20 @@ CATEGORY_KEYWORDS: dict[str, list[str]] = {
         # (a "mart" sells both food and non-food, so its name alone isn't
         # a reliable signal — see Food & Dining's grocery keywords above).
         "shopee", "lazada", "mall", "uniqlo", "shopping",
+        # Malaysian department store chains (same pattern as "uniqlo" above
+        # — a store name is a reliable Shopping signal on its own). AEON is
+        # deliberately NOT here despite also selling clothing — it's
+        # primarily a grocery hypermarket, the exact "mart" case the
+        # comment above already excludes: relies on item-content matching
+        # instead so a grocery run there isn't mislabeled as Shopping.
+        "parkson", "isetan", "metrojaya",
         "shoe", "shoes", "footwear", "boot", "boots", "sneaker",
         "sneakers", "sandal", "apparel", "clothing", "clothes", "fashion",
         "garment", "scarf", "hat", "cap", "sock", "socks", "bag",
         "handbag", "wallet", "jewellery", "jewelry", "accessory",
         "accessories", "jersey", "shirt", "t-shirt", "tshirt", "jeans",
         "pants", "trousers", "jacket", "shorts", "hoodie",
+        "brief", "briefs", "underwear", "lingerie", "bra",
     ],
     "Entertainment": [
         "cinema", "gsc", "tgv", "netflix", "spotify", "movie",
@@ -141,6 +156,40 @@ def _build_result(category_name: str, matched_keyword: str | None, confidence: s
         "matched_keyword": matched_keyword,
         "confidence": confidence,
     }
+
+
+def majority_category(category_names: list[str]) -> str | None:
+    """Picks the most frequent category name from a multi-item receipt's or
+    voice entry's per-line categories ("Others" excluded by the caller
+    before this is called — see ocr_service.process_receipt and
+    voice_service.parse_voice_expense).
+
+    Ties are broken using CATEGORY_KEYWORDS' own declaration order (Food &
+    Dining > Transport > Shopping > Entertainment > Health > Utilities)
+    rather than Python's `max(set(...), key=...count)`, which looks
+    reasonable but is NOT deterministic here: set iteration order for
+    strings is randomised per-process, so the exact same tied input
+    returned three different "winning" categories across three separate
+    process runs when checked directly. That means the same receipt could
+    get a different suggested category purely depending on when the
+    backend last restarted — reproducibility matters for grading, so a
+    fixed, predictable tie-break replaces the accidental one.
+
+    Returns None if the list is empty.
+    """
+    if not category_names:
+        return None
+    counts = Counter(category_names)
+    top_count = max(counts.values())
+    tied = {name for name, c in counts.items() if c == top_count}
+    if len(tied) == 1:
+        return tied.pop()
+    for name in CATEGORY_KEYWORDS:
+        if name in tied:
+            return name
+    return sorted(tied)[0]  # unreachable in practice — guards a future
+    # category name absent from CATEGORY_KEYWORDS with a still-deterministic
+    # (alphabetical) fallback rather than raising.
 
 
 def category_result_for(category_name: str, confidence: str = "high") -> dict:

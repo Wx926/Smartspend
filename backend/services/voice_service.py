@@ -21,7 +21,11 @@ shape. Confirmed against:
 import re
 from datetime import date, timedelta
 
-from services.categorisation_service import categorise_text, category_result_for
+from services.categorisation_service import (
+    categorise_text,
+    category_result_for,
+    majority_category,
+)
 from services.ocr_service import items_confidence
 
 # "RM 25", "RM25.00", or a bare number followed by a currency word. "dollars"/
@@ -350,7 +354,7 @@ def parse_voice_expense(transcript: str) -> dict:
     # than inventing a separate "mixed"/"Others" bucket just for voice.
     item_cats = [p["category_name"] for p in parsed if p["category_name"] != "Others"]
     if item_cats:
-        majority_name = max(set(item_cats), key=item_cats.count)
+        majority_name = majority_category(item_cats)
         category = category_result_for(majority_name)
     elif parsed:
         category = categorise_text(f"{parsed[0]['item_name']} {vendor or ''}".strip())

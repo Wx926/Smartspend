@@ -15,6 +15,21 @@ class BackendUnreachableException implements Exception {
   String toString() => message;
 }
 
+/// The hosted backend (Render free tier) — reachable from any device on any
+/// network (WiFi, mobile data, campus, wherever), with no dependency on the
+/// dev machine being on, USB-tethered, or same-WiFi. This is now the
+/// PRIMARY path, tried first, precisely so a lecturer/marker opening the
+/// source code fresh doesn't need any of the local-network setup below at
+/// all. The local candidates are kept purely as a dev-convenience fallback
+/// (e.g. testing a backend change before it's deployed) — never removed,
+/// just no longer relied on for "does this work at all."
+///
+/// Free-tier instances spin down after inactivity and can take 50+ seconds
+/// to wake on the next request (Render's own dashboard warning) — that cold
+/// start is baked into the generous timeouts callers pass to [send], not
+/// just this constant.
+const _hostedBackendUrl = 'https://smartspend-backend-i32o.onrender.com';
+
 /// Tries several candidate backend addresses in order rather than trusting
 /// a single hardcoded OCR_BACKEND_URL. A local dev backend is genuinely
 /// reachable through more than one path depending on the moment — USB with
@@ -32,6 +47,11 @@ class BackendConnection {
   List<String> get _candidates {
     final ordered = <String>[
       if (_lastWorkingBaseUrl != null) _lastWorkingBaseUrl!,
+      // Primary path — see the doc comment on the constant above.
+      _hostedBackendUrl,
+      // Everything below is local-dev fallback only, kept for your own
+      // testing convenience — not needed for the app to work for anyone
+      // else.
       // Works when the phone is on USB with `adb reverse` set up —
       // bypasses WiFi/firewall/AP-isolation entirely.
       'http://localhost:5000',
@@ -73,7 +93,9 @@ class BackendConnection {
       // Gemini fallback timed out on `localhost:5000` at 6s and reported
       // "tried 3", even though the backend log showed that exact request
       // completing successfully a moment later).
-      final trusted = baseUrl == 'http://localhost:5000' || baseUrl == _lastWorkingBaseUrl;
+      final trusted = baseUrl == _hostedBackendUrl ||
+          baseUrl == 'http://localhost:5000' ||
+          baseUrl == _lastWorkingBaseUrl;
       // Only a genuinely unproven candidate (typically the WiFi LAN-IP
       // fallback, or the emulator-only 10.0.2.2 alias) gets bounded short —
       // long enough to tell "dead" from "slow but working" before moving on,

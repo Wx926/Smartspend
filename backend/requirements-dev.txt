@@ -1,0 +1,6 @@
+# Testing-only dependencies -- NOT needed to run the backend itself, only to
+# run its test suite (backend/tests/). Kept separate from requirements.txt
+# so the deployed service (Render, or anyone just running the app) never
+# needs to install test tooling.
+-r requirements.txt
+pytest

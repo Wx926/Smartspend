@@ -1,3 +1,4 @@
+import os
 import sys
 
 from flask import Flask
@@ -42,5 +43,15 @@ def health_check():
 
 
 if __name__ == "__main__":
-    # host="0.0.0.0" so your physical phone (on same wifi) or emulator can hit it
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    # host="0.0.0.0" so your physical phone (on same wifi) or emulator can hit
+    # it locally. PORT is read from the environment because a hosted platform
+    # (e.g. Render) assigns its own port at runtime rather than letting the
+    # app pick one — falls back to 5000 for local dev, unchanged from before.
+    # Flask's debug mode (auto-reloader + interactive in-browser debugger) is
+    # fine on your own machine but must be off once this is reachable from
+    # the public internet — RENDER is a variable Render itself sets in every
+    # deployed service's environment, so this only flips for that case; local
+    # `python app.py` behaves exactly as it always has.
+    port = int(os.environ.get("PORT", 5000))
+    is_hosted = os.environ.get("RENDER") is not None
+    app.run(host="0.0.0.0", port=port, debug=not is_hosted)

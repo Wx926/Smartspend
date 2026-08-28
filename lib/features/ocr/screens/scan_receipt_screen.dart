@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import '../../../shared/theme/app_colors.dart';
 import '../services/ocr_api_service.dart';
-import '../models/ocr_result.dart';
 import 'receipt_review_screen.dart';
 import 'receipt_picker_screen.dart';
 
@@ -33,7 +32,13 @@ class _ScanReceiptScreenState extends State<ScanReceiptScreen> {
     } on OcrApiException catch (e) {
       _showError(e.message);
     } catch (e) {
-      _showError('Could not reach the server. Make sure the Flask backend is running.');
+      // Anything that isn't an OcrApiException didn't come from the network
+      // layer at all (that's already handled above) -- most likely the
+      // picked file itself couldn't be read when building the upload
+      // request. Showing the real exception instead of a generic "check
+      // your backend" message, since that message is actively misleading
+      // when the actual cause is unrelated to connectivity.
+      _showError('Could not read or upload the selected file.\n\n$e');
     } finally {
       if (mounted) setState(() => _scanning = false);
     }
