@@ -69,6 +69,32 @@ class TestDateExtraction:
 
 
 class TestLineItemExtraction:
+    def test_misread_qty_header_does_not_wrongly_trigger_totals_boundary(self):
+        """Real bug (HON HWA HARDWARE): Vision misread this receipt's "Qty"
+        column header as "Ofy", so _ITEM_TABLE_HEADER's strict "qty"-only
+        check failed to recognise "Ofy Description Price Total ( RM )" as a
+        header row at all. That let _TOTALS_BOUNDARY catch the SAME line's
+        own "Total ( RM )" column label instead, wrongly marking everything
+        after it as past-the-totals-section before the receipt's one (and
+        only) item -- clearly printed and legible -- had been parsed,
+        silently discarding it entirely (0 items extracted from a receipt
+        with exactly 1). Fixed by accepting "price" as an alternative to
+        "qty" in the header check."""
+        raw = (
+            "HON HWA HARDWARE TRADING\n"
+            "TAX INVOICE\n"
+            "Ofy Description Price Total ( RM )\n"
+            "5 PVC WALLPLUG 1.00 5.00 SR\n"
+            "( 50PCS )\n"
+            "Total Inclusive GST : 5.00\n"
+            "CASH 5.00\n"
+        )
+        items = _extract_line_items(raw)
+        assert len(items) == 1
+        assert items[0]["item_name"] == "PVC WALLPLUG"
+        assert items[0]["price"] == 5.00
+        assert items[0]["quantity"] == 5
+
     def test_ted_heng_numbers_row_then_bulleted_name(self):
         """Malaysian tax-invoice layout: barcode+qty+price row, item's own
         description on a separate bulleted line below it."""
@@ -175,6 +201,178 @@ class TestVendorExtraction:
             "GUEST CHECK",
         ]
         assert _extract_vendor(lines) == "FARM TO PLATE"
+
+    def test_lowercase_person_name_above_sdn_bhd_line_rejected(self):
+        """Regression guard for a real bug found testing FYP_IMAGES: two
+        separate SROIE receipts print a person's name (cashier/customer,
+        all-lowercase) directly above the "Sdn Bhd" legal-entity line, e.g.
+        "tan woon yann" above "BOOK TA K (TAMAN DAYA) SDN BHD". The
+        position-only immediately-prior-line heuristic (added for the
+        "FARM TO PLATE" case above) wrongly took that person's name as the
+        vendor purely for its position, since nothing previously checked
+        whether the candidate actually looks like a business name. A real
+        trading name is never printed all-lowercase, so this must fall
+        through to the Sdn Bhd line's own name instead."""
+        lines = [
+            "tan woon yann",
+            "BOOK TA K ( TAMAN DAYA ) SDN BHD",
+            "789417 - W",
+            "NO.5 55,57 & 59 , JALAN SAGU 18 ,",
+        ]
+        assert _extract_vendor(lines) == "BOOK TA K ( TAMAN DAYA ) SDN BHD"
+
+    def test_lowercase_person_name_with_noise_line_between_still_rejected(self):
+        """Same bug, second real receipt -- this one has a "*** COPY ***"
+        stamp line (skipped for containing "*") between the person's name
+        and the Sdn Bhd line, confirming the fix holds even when the
+        rejected candidate isn't the line immediately adjacent to Sdn Bhd."""
+        lines = [
+            "tan chay yee",
+            "*** COPY ***",
+            "OJC MARKETING SDN BHD",
+            "ROC NO : 538358 - H",
+        ]
+        assert _extract_vendor(lines) == "OJC MARKETING SDN BHD"
+
+
+class TestTotalAmountExtraction:
+    """Regression guards for real wrong-total bugs found testing FYP_IMAGES --
+    each receipt's actual total line got scrambled/excluded for a different
+    reason, silently returning some OTHER number on the receipt instead."""
+
+    def test_total_items_count_not_mistaken_for_total_amount(self):
+        """Real bug (RESTORAN HASSANBISTRO): reading-order reconstruction
+        scrambled this receipt's real GST-inclusive total lines (all
+        excluded for containing "gst"), leaving "Total Items = 1.00" -- a
+        bare ITEM COUNT -- as the only unexcluded "total"-prefixed line.
+        Previously returned 1.00 as the receipt's total; the real total
+        (15.00) is recoverable from Strategy 3's blind max once this line is
+        correctly excluded too."""
+        raw = (
+            "RESTORAN HASSANBISTRO\n"
+            "MAKANAN\n"
+            "1 15.00 0 15.00 ZR\n"
+            "Total Items = 1.00\n"
+            "Total Qty = 1.00\n"
+            "Sub Total RM\n"
+            "Total Excl.6 % GST RM 15.00\n"
+        )
+        result = parse_receipt_fields(raw)
+        assert result["amount"] == 15.00
+
+    def test_total_items_count_does_not_break_total_for_n_items_amount_line(self):
+        """A real SPAR receipt legitimately prints its grand total ON the
+        same line as an item count ("TOTAL FOR 14 ITEMS 338.16") -- "total"
+        and "items" aren't adjacent here (unlike the HASSANBISTRO case
+        above), so this must NOT be excluded the same way."""
+        raw = "SPAR\nBANANAS 9.53\nTOTAL FOR 14 ITEMS 338.16\n"
+        result = parse_receipt_fields(raw)
+        assert result["amount"] == 338.16
+
+    def test_total_inclusive_of_gst_accepted_when_no_cleaner_total_line_exists(self):
+        """Real bug (LIM SENG THO HARDWARE): this receipt's ONLY total-
+        bearing line is "Total Incl . of GST 7.00" -- the blanket "gst"
+        exclusion (there to stop a bare tax figure like "GST Payable: 1.76"
+        from being mistaken for the total) also wrongly excluded this
+        legitimate grand-total line, since it happens to mention GST too.
+        Previously fell through to an unrelated GST-summary sub-figure
+        (6.60) instead of the real total (7.00). Uses the EXACT real raw
+        text pulled from the backend's own debug log for this receipt
+        (including its "10.00 NOS X 0.70 7.00 SR" item line and the stray
+        space-dot-space Vision printed as "Incl . of") -- an earlier,
+        hand-typed approximation of this same receipt used plain "Incl. of"
+        and passed even while the carve-out regex itself was still broken
+        against the real image's actual spacing, since a coincidentally
+        correct Strategy-3 blind-max fallback masked the bug. This is the
+        one test in this file that must be checked against the real photo's
+        text, not a simplified hand-typed guess at its shape."""
+        raw = (
+            "3 1802 013 .\n"
+            "LIM SENG THO HARDWARE TRADING\n"
+            "No 7. Simpang Off Batu Village ,\n"
+            "Jalan Ipoh Batu 5 , 51200 Kuala Lumpur .\n"
+            "MALAYSIA\n"
+            "Tel & Fax No : 03-6258 7191\n"
+            "03-6258 7191\n"
+            "Company Reg No. ( 002231061 - T )\n"
+            "GST Reg No. 001269075968\n"
+            "TAX INVOICE\n"
+            "Invoice No CS 24146\n"
+            "Date : 02/02/2018 10:06\n"
+            "Cashier # LST\n"
+            "RM Code\n"
+            "BEG GUNI\n"
+            "10.00 NOS X 0.70 7.00 SR\n"
+            "Subtotal : 7.00\n"
+            "Total Incl . of GST 7.00\n"
+            "Payment : 7.00\n"
+            "Change Due : 0.00\n"
+            "Total Item ( s ) : 10\n"
+            "GST Summary Amount ( RM ) Tax ( RM )\n"
+            "SR 6 % 6.60 040\n"
+        )
+        result = parse_receipt_fields(raw)
+        assert result["amount"] == 7.00
+
+    def test_total_includes_gst_amount_not_mistaken_for_grand_total(self):
+        """Regression guard for a real bug introduced by an earlier, looser
+        version of the "inclusive of GST" carve-out above: a real McDonald's
+        receipt has BOTH a clean grand total ("Total Rounded 25.40") AND a
+        separate "TOTAL INCLUDES 6 % GST 1.44" line further down stating the
+        GST component itself, not the total. "INCLUDES" contains "incl" the
+        same as "Inclusive"/"Incl. of" do, but is never followed by "of" --
+        the carve-out must not fire here, or it wrongly overwrites the
+        already-correct 25.40 with the tax amount (1.44) instead."""
+        raw = (
+            "McDonald's\n"
+            "1 M McChicken 9.50\n"
+            "TakeOut Total ( incl GST ) 25.40\n"
+            "Total Rounded 25.40\n"
+            "Cash Tendered 26.00\n"
+            "Change 0.60\n"
+            "TOTAL INCLUDES 6 % GST 1.44\n"
+        )
+        result = parse_receipt_fields(raw)
+        assert result["amount"] == 25.40
+
+    def test_bare_gst_payable_line_still_excluded(self):
+        """The carve-out above must stay narrow: a line stating the GST/tax
+        amount itself ("GST Payable : 1.76", with no "incl"/"inclusive"
+        qualifier tying it to "total") is NOT the grand total and must
+        remain excluded, same as before this fix."""
+        raw = (
+            "SUSHI MENTAI\n"
+            "Total ( Excluding GST ) : 26.60\n"
+            "GST Payable : 1.76\n"
+            "TOTAL : 31.00\n"
+        )
+        result = parse_receipt_fields(raw)
+        assert result["amount"] == 31.00
+
+    def test_comma_grouped_thousands_total_not_read_as_decimal(self):
+        """Real bug (MOMI & TOY'S CRÊPERIE, an Indonesian Rupiah receipt):
+        "TOTAL 175,000" uses a comma as a THOUSANDS separator (IDR has no
+        minor decimal unit) -- the old pattern's `\\d{2}` was happy to match
+        just the first 2 of the 3 trailing digits ("175,00" out of
+        "175,000"), undercounting the real total by 1000x."""
+        raw = "MOMI & TOY'S\nHam Cheese 74.000\nSUBTOTAL 175,000\nTOTAL 175,000\n"
+        result = parse_receipt_fields(raw)
+        assert result["amount"] == 175000.0
+
+    def test_ordinary_decimal_comma_amount_still_correct(self):
+        """The thousands-grouping fix above must not misfire on an ordinary
+        comma-as-decimal-point amount (no 3-digit grouping involved)."""
+        raw = "SOME STORE\nItem 5.00\nTOTAL 12,50\n"
+        result = parse_receipt_fields(raw)
+        assert result["amount"] == 12.50
+
+    def test_comma_grouped_thousands_with_decimal_cents(self):
+        """A combined format, e.g. "1,234.56" -- thousands-grouped AND with
+        real decimal cents -- must keep the cents, not just strip to whole
+        dollars."""
+        raw = "SOME STORE\nItem 5.00\nTOTAL 1,234.56\n"
+        result = parse_receipt_fields(raw)
+        assert result["amount"] == 1234.56
 
 
 class TestItemsConfidence:
@@ -352,6 +550,94 @@ class TestGeminiFallbackPlausibilityGuard:
         result = _gemini_fallback_extract(b"fake-image-bytes")
         assert result["vendor_name"] == "TOMO VISION SETAPAK"
         assert len(result["line_items"]) == 2
+
+
+def _http_error(code: int, body: str = "") -> "urllib.error.HTTPError":
+    import urllib.error
+    return urllib.error.HTTPError(
+        url="https://generativelanguage.googleapis.com/fake",
+        code=code, msg="error", hdrs=None, fp=io.BytesIO(body.encode()),
+    )
+
+
+class TestGeminiRetryAndQuotaHandling:
+    """Regression guard for a real batch run over FYP_IMAGES: Gemini's free
+    tier enforces a PER-DAY request cap (as low as 20/day for this model),
+    not just a per-minute burst limit -- and both surface as the same HTTP
+    429 status, distinguishable only by reading the error body. Retrying a
+    genuine daily-quota exhaustion is pointless (it can't clear for hours)
+    and was confirmed to make batch results WORSE by burning extra requests
+    per receipt on calls that could never succeed -- so only a transient
+    503 (or a non-daily 429) should be retried; a daily-quota 429 must fail
+    fast and be remembered for the rest of the process. See
+    _urlopen_with_retry's own docstring."""
+
+    @patch("services.ocr_service._gemini_daily_quota_exhausted_until", None)
+    @patch("services.ocr_service.GEMINI_API_KEY", "fake-key-for-test")
+    @patch("services.ocr_service.urllib.request.urlopen")
+    def test_transient_503_is_retried_and_recovers(self, mock_urlopen):
+        mock_urlopen.side_effect = [
+            _http_error(503, "temporarily unavailable"),
+            _mock_gemini_response({
+                "vendor_name": "TOMO VISION SETAPAK",
+                "line_items": [{"item_name": "Lens", "quantity": 1, "price": 50.0}],
+            }),
+        ]
+        with patch("services.ocr_service.time.sleep"):  # skip the real backoff delay
+            result = _gemini_fallback_extract(b"fake-image-bytes")
+        assert mock_urlopen.call_count == 2
+        assert result is not None
+        assert result["vendor_name"] == "TOMO VISION SETAPAK"
+
+    @patch("services.ocr_service._gemini_daily_quota_exhausted_until", None)
+    @patch("services.ocr_service.GEMINI_API_KEY", "fake-key-for-test")
+    @patch("services.ocr_service.urllib.request.urlopen")
+    def test_daily_quota_exhaustion_not_retried_and_remembered(self, mock_urlopen):
+        daily_quota_body = json.dumps({
+            "error": {
+                "code": 429, "status": "RESOURCE_EXHAUSTED",
+                "message": "Quota exceeded ... Please retry in 38s.",
+                "details": [{
+                    "@type": "type.googleapis.com/google.rpc.QuotaFailure",
+                    "violations": [{
+                        "quotaId": "GenerateRequestsPerDayPerProjectPerModel-FreeTier",
+                    }],
+                }],
+            }
+        })
+        mock_urlopen.side_effect = _http_error(429, daily_quota_body)
+
+        with patch("services.ocr_service.time.sleep") as mock_sleep:
+            result = _gemini_fallback_extract(b"fake-image-bytes")
+        # Exactly one attempt -- retrying a daily cap can't ever succeed
+        assert mock_urlopen.call_count == 1
+        mock_sleep.assert_not_called()
+        assert result is None
+
+        # A second receipt processed later in the same run must skip the
+        # network call entirely rather than rediscovering the same 429.
+        result2 = _gemini_fallback_extract(b"another-fake-image")
+        assert mock_urlopen.call_count == 1  # unchanged -- short-circuited
+        assert result2 is None
+
+    @patch("services.ocr_service._gemini_daily_quota_exhausted_until", None)
+    @patch("services.ocr_service.GEMINI_API_KEY", "fake-key-for-test")
+    @patch("services.ocr_service.urllib.request.urlopen")
+    def test_non_daily_429_is_still_retried(self, mock_urlopen):
+        """A 429 whose body does NOT identify a PerDay quota (e.g. a short
+        per-request burst limit) is a different failure mode from the daily
+        cap above and should still get the short-backoff retry."""
+        mock_urlopen.side_effect = [
+            _http_error(429, '{"error": {"message": "please slow down"}}'),
+            _mock_gemini_response({
+                "vendor_name": "TOMO VISION SETAPAK",
+                "line_items": [{"item_name": "Lens", "quantity": 1, "price": 50.0}],
+            }),
+        ]
+        with patch("services.ocr_service.time.sleep"):
+            result = _gemini_fallback_extract(b"fake-image-bytes")
+        assert mock_urlopen.call_count == 2
+        assert result is not None
 
 
 class TestNonReceiptReportDetection:

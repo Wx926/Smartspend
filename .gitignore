@@ -46,3 +46,13 @@ app.*.map.json
 
 # Secrets - never commit
 .env
+
+# Python virtual environment - machine-specific (absolute interpreter paths
+# baked into pyvenv.cfg/Scripts launchers), trivially rebuilt from
+# requirements.txt via `python -m venv venv && pip install -r requirements.txt`.
+# Never commit: bloats the repo hugely (hundreds of MB of third-party
+# packages/compiled binaries) and, if it IS committed and later merged onto a
+# different machine, silently overwrites that machine's own working venv with
+# a broken one pointing at a path that doesn't exist there.
+backend/venv/
+venv/
