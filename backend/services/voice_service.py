@@ -51,6 +51,19 @@ _AMOUNT_PATTERN = re.compile(
 # required word boundary immediately after "块".
 _CHINESE_KUAI_DECIMAL = re.compile(r"(\d+)块(\d{1,2})\b")
 
+# Spoken whole-ringgit-and-cents, e.g. "7 ringgit 90 cent" / "2 ringgit 90
+# sen" -- a real gap found close to submission: _AMOUNT_PATTERN alone only
+# captures the number immediately before the currency word ("7 ringgit"),
+# silently dropping "90 cent" entirely and returning 7.00 instead of 7.90.
+# Checked first for the same reason as _CHINESE_KUAI_DECIMAL above: the
+# plainer pattern would otherwise match "7 ringgit" first and never get a
+# chance to see the trailing cents. "sen" is the actual Malay word for
+# cents (Whisper sometimes transcribes it as "sen", sometimes as "cent").
+_RINGGIT_AND_CENTS = re.compile(
+    r"(\d+)\s*(?:ringgit|rm|dollars?|bucks?)\s+(\d{1,2})\s*(?:cents?|sen)\b",
+    re.IGNORECASE,
+)
+
 # Last-resort fallback when no currency word is spoken at all (e.g. "movie
 # tickets 45") — just the first bare number in the sentence. Trades off
 # against misreading an unrelated number (a date, a quantity) as the amount,
@@ -193,6 +206,12 @@ def _extract_amount(text: str) -> tuple[float | None, tuple[int, int] | None]:
     """Returns (amount, span) so the caller can strip the matched words
     (number + currency) out of the text before deriving a description."""
     m = _CHINESE_KUAI_DECIMAL.search(text)
+    if m:
+        whole, cents = m.group(1), m.group(2)
+        if len(cents) == 1:
+            cents += "0"
+        return float(f"{whole}.{cents}"), m.span()
+    m = _RINGGIT_AND_CENTS.search(text)
     if m:
         whole, cents = m.group(1), m.group(2)
         if len(cents) == 1:

@@ -12,6 +12,7 @@ import re
 import os
 import base64
 import json
+import time
 import urllib.request
 from datetime import datetime, date
 
@@ -41,9 +42,50 @@ ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "pdf"}
 MAX_FILE_SIZE_MB = 10
 
 AMOUNT_PATTERN = re.compile(
-    r"(?:RM|MYR|USD|SGD|GBP|\$|£|€|¥)?\s*(\d+[.,]\d{2})",
+    r"(?:RM|MYR|USD|SGD|GBP|\$|£|€|¥)?\s*"
+    # Ordered most-specific first, since alternation tries left-to-right and
+    # only falls through on failure:
+    #   1. comma-grouped thousands WITH decimal cents, e.g. "1,234.56"
+    #   2. comma-grouped thousands with NO decimal point, e.g. "175,000" --
+    #      common on Indonesian Rupiah receipts, which have no minor decimal
+    #      unit at all. Without its own alternative, the plain-decimal
+    #      pattern below still partially matches this (its `\d{2}` is happy
+    #      to take just the first 2 of the 3 trailing digits, e.g. "175,00"
+    #      out of "175,000"), silently undercounting the real amount by
+    #      1000x -- confirmed on a real receipt ("TOTAL 175,000" parsed as
+    #      175.0 instead of 175000). See _parse_amount_match for how the
+    #      resulting string is actually converted to a float.
+    #   3. plain decimal amount, e.g. "15.00" or "12,50" -- the original
+    #      pattern, `(?!\d)` added so it can't partially match into a longer
+    #      digit run the way case 2 exists to prevent.
+    r"(\d{1,3}(?:,\d{3})+\.\d{2}(?!\d)"
+    r"|\d{1,3}(?:,\d{3})+(?!\d)"
+    r"|\d+[.,]\d{2}(?!\d))",
     re.IGNORECASE,
 )
+
+# A pure comma-grouped whole number with NO decimal point anywhere, e.g.
+# "175,000" or "1,234,567" -- used by _parse_amount_match to tell a thousands
+# separator apart from a decimal-comma (e.g. "12,50" meaning 12.50 in some
+# European formats), which this pattern deliberately does NOT match (its
+# groups are exactly 3 digits each, never 2).
+_THOUSANDS_GROUPED = re.compile(r"^\d{1,3}(?:,\d{3})+$")
+
+
+def _parse_amount_match(raw: str) -> float:
+    """Converts a regex-captured amount string to a float, correctly
+    distinguishing a comma-grouped THOUSANDS separator from a comma used AS
+    a decimal point. A captured string containing an actual "." is
+    unambiguous either way -- any comma in it must be a thousands separator,
+    since a real amount is never written with two different punctuation
+    marks both meaning "decimal point" -- so commas are simply stripped. One
+    with no "." at all is a thousands separator only if the whole string is
+    pure 3-digit comma groups (_THOUSANDS_GROUPED); otherwise the comma IS
+    the decimal point, exactly as before this function existed."""
+    cleaned = raw.replace(" ", "")
+    if "." in cleaned or _THOUSANDS_GROUPED.match(cleaned):
+        return float(cleaned.replace(",", ""))
+    return float(cleaned.replace(",", "."))
 # Each guarded with (?<!\d)/(?!\d) so it can't match a substring of a LONGER
 # digit run — without this, "2018-03-23" (a real YYYY-MM-DD date) contains
 # "18-03-23" as a substring, which the DD-MM-YY pattern happily matches on
@@ -317,8 +359,24 @@ _EXTRA_FEE_LINE = re.compile(
 # often also contains the word "total" as its price-column label and would
 # otherwise be mistaken for the actual end-of-items boundary, cutting off
 # every item that follows before it's ever parsed.
+#
+# "qty" also accepts "price" as an alternative -- confirmed on a real
+# receipt (HON HWA HARDWARE) whose header printed as "Ofy Description Price
+# Total ( RM )": Vision misread "Qty" as "Ofy" (a plausible glyph confusion,
+# Q/O and t/f both being visually similar), so the strict "qty"-only check
+# failed to recognise this as a header row at all. That let this exact
+# scenario play out: _TOTALS_BOUNDARY caught the header's own "Total (RM)"
+# column label instead, wrongly setting past_totals=True before a single
+# real item had been parsed, silently discarding all of them (confirmed:
+# this receipt's only item, clearly printed and legible, produced zero
+# extracted items). "item"/"description" staying a HARD requirement (not
+# loosened the same way) is what keeps this safe: a genuine grand-total line
+# essentially never contains "item"/"description" itself, so requiring one
+# of those PLUS one of "qty"/"price" still can't misfire on an ordinary
+# "Total Amount : $8.20" line (has "total"/"amount", but no "item" or
+# "description" to pair with it).
 _ITEM_TABLE_HEADER = re.compile(
-    r"(?=.*\bqty\b)(?=.*\b(?:item|description)\b)", re.IGNORECASE
+    r"(?=.*\b(?:qty|price)\b)(?=.*\b(?:item|description)\b)", re.IGNORECASE
 )
 
 # Lines containing these words are totals/summaries/headers/footers — not items
@@ -834,10 +892,66 @@ def _find_reliable_total(raw_text: str) -> float | None:
         re.IGNORECASE,
     )
     _TOTAL_EXCLUDE = re.compile(
-        r"\b(subtotal|sub[\s\-]total|cash|change|tax|gst|sst|qty|items?\s*sold|payable|savings?)\b"
+        # "total\s*items?" (e.g. "Total Items = 1.00") is a distinct
+        # exclusion from "items?\s*sold" -- confirmed on a real receipt
+        # (RESTORAN HASSANBISTRO) whose actual grand total got scrambled
+        # into unreadable fragments by reading-order reconstruction, leaving
+        # "Total Items = 1.00" -- a bare ITEM COUNT, not a currency amount --
+        # as the only "total"-prefixed line _TOTAL_LINE could still match,
+        # wrongly returning 1.00 as the receipt's total. Deliberately
+        # requires "total" and "item(s)" to sit adjacent (only whitespace
+        # between them) rather than matching bare "items?" anywhere on the
+        # line -- a looser version would also wrongly exclude a genuinely
+        # correct total line like "TOTAL FOR 14 ITEMS 338.16" (a real SPAR
+        # receipt), where the grand total amount IS printed on that same
+        # line, just with "FOR 14" separating the two words.
+        r"\b(subtotal|sub[\s\-]total|cash|change|tax|gst|sst|qty|"
+        r"items?\s*sold|total\s*items?|payable|savings?)\b"
         r"|小计|现金|找零|找续|找赎|消费税|服务税|数量",
         re.IGNORECASE,
     )
+
+    # Carve-out for the blanket "gst" exclusion just above: that exclusion
+    # exists to stop a bare GST/tax-only figure ("GST Payable : 1.76", "Total
+    # GST 3.57") from being mistaken for the grand total -- but the same
+    # blanket check also wrongly excludes a line that IS the genuine grand
+    # total and merely says so using the word "GST" as a descriptor, e.g.
+    # "Total Incl . of GST 7.00" / "Total ( Inclusive of GST ) : 31.02".
+    # Confirmed on a real receipt (LIM SENG THO HARDWARE) whose only total
+    # line is exactly this shape, with no cleaner GST-free "TOTAL: X" line
+    # anywhere else to fall back on -- without this carve-out, the search
+    # fell through every candidate and landed on an unrelated GST-summary
+    # sub-figure instead.
+    #
+    # Requires "incl"/"inclusive" to be followed by "of" specifically, NOT
+    # just present anywhere after "total" -- an earlier looser version
+    # (matching bare "incl") caused a real regression on a McDonald's
+    # receipt: "TOTAL INCLUDES 6 % GST 1.44" also contains "incl", but that
+    # line states the GST amount ITSELF ("the total includes 6% GST, [equal
+    # to] 1.44"), not the grand total -- wrongly un-excluding it overwrote an
+    # already-correct result (25.40, from a separate clean "Total Rounded
+    # 25.40" line) with the tax component instead. "Total Incl. of GST" and
+    # "Total (Inclusive of GST)" both have "of" directly after incl(usive);
+    # "TOTAL INCLUDES ... GST" does not -- a reliable distinguishing signal
+    # confirmed against both real cases.
+    #
+    # Between "incl(usive)" and "of", `[\s.]*` (not `\.?\s+`) tolerates any
+    # mix of stray spaces and a period in either order -- Vision's own
+    # reconstruction of the real LIM SENG THO receipt inserted a SPACE
+    # before AND after the period ("Total Incl . of GST 7.00"), which a
+    # dot-then-whitespace-only pattern can't match at all. Confirmed the
+    # hard way: with the stricter version, this carve-out silently never
+    # fired on the real image (only ever verified against a hand-typed test
+    # string using plain "Incl. of"), so _find_reliable_total fell through
+    # every candidate to the blind Strategy-3 max -- which then grabbed
+    # "10.00" off an unrelated "10.00 NOS X 0.70 7.00 SR" quantity column
+    # instead of the real total (7.00).
+    _TOTAL_INCLUSIVE_GST = re.compile(
+        r"total\W*\(?\s*incl(?:usive)?[\s.]*of\b", re.IGNORECASE
+    )
+
+    def _is_total_excluded(text: str) -> bool:
+        return bool(_TOTAL_EXCLUDE.search(text)) and not _TOTAL_INCLUSIVE_GST.search(text)
 
     _ROUNDING = re.compile(r"\brounding\b|抹零|四舍五入", re.IGNORECASE)
 
@@ -857,7 +971,16 @@ def _find_reliable_total(raw_text: str) -> float | None:
     # the cents digits (e.g. "TOTAL 5. 11" for a printed "5.11") — tolerate it
     # here specifically rather than loosening the shared AMOUNT_PATTERN used
     # elsewhere, since that would risk false positives in line-item parsing.
-    _AMOUNT_LOOSE = re.compile(rf"{_CURRENCY}(\d+[.,]\s?\d{{2}})", re.IGNORECASE)
+    # The comma-grouped-thousands alternative (see AMOUNT_PATTERN's own
+    # comment) is included here too, so a receipt total's own comma-
+    # thousands format (e.g. "TOTAL 175,000") isn't separately re-broken by
+    # this loosened pattern even after AMOUNT_PATTERN itself was fixed.
+    _AMOUNT_LOOSE = re.compile(
+        rf"{_CURRENCY}(\d{{1,3}}(?:,\d{{3}})+\.\d{{2}}(?!\d)"
+        rf"|\d{{1,3}}(?:,\d{{3}})+(?!\d)"
+        rf"|\d+[.,]\s?\d{{2}}(?!\d))",
+        re.IGNORECASE,
+    )
 
     # Some receipts' real total line gets so badly OCR-mangled (e.g. a
     # multi-column letterhead/footer layout that interleaves unrelated text)
@@ -877,7 +1000,7 @@ def _find_reliable_total(raw_text: str) -> float | None:
         if tax_breakdown_idx is not None and i >= tax_breakdown_idx:
             continue
         line = lines[i]
-        if _TOTAL_LINE.match(line) and not _TOTAL_EXCLUDE.search(line):
+        if _TOTAL_LINE.match(line) and not _is_total_excluded(line):
             check_lines = [line] + lines[i + 1: i + 4]
             # If a rounding-adjustment line follows, the real total comes after it
             rounding_pos = next(
@@ -885,22 +1008,22 @@ def _find_reliable_total(raw_text: str) -> float | None:
             )
             if rounding_pos is not None:
                 for check in check_lines[rounding_pos + 1:]:
-                    if _TOTAL_EXCLUDE.search(check):
+                    if _is_total_excluded(check):
                         continue
                     m = _AMOUNT_LOOSE.search(check)
                     if m:
-                        return float(m.group(1).replace(" ", "").replace(",", "."))
+                        return _parse_amount_match(m.group(1))
             # No rounding: take first amount on total line or next 2 lines —
-            # re-checking _TOTAL_EXCLUDE on each is what stops a "CASH TEND
-            # 11.00" or "CHANGE DUE 5.89" line (checked only as a fallback
-            # when the total line's own amount fails to parse) from being
-            # mistaken for the grand total.
+            # re-checking _is_total_excluded on each is what stops a "CASH
+            # TEND 11.00" or "CHANGE DUE 5.89" line (checked only as a
+            # fallback when the total line's own amount fails to parse) from
+            # being mistaken for the grand total.
             for check in check_lines[:3]:
-                if _TOTAL_EXCLUDE.search(check):
+                if _is_total_excluded(check):
                     continue
                 m = _AMOUNT_LOOSE.search(check)
                 if m:
-                    return float(m.group(1).replace(" ", "").replace(",", "."))
+                    return _parse_amount_match(m.group(1))
 
         if midline_amount is None:
             # Check each total/amount occurrence on this line in turn, rather
@@ -917,9 +1040,9 @@ def _find_reliable_total(raw_text: str) -> float | None:
                 if not m:
                     continue
                 window = line[max(0, kw.start() - 20):kw.end() + m.end()]
-                if _TOTAL_EXCLUDE.search(window):
+                if _is_total_excluded(window):
                     continue
-                midline_amount = float(m.group(1).replace(" ", "").replace(",", "."))
+                midline_amount = _parse_amount_match(m.group(1))
                 break
 
     return midline_amount
@@ -939,7 +1062,7 @@ def _extract_amount(raw_text: str) -> float | None:
 
     # Fallback: largest amount in the receipt
     matches = AMOUNT_PATTERN.findall(raw_text)
-    return max(float(m.replace(",", ".")) for m in matches) if matches else None
+    return max((_parse_amount_match(m) for m in matches), default=None)
 
 
 # Two independent signals distinguish a body-composition/lab-report style
@@ -1130,7 +1253,21 @@ def _extract_vendor(lines: list[str]) -> str | None:
             rest = " ".join(window[:idx] + window[idx + 1:]).lower()
             if normalised in rest:
                 return stripped
-            immediately_prior_candidate = stripped
+            # A real trading name/logo on a Malaysian receipt letterhead is
+            # printed in caps or title case -- never entirely lowercase --
+            # confirmed on two real SROIE receipts where a person's name
+            # ("tan woon yann", "tan chay yee", both printed all-lowercase
+            # directly above the Sdn Bhd line, apparently a cashier/customer
+            # name on that receipt template) was wrongly returned as the
+            # vendor purely for sitting in this position, ahead of the
+            # actual business name ("BOOK TA K (TAMAN DAYA) SDN BHD",
+            # "OJC MARKETING SDN BHD") printed right below it. An all-
+            # lowercase line is disqualified from this specific
+            # position-only signal (NOT from the stronger recurrence check
+            # just above, which still applies regardless of case) so the
+            # loop falls through to the Sdn Bhd line's own name instead.
+            if stripped != stripped.lower() or not any(c.isalpha() for c in stripped):
+                immediately_prior_candidate = stripped
 
     for line in lines[:5]:
         if (not re.search(r"\d{3,}", line)
@@ -1808,6 +1945,84 @@ _GEMINI_RECEIPT_PROMPT = """You are reading a photo of a purchase receipt. Extra
 Read the receipt's actual column layout carefully — an item's name and its price may be printed on the same physical row, or wrap across nearby rows, depending on how this particular receipt is laid out. Do not guess or invent items that aren't printed. If a value truly isn't legible, omit it rather than fabricating one."""
 
 
+# HTTP 429 from Gemini covers two VERY different situations that must not be
+# handled the same way -- confirmed by reading the actual error body during a
+# real batch run over FYP_IMAGES, not just the status code:
+#   1. A short per-minute request-rate burst (status RESOURCE_EXHAUSTED, but
+#      the violated quotaId has no "PerDay" in it, or a 503 -- an ordinary
+#      transient server hiccup). Both clear up in seconds; retrying shortly
+#      after reliably rescues the call.
+#   2. The free tier's actual quota, which is PER-DAY, not per-minute (e.g.
+#      quotaId "GenerateRequestsPerDayPerProjectPerModel-FreeTier", a cap as
+#      low as 20 requests/day for this model on the free tier). Once that's
+#      exhausted, EVERY call fails with 429 for the rest of the day -- no
+#      amount of short-backoff retrying will ever clear it (confirmed: the
+#      body's own "retryDelay" hint, e.g. "38s", is meaningless here and does
+#      NOT mean the daily quota resets that soon). Retrying it anyway wastes
+#      several seconds per receipt for a call that cannot possibly succeed,
+#      and burns through this module's daily allowance faster to boot.
+# So: retry #1, never retry #2 -- and once #2 is seen, remember it for the
+# rest of this process so later receipts in the same run/session skip the
+# network call entirely instead of each independently rediscovering the same
+# exhausted quota (see _gemini_daily_quota_exhausted_until below).
+_GEMINI_RETRYABLE_CODES = {429, 503}
+_GEMINI_MAX_ATTEMPTS = 3
+_GEMINI_RETRY_BACKOFF_S = (2, 5)  # delay before attempt 2, then attempt 3
+
+# Set to a wall-clock time.time() cutoff once a PerDay quota exhaustion is
+# seen -- module-level (not per-request) so every receipt processed by this
+# running backend after that point can skip straight to "don't bother", not
+# just retries within a single call. 24h is a conservative upper bound on a
+# free-tier daily reset; a fresh process restart also clears it immediately,
+# which happens naturally on every redeploy.
+_gemini_daily_quota_exhausted_until: float | None = None
+
+
+def _is_daily_quota_exhausted(http_error) -> bool:
+    """True if this 429's body identifies a PerDay quota (see the module
+    comment above) rather than a short per-minute burst. Defensive default:
+    an unparseable body is treated as NOT a daily exhaustion, so a genuinely
+    transient 429 whose body happens to fail to parse still gets retried
+    rather than being wrongly written off for the rest of the day."""
+    if http_error.code != 429:
+        return False
+    try:
+        body = http_error.read().decode(errors="replace")
+    except Exception:
+        return False
+    return "PerDay" in body
+
+
+def _urlopen_with_retry(req: urllib.request.Request, timeout: int) -> bytes:
+    """urllib.request.urlopen(), retrying a transient 503 (or a non-daily
+    429) with a short backoff. A daily-quota-exhaustion 429 is never
+    retried, and instead sets _gemini_daily_quota_exhausted_until so later
+    calls this process makes short-circuit before even reaching the network
+    (see _gemini_fallback_extract)."""
+    import urllib.error
+
+    global _gemini_daily_quota_exhausted_until
+
+    last_error = None
+    for attempt in range(_GEMINI_MAX_ATTEMPTS):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return resp.read()
+        except urllib.error.HTTPError as e:
+            last_error = e
+            if e.code == 429 and _is_daily_quota_exhausted(e):
+                _gemini_daily_quota_exhausted_until = time.time() + 24 * 3600
+                print("Gemini fallback: daily free-tier quota exhausted -- "
+                      "skipping retries and further calls for the rest of today.")
+                raise
+            if e.code not in _GEMINI_RETRYABLE_CODES or attempt == _GEMINI_MAX_ATTEMPTS - 1:
+                raise
+            print(f"Gemini fallback got HTTP {e.code}, retrying in "
+                  f"{_GEMINI_RETRY_BACKOFF_S[attempt]}s (attempt {attempt + 2}/{_GEMINI_MAX_ATTEMPTS})...")
+            time.sleep(_GEMINI_RETRY_BACKOFF_S[attempt])
+    raise last_error  # unreachable -- loop always either returns or raises above
+
+
 # Called only when the regex-based extraction above looks unreliable (see
 # `items_confidence` in parse_receipt_fields) — sent the ORIGINAL PHOTO, not
 # the already-reconstructed OCR text, so it can bypass whatever reading-order
@@ -1820,6 +2035,14 @@ Read the receipt's actual column layout carefully — an item's name and its pri
 def _gemini_fallback_extract(image_bytes: bytes) -> dict | None:
     if not GEMINI_API_KEY:
         return None
+
+    global _gemini_daily_quota_exhausted_until
+    if _gemini_daily_quota_exhausted_until is not None:
+        if time.time() < _gemini_daily_quota_exhausted_until:
+            print("Gemini fallback skipped -- daily free-tier quota was exhausted "
+                  "earlier this run; keeping regex result.")
+            return None
+        _gemini_daily_quota_exhausted_until = None  # cooldown window elapsed, try again
 
     from PIL import Image
 
@@ -1861,8 +2084,7 @@ def _gemini_fallback_extract(image_bytes: bytes) -> dict | None:
         headers={"Content-Type": "application/json", "x-goog-api-key": GEMINI_API_KEY},
     )
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            result = json.loads(resp.read())
+        result = json.loads(_urlopen_with_retry(req, timeout=30))
         text = result["candidates"][0]["content"]["parts"][0]["text"]
         extracted = json.loads(text)
         line_items = extracted.get("line_items")
