@@ -114,7 +114,6 @@ class LocationService {
         if (_currentLocationId != matched.id) {
           // Switched to a new (or first) location — reset the dwell clock
           // and un-confirm until it earns "now location" status too.
-          final wasConfirmed = _confirmed;
           await _closeCurrentVisit(userId);
           _currentLocationId = matched.id;
           _arrivedAt = DateTime.now();
@@ -139,13 +138,15 @@ class LocationService {
                 dwellMinutes: 0,
               ),
             );
-          } else if (wasConfirmed) {
-            // Left a confirmed location for an unconfirmed one — clear the
-            // "now location" state until the new spot earns it.
+          } else {
+            // Radar-only, immediate — purely so the UI can show "you've
+            // arrived" right away. Alerts still can't fire off this; only
+            // a real `entered` (below, once dwell time is met) reaches
+            // Algorithm 3 in background_location_service.dart.
             _eventController.add(
-              const LocationEvent(
-                type: LocationEventType.left,
-                location: null,
+              LocationEvent(
+                type: LocationEventType.detected,
+                location: matched,
                 dwellMinutes: 0,
               ),
             );
@@ -168,6 +169,16 @@ class LocationService {
                 dwellMinutes: dwell,
               ),
             );
+          } else {
+            // Still within the dwell window — keep the radar's elapsed
+            // time current without emitting an alert-eligible `entered`.
+            _eventController.add(
+              LocationEvent(
+                type: LocationEventType.detected,
+                location: matched,
+                dwellMinutes: dwell,
+              ),
+            );
           }
         } else {
           // Already confirmed — keep the displayed dwell time current.
@@ -181,17 +192,17 @@ class LocationService {
           );
         }
       } else if (_currentLocationId != null) {
-        final wasConfirmed = _confirmed;
         await _closeCurrentVisit(userId);
-        if (wasConfirmed) {
-          _eventController.add(
-            const LocationEvent(
-              type: LocationEventType.left,
-              location: null,
-              dwellMinutes: 0,
-            ),
-          );
-        }
+        // Clear the radar on leaving regardless of whether the visit was
+        // ever confirmed — a `detected`-only match that's now out of range
+        // shouldn't keep showing on the radar.
+        _eventController.add(
+          const LocationEvent(
+            type: LocationEventType.left,
+            location: null,
+            dwellMinutes: 0,
+          ),
+        );
       }
     } catch (e) {
       // Was silently ignored before — logged now since a swallowed GPS
@@ -294,7 +305,7 @@ class LocationService {
   }
 }
 
-enum LocationEventType { entered, dwell, left }
+enum LocationEventType { entered, dwell, detected, left }
 
 class LocationEvent {
   final LocationEventType type;

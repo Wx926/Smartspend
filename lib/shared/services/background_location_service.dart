@@ -86,6 +86,12 @@ void onServiceStart(ServiceInstance service) async {
       Supabase.instance.client.auth.currentUser?.id ??
       LocalStorageService.instance.localUserId;
 
+  // This isolate has its own LocalStorageService instance, separate from the
+  // foreground app's — without this, every user-scoped read (locations,
+  // budgets, etc.) falls back to the 'unscoped' key instead of this user's
+  // actual data, since _activeUserId defaults to null until set explicitly.
+  await LocalStorageService.instance.setActiveUser(userId);
+
   await LocationService.instance.startTracking(userId);
 
   LocationService.instance.events.listen((event) async {
