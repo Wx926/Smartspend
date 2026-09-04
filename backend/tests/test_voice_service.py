@@ -29,6 +29,25 @@ class TestSingleExpense:
         result = parse_voice_expense("roti canai 2 ringgit 90 sen")
         assert result["amount"] == 2.90
 
+    def test_spoken_ringgit_and_cents_with_real_whisper_comma(self):
+        """Real transcript, verified against the actual app screen: Whisper
+        transcribed a natural speech pause as a comma ("7 ringgit, 90
+        cent"), which the first version of this fix didn't tolerate (it
+        only matched a plain space) -- silently reproducing the exact bug
+        it was meant to fix. Two full multi-item segments, matching what
+        was actually seen broken: item names were "90 cent" / "Ice cream 95
+        cent" at RM7.00 / RM5.00 (total RM12.00) instead of the correct
+        RM7.90 / RM5.95 (total RM13.85)."""
+        result = parse_voice_expense(
+            "McDonald's, 7 ringgit, 90 cent. Ice cream, 5 ringgit, 95 cent."
+        )
+        assert len(result["line_items"]) == 2
+        prices = sorted(it["price"] for it in result["line_items"])
+        assert prices == [5.95, 7.90]
+        assert round(result["amount"], 2) == 13.85
+        ice_cream = next(it for it in result["line_items"] if it["price"] == 5.95)
+        assert "cent" not in ice_cream["item_name"].lower()
+
 
 class TestMultiExpenseSegmentation:
     def test_splits_on_sentence_boundaries(self):

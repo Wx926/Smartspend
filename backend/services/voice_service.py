@@ -59,8 +59,18 @@ _CHINESE_KUAI_DECIMAL = re.compile(r"(\d+)块(\d{1,2})\b")
 # plainer pattern would otherwise match "7 ringgit" first and never get a
 # chance to see the trailing cents. "sen" is the actual Malay word for
 # cents (Whisper sometimes transcribes it as "sen", sometimes as "cent").
+#
+# `[\s,]+` (not `\s+`) between the currency word and the cents number --
+# confirmed on a real transcript ("McDonald's, 7 ringgit, 90 cent.") that
+# Whisper naturally inserts a comma at the speech pause before the cents
+# figure. A plain `\s+` requires that gap to be ONLY whitespace, so it
+# silently failed to match on real speech (as opposed to a hand-typed test
+# string with no punctuation), falling through to _AMOUNT_PATTERN and
+# reproducing the exact 7.00-instead-of-7.90 bug this pattern exists to fix
+# in the first place -- the same class of mistake already made once this
+# session with the OCR side's "Incl . of GST" spacing.
 _RINGGIT_AND_CENTS = re.compile(
-    r"(\d+)\s*(?:ringgit|rm|dollars?|bucks?)\s+(\d{1,2})\s*(?:cents?|sen)\b",
+    r"(\d+)\s*(?:ringgit|rm|dollars?|bucks?)[\s,]+(\d{1,2})\s*(?:cents?|sen)\b",
     re.IGNORECASE,
 )
 
