@@ -19,12 +19,7 @@ class LocalStorageService {
   LocalStorageService._();
   static final LocalStorageService instance = LocalStorageService._();
 
-  static const _keyBudgets = 'ss_budgets';
-  static const _keyExpenses = 'ss_expenses';
-  static const _keyLocations = 'ss_locations';
-  static const _keyAlerts = 'ss_alerts';
   static const _keyDeviceId = 'ss_device_id';
-  static const _keyCustomCategories = 'ss_custom_categories';
   static const _keyWallets = 'ss_wallets';
   static const _keyPreferredWallet = 'ss_preferred_wallet_id';
   static const _keyLocationAlertsEnabled = 'ss_location_alerts_enabled';
@@ -33,15 +28,44 @@ class LocalStorageService {
   static const _keyRecentReceipts = 'ss_recent_receipts';
   static const _keyAiCategorisation = 'ss_ai_categorisation_enabled';
   static const _keyVoiceInputLanguage = 'ss_voice_input_language';
-  static const _keyLocationHistory = 'ss_location_history';
   static const _keyPasscodeEnabled = 'ss_passcode_enabled';
   static const _keyPasscodeHash = 'ss_passcode_hash';
   static const _keyPasscodeTimeoutMinutes = 'ss_passcode_timeout_minutes';
   static const _keyPasscodeLastUnlockedAt = 'ss_passcode_last_unlocked_at';
-  static const _keySavingsGoals = 'ss_savings_goals';
-  static const _keyLoans = 'ss_loans';
-  static const _keyChatSessions = 'ss_chat_sessions';
   static const _maxRecentReceipts = 12;
+
+  // Legacy (pre-account-scoping) key names. Before this fix, every account
+  // on a device shared these same keys, so signing out/in a different
+  // account — or falling back to guest after a session silently expired —
+  // could show someone else's expenses, budgets, etc. Kept only so the
+  // first setActiveUser() call after upgrading can migrate any local-only
+  // data into that user's new scoped key once; never read after that.
+  static const _legacyKeyBudgets = 'ss_budgets';
+  static const _legacyKeyExpenses = 'ss_expenses';
+  static const _legacyKeyLocations = 'ss_locations';
+  static const _legacyKeyAlerts = 'ss_alerts';
+  static const _legacyKeyCustomCategories = 'ss_custom_categories';
+  static const _legacyKeyLocationHistory = 'ss_location_history';
+  static const _legacyKeySavingsGoals = 'ss_savings_goals';
+  static const _legacyKeyLoans = 'ss_loans';
+  static const _legacyKeyChatSessions = 'ss_chat_sessions';
+
+  // Active account scope. Set by AuthProvider on startup and after every
+  // sign-up/in/out so these keys always resolve to *this* account's data —
+  // a different identity on the same device physically cannot read another
+  // identity's rows anymore, regardless of how the switch happened.
+  String? _activeUserId;
+
+  String get _scope => _activeUserId ?? 'unscoped';
+  String get _keyBudgets => 'ss_budgets_$_scope';
+  String get _keyExpenses => 'ss_expenses_$_scope';
+  String get _keyLocations => 'ss_locations_$_scope';
+  String get _keyAlerts => 'ss_alerts_$_scope';
+  String get _keyCustomCategories => 'ss_custom_categories_$_scope';
+  String get _keyLocationHistory => 'ss_location_history_$_scope';
+  String get _keySavingsGoals => 'ss_savings_goals_$_scope';
+  String get _keyLoans => 'ss_loans_$_scope';
+  String get _keyChatSessions => 'ss_chat_sessions_$_scope';
 
   // Algorithm 1 Step 3: a location is "routine" once it's been visited at
   // least this many times, all arriving within a consistent hour-of-day
@@ -105,6 +129,43 @@ class LocalStorageService {
       prefs.remove(_keyAlerts),
       prefs.remove(_keyCustomCategories),
     ]);
+  }
+
+  /// Switches whose data the getters/setters above read and write. Must be
+  /// called before any provider touches local storage — from AuthProvider's
+  /// constructor at startup, and again after every sign-up/sign-in/sign-out
+  /// — otherwise a different identity on this device would just keep
+  /// reading whatever was cached under the previous one.
+  Future<void> setActiveUser(String userId) async {
+    _activeUserId = userId;
+    await _migrateLegacyDataIfNeeded(userId);
+  }
+
+  /// One-time cleanup for data saved before per-account key scoping existed
+  /// (see the _legacyKey* constants above). Each legacy key is deleted right
+  /// after being copied over, so it can only ever be migrated into the
+  /// *first* account that signs in post-upgrade — never handed to a second,
+  /// different account later, which would just reproduce the same leak.
+  Future<void> _migrateLegacyDataIfNeeded(String userId) async {
+    final prefs = _prefs;
+    if (prefs == null) return;
+    final migrations = {
+      _legacyKeyExpenses: 'ss_expenses_$userId',
+      _legacyKeyBudgets: 'ss_budgets_$userId',
+      _legacyKeySavingsGoals: 'ss_savings_goals_$userId',
+      _legacyKeyLoans: 'ss_loans_$userId',
+      _legacyKeyChatSessions: 'ss_chat_sessions_$userId',
+      _legacyKeyLocations: 'ss_locations_$userId',
+      _legacyKeyLocationHistory: 'ss_location_history_$userId',
+      _legacyKeyAlerts: 'ss_alerts_$userId',
+      _legacyKeyCustomCategories: 'ss_custom_categories_$userId',
+    };
+    for (final entry in migrations.entries) {
+      final legacyValue = prefs.getString(entry.key);
+      if (legacyValue == null) continue;
+      await prefs.setString(entry.value, legacyValue);
+      await prefs.remove(entry.key);
+    }
   }
 
   String get localUserId => _prefs?.getString(_keyDeviceId) ?? 'local_user';

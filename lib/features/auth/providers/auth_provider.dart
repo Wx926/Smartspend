@@ -24,6 +24,13 @@ class AuthProvider extends ChangeNotifier {
   String get userId =>
       currentUser?.id ?? LocalStorageService.instance.localUserId;
 
+  AuthProvider() {
+    // Scope local storage to whoever's actually signed in (or the guest ID)
+    // as early as possible — other providers read local data in their own
+    // constructors, right after this one runs.
+    LocalStorageService.instance.setActiveUser(userId);
+  }
+
   void clearError() {
     _errorMessage = null;
     notifyListeners();
@@ -41,6 +48,7 @@ class AuthProvider extends ChangeNotifier {
     try {
       await _auth.signUp(email: email, password: password, name: name);
       await _clearAccountData();
+      await LocalStorageService.instance.setActiveUser(userId);
       _isLoading = false;
       notifyListeners();
       return true;
@@ -65,6 +73,7 @@ class AuthProvider extends ChangeNotifier {
     try {
       await _auth.signIn(email: email, password: password);
       await _clearAccountData();
+      await LocalStorageService.instance.setActiveUser(userId);
       _isLoading = false;
       notifyListeners();
       return true;
@@ -122,6 +131,7 @@ class AuthProvider extends ChangeNotifier {
       await _auth.updatePassword(password);
       await _auth.updateName(name);
       await _clearAccountData();
+      await LocalStorageService.instance.setActiveUser(userId);
       _isLoading = false;
       notifyListeners();
       return true;
@@ -231,6 +241,7 @@ class AuthProvider extends ChangeNotifier {
   Future<void> signOut() async {
     await _auth.signOut();
     await _clearAccountData();
+    await LocalStorageService.instance.setActiveUser(userId);
     // The passcode protects this account's session on this device — once
     // it's over, there's nothing left to lock, and whoever logs in next
     // (same person or someone else) should set up their own if they want
