@@ -16,6 +16,19 @@ class TestSingleExpense:
         result = parse_voice_expense("movie tickets 45")
         assert result["amount"] == 45.0
 
+    def test_spoken_ringgit_and_cents(self):
+        """Real bug found close to submission: "7 ringgit 90 cent" was
+        parsed as 7.00, silently dropping the "90 cent" -- _AMOUNT_PATTERN
+        alone only captures the number immediately before "ringgit"."""
+        result = parse_voice_expense("ice cream 7 ringgit 90 cent")
+        assert result["amount"] == 7.90
+
+    def test_spoken_ringgit_and_sen(self):
+        """"Sen" is the actual Malay word for cents -- must work the same
+        as the English "cent" Whisper sometimes transcribes it as."""
+        result = parse_voice_expense("roti canai 2 ringgit 90 sen")
+        assert result["amount"] == 2.90
+
 
 class TestMultiExpenseSegmentation:
     def test_splits_on_sentence_boundaries(self):
