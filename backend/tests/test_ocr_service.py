@@ -717,6 +717,28 @@ class TestNonReceiptReportDetection:
         text = "TOMO VISION SETAPAK\n23/07/2026\nTotal 290.00\nE-PAY 290.00\n"
         assert _looks_like_non_receipt_report(text) is False
 
+    def test_receipt_footer_with_bracketed_prose_not_flagged(self):
+        """Real false-positive that blocked a perfectly good receipt: a
+        Thunder Match Technology invoice prints "[[Customer Service Hotline
+        ...]]" in its footer. Bare "[" counting saw two brackets and
+        rejected the whole scan as a "report or document", with no way for
+        the user past it -- and it only appeared once a photo captured the
+        full receipt (an earlier, cropped-above-the-footer photo of the
+        SAME receipt scanned fine, which is what made it look like a
+        regression). A bracket opening prose is not a reference range."""
+        text = (
+            "Thunder Match Technology Sdn Bhd(541512-U) 040-SCT\n"
+            "INVOICE NO : 040-SCT-11411137\n"
+            "DATE: 14/07/2024 19:53\n"
+            "1 HDS-SSGMZV8P1T0BW :: SSD SAMSUNG M.2 2280 499.00\n"
+            "2 A01-SERVICE :: Service Charges 40.00\n"
+            "TOTAL AMOUNT 539.00\n"
+            "[[Customer Service Hotline Tel : +603-21061732, WhatsApps : "
+            "+603-21061632. Mon - Fri Exclude PH (9.15am - 1.15pm, "
+            "2.15pm - 6.15pm)]] *Terms and condition apply. For Warranty\n"
+        )
+        assert _looks_like_non_receipt_report(text) is False
+
     def test_flags_via_vocabulary_alone_when_brackets_are_lost(self):
         """Regression guard for a real crop of just this document's lower
         half: Vision's reading order interleaved unrelated text between

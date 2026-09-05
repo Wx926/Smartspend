@@ -1085,9 +1085,22 @@ def _extract_amount(raw_text: str) -> float | None:
 #    lower half where Vision's block-based reconstruction interleaved
 #    unrelated text between the "[" and its numbers, breaking the sequence
 #    apart even though the bracket characters themselves survived intact.
-#    Counting bare "[" characters is a looser but sturdier proxy for the
-#    same signal -- a real receipt essentially never prints a square
-#    bracket at all, so 2+ of them anywhere is still strong evidence.
+#    Counting BARE "[" characters was the looser proxy used for this, on
+#    the assumption that "a real receipt essentially never prints a square
+#    bracket at all" -- but that assumption is simply false, confirmed on a
+#    real Thunder Match Technology (TMT) invoice whose footer prints
+#    "[[Customer Service Hotline Tel : ...]]". Two brackets in ordinary
+#    prose were enough to condemn an otherwise perfectly good receipt as a
+#    "report", with no way for the user to get past it. (It only surfaced
+#    once a photo captured the full receipt including that footer -- an
+#    earlier scan cropped above it and sailed through, which is exactly how
+#    misleading this heuristic was.)
+#    So the bracket must now be followed by a DIGIT ("[52.9", "[70%") --
+#    faithful to what a reference range actually looks like, and what this
+#    signal was always described as detecting, while ignoring bracketed
+#    prose. Signal 2 below independently covers the fragile case that
+#    motivated the loose version (brackets separated from their numbers),
+#    so nothing is lost by tightening this one back up.
 # 2. Large, clearly-printed section headings unique to this report type
 #    ("SEGMENTAL ANALYSIS", "TOTAL BODY WATER", ...). Confirmed necessary
 #    against that same lower-half crop, which had no visible date/name
@@ -1103,8 +1116,14 @@ _NON_RECEIPT_REPORT_PHRASES = [
 ]
 
 
+# A "[" opening what looks like a measured reference range -- i.e. followed
+# by a number ("[52.9 - 64.7]", "[70%]"), not by prose ("[[Customer Service
+# Hotline"). See signal 1's comment above.
+_REFERENCE_RANGE_BRACKET = re.compile(r"\[\s*\d")
+
+
 def _looks_like_non_receipt_report(raw_text: str) -> bool:
-    if raw_text.count("[") >= 2:
+    if len(_REFERENCE_RANGE_BRACKET.findall(raw_text)) >= 2:
         return True
     lowered = raw_text.lower()
     return sum(1 for phrase in _NON_RECEIPT_REPORT_PHRASES if phrase in lowered) >= 2
