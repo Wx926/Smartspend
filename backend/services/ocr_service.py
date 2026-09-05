@@ -380,8 +380,17 @@ _ITEM_TABLE_HEADER = re.compile(
 )
 
 # Lines containing these words are totals/summaries/headers/footers — not items
+#
+# "clearance" added alongside "discount" -- a real FamilyMart receipt's
+# markdown line ("RTE Clearance 25% Timebase -1.23") doesn't say "discount"
+# anywhere, so it fell through every check and got extracted as if it were a
+# purchased item named "RTE Clearance 25" for a POSITIVE 1.23 -- the sign of
+# the actual printed markdown was lost too, in addition to it not being a
+# product at all. Kept separate from "discount" (not merged into one regex
+# alternative) since both need to independently match on their own.
 SKIP_KEYWORDS = re.compile(
     r"\b(total|subtotal|sub-total|tax|gst|sst|service\s*charge|discount|"
+    r"clearance|"
     r"change|cash|rounding|amount|amt|balance|tip|gratuity|receipt|invoice|"
     r"thank\s*you|welcome|visit|shop|store|tel|phone|fax|address|hotline|"
     r"website|www|http|member|loyalty|point|void|refund|exchange|"

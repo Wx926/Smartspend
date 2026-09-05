@@ -69,6 +69,32 @@ class TestDateExtraction:
 
 
 class TestLineItemExtraction:
+    def test_clearance_markdown_line_not_extracted_as_purchased_item(self):
+        """Real bug, same FamilyMart receipt as TestItemsConfidence's
+        test_discounted_total_still_high: "RTE Clearance 25% Timebase
+        -1.23" is a discount adjustment, not a product -- it doesn't say
+        "discount" anywhere, so it fell through SKIP_KEYWORDS entirely and
+        was extracted as a fake item named "RTE Clearance 25" for a
+        POSITIVE 1.23 (losing the discount's negative sign too). Confirmed
+        on the real app screen: 2 real items became 4, and the displayed
+        total went from the correct 14.55 to a nonsensical -2.48."""
+        raw = (
+            "FAMILYMART\n"
+            "Salted Salmon Onigiri ea 4.90\n"
+            "Chicken Burrito Wrap ea 10.90\n"
+            "SUBTOTAL 15.80\n"
+            "RTE Clearance 25% Timebase -1.23\n"
+            "ROUNDING -0.02\n"
+            "TOTAL 14.55\n"
+        )
+        items = _extract_line_items(raw)
+        assert len(items) == 2
+        names = [it["item_name"].lower() for it in items]
+        assert not any("clearance" in n or "subtotal" in n for n in names)
+        result = parse_receipt_fields(raw)
+        assert result["amount"] == 14.55
+        assert result["items_confidence"] == "high"
+
     def test_misread_qty_header_does_not_wrongly_trigger_totals_boundary(self):
         """Real bug (HON HWA HARDWARE): Vision misread this receipt's "Qty"
         column header as "Ofy", so _ITEM_TABLE_HEADER's strict "qty"-only
