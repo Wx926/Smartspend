@@ -1549,8 +1549,31 @@ def _extract_line_items(raw_text: str) -> list[dict]:
         # recognise it. A space is tolerated between the digit and the period
         # (Vision sometimes prints "1 ." instead of "1." when the CJK text
         # immediately after it needs its own spacing).
+        #
+        # The separator after that menu number may also be a comma, or missing
+        # entirely -- confirmed on a real SENG KEE CUISINE receipt printed
+        # "1  20.冬菇肉酱拉面（大）  8.00" (qty, then menu no., then a Chinese
+        # name), where the period after "20" didn't survive OCR. With the
+        # period required, the leftover "20 冬菇..." starts with a bare digit
+        # run that qty_prefix won't touch (its continuation class is
+        # [A-Za-z\d], which excludes CJK) and that no layout's name pattern
+        # accepts either -- so the whole line, price included, silently
+        # vanished, leaving only the "* 加鸡蛋" add-on as the receipt's sole
+        # item. Same class of total-line-loss as the "! MESAN TRUFFLE FRIES"
+        # case above.
+        #
+        # The separator-less form is deliberately allowed ONLY when a CJK
+        # name follows: for a Latin name, a bare leading number is far more
+        # likely a real QUANTITY, and qty_prefix already strips it there
+        # while correctly capturing it as the quantity -- stripping it here
+        # instead would silently discard that. CJK names can't reach
+        # qty_prefix at all, so for them this turns a dropped line into a
+        # recovered one (quantity falling back to 1) rather than trading
+        # away real information.
         bullet_prefix = re.match(
-            rf"^(?:[-•*]|\d{{1,2}}\s*\.)\s*([A-Za-z{_CJK}].*)$", line
+            rf"^(?:[-•*]|\d{{1,2}}\s*[.,]|\d{{1,2}}\s+(?=[{_CJK}]))"
+            rf"\s*([A-Za-z{_CJK}].*)$",
+            line,
         )
         if bullet_prefix:
             line = bullet_prefix.group(1)

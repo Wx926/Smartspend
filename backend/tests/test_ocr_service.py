@@ -95,6 +95,52 @@ class TestLineItemExtraction:
         assert result["amount"] == 14.55
         assert result["items_confidence"] == "high"
 
+    def test_chinese_menu_number_without_period_still_extracts_item(self):
+        """Real bug (SENG KEE CUISINE): the receipt prints
+        "1  20.冬菇肉酱拉面（大）  8.00" -- qty, then a menu number, then a
+        Chinese name. When OCR lost the period after "20", the leftover
+        "20 冬菇..." started with a bare digit run that qty_prefix won't
+        touch (its continuation class excludes CJK) and no layout's name
+        pattern accepts, so the entire line -- price included -- vanished,
+        leaving the "* 加鸡蛋" add-on as the receipt's only item (RM1.00
+        against a RM9.00 total). Verified against every OCR variant of the
+        separator seen in practice."""
+        for sep in ("20.", "20 ", "20,", "20 . "):
+            raw = (
+                "SENG KEE CUISINE\n"
+                "(003762951-P)\n"
+                "RED BRICKS CAFETARIA,\n"
+                "TARC UNIVERSITY COLLEGE,\n"
+                "SETAPAK,53300 KL\n"
+                "11/08/2026 13:49 ZZZZ A660868\n"
+                "Cashier: YOYO Server: YOYO\n"
+                "BILL: 660868 RM\n"
+                f"1 {sep}冬菇肉酱拉面（大） 8.00\n"
+                "RAMEN W.MUSHROOM&M.CHICKEN\n"
+                "* 加 鸡蛋 1.00\n"
+                "TOTAL 9.00\n"
+                "CASH 9.00\n"
+                "CHANGE 0.00\n"
+            )
+            result = parse_receipt_fields(raw)
+            items = result["line_items"]
+            assert len(items) == 2, f"separator {sep!r} lost an item: {items}"
+            assert sum(it["price"] for it in items) == 9.00
+            assert "拉面" in items[0]["item_name"]
+            # Both items recovered means the sum now reconciles with the
+            # printed total, so the "don't add up" warning clears too.
+            assert result["items_confidence"] == "high"
+
+    def test_latin_leading_quantity_still_captured_not_stripped(self):
+        """Guard for the fix above: the separator-less form is CJK-only on
+        purpose. For a Latin name a bare leading number is a real quantity,
+        which qty_prefix must keep capturing rather than the bullet strip
+        silently discarding."""
+        items = _extract_line_items("2 PANTS 50.00\nTOTAL 50.00\n")
+        assert len(items) == 1
+        assert items[0]["quantity"] == 2
+        assert items[0]["item_name"] == "PANTS"
+
     def test_misread_qty_header_does_not_wrongly_trigger_totals_boundary(self):
         """Real bug (HON HWA HARDWARE): Vision misread this receipt's "Qty"
         column header as "Ofy", so _ITEM_TABLE_HEADER's strict "qty"-only
