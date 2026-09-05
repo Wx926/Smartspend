@@ -34,10 +34,16 @@ class VoiceApiService {
             ..files.add(
                 await http.MultipartFile.fromPath('audio', audioFile.path));
         },
-        // 90s — same reasoning as ocr_api_service.dart's scanReceipt: the
-        // hosted backend's free tier can take 50+ seconds to wake from a
-        // cold start before Whisper transcription even begins.
-        timeout: const Duration(seconds: 90),
+        // 150s — same real-world evidence as ocr_api_service.dart's
+        // scanReceipt (see its comment): 90s consistently failed the first
+        // recording after the backend went idle, succeeding immediately on
+        // retry once warm. Voice has LESS margin than OCR at the same
+        // timeout, not more: on top of the shared container cold-start,
+        // whisper_service.py lazy-loads the actual Whisper model on its
+        // first call ever (`_model is None` check) rather than at server
+        // startup, so the very first transcription pays for model
+        // load AND cold start AND transcription, all inside one budget.
+        timeout: const Duration(seconds: 150),
       );
     } on BackendUnreachableException catch (e) {
       throw VoiceApiException(e.message);
@@ -69,10 +75,13 @@ class VoiceApiService {
           request.body = jsonEncode({'transcript': transcript});
           return request;
         },
-        // 60s, not 15 — this call can still land on a cold instance if it's
+        // 90s, not 60 — this call can still land on a cold instance if it's
         // the first request of a session (e.g. a manually-typed transcript
         // submitted without a prior transcribeAudio call to warm it up).
-        timeout: const Duration(seconds: 60),
+        // Raised alongside the other two timeouts in this file/scanReceipt
+        // after 90s (this call's old budget was 60s) proved to consistently
+        // fail a genuine cold start rather than just run slow.
+        timeout: const Duration(seconds: 90),
       );
     } on BackendUnreachableException catch (e) {
       throw VoiceApiException(e.message);

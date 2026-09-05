@@ -34,11 +34,18 @@ class OcrApiService {
               filename: file.name,
             ));
         },
-        // 90s, not 30 — the hosted backend's free tier can take 50+ seconds
-        // to wake from a cold start (Render's own stated worst case) before
-        // it even starts the actual OCR/Gemini work, and 30s wasn't enough
-        // headroom for both.
-        timeout: const Duration(seconds: 90),
+        // 150s, not 90 — confirmed by real testing close to submission: the
+        // first scan after the backend goes idle consistently FAILED
+        // outright at 90s, not just felt slow, then succeeded immediately on
+        // a second attempt once the instance was warm. 90s budgeted "50s
+        // wake + the rest for OCR/Gemini work", but that only leaves ~40s for
+        // Vision + (when confidence is low) a second Gemini call on top —
+        // not enough margin when the actual cold-start time runs past
+        // Render's own "50+ seconds" estimate, which real testing shows it
+        // regularly does. 150s keeps a real cold start a first-try success
+        // instead of a guaranteed-fail-then-retry, matching what the README
+        // promises users ("first request is slow, not broken").
+        timeout: const Duration(seconds: 150),
       );
     } on BackendUnreachableException catch (e) {
       throw OcrApiException(e.message);
