@@ -2209,6 +2209,25 @@ def process_receipt(filename: str, file_size_bytes: int, image_bytes: bytes) -> 
             parsed["items_confidence"] = items_confidence(parsed["line_items"], parsed["amount"])
             extraction_method = "gemini_fallback"
 
+    # A single-letter placeholder name (e.g. "Y") on a hard-to-read receipt --
+    # previously only guarded against on the Gemini-fallback path (see
+    # TestGeminiFallbackPlausibilityGuard), but confirmed on a real stained/
+    # creased receipt (TOMO VISION SETAPAK) to also come out of the plain
+    # REGEX path on its own, with no guard at all: vendor_name AND the item
+    # name both came back as bare "Y", and since the single item's price
+    # happened to exactly equal the total, the sum-ratio check in
+    # items_confidence read that as "high" -- confidently wrong, with no
+    # warning shown, on a receipt that plainly needed one. Applied here
+    # regardless of which path (regex or Gemini) produced the final result,
+    # since either can hit the same illegible pixels. Never drops the
+    # item/price itself (still useful, editable data) -- only clears an
+    # implausible vendor name and forces low confidence so the warning
+    # banner reliably surfaces instead of silently trusting a coincidence.
+    if parsed["vendor_name"] and len(parsed["vendor_name"].strip()) < 2:
+        parsed["vendor_name"] = None
+    if any(len(it["item_name"].strip()) < 2 for it in parsed["line_items"]):
+        parsed["items_confidence"] = "low"
+
     # Vision succeeds at "finding text" on ANY text-heavy photo — a
     # screenshot of an unrelated app screen, a document, a poster — not just
     # actual receipts, so a clean OCR pass alone doesn't mean this was a

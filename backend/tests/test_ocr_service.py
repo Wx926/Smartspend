@@ -577,6 +577,32 @@ class TestGeminiFallbackPlausibilityGuard:
         assert result["vendor_name"] == "TOMO VISION SETAPAK"
         assert len(result["line_items"]) == 2
 
+    @patch("services.ocr_service.GEMINI_API_KEY", "")
+    @patch("services.ocr_service.extract_text")
+    def test_single_letter_vendor_from_regex_path_also_caught(self, mock_extract_text):
+        """Real bug found on a live scan of the same TOMO VISION SETAPAK
+        receipt above: the vendor-name guard tested elsewhere in this class
+        only covered Gemini's output. The plain REGEX vendor extractor can
+        independently produce the exact same "Y" placeholder, via
+        _VENDOR_WORD_LINE -- unlike every other vendor-candidate branch
+        (each requires len > 3), this one has no minimum-length check at
+        all, so a stray single letter sitting alone on its own line (e.g.
+        OCR noise from a stain/fold) satisfies it outright. Confirmed this
+        is regex-only, not Gemini: line-item extraction's own emission
+        checks already require a 3-40 char name, so item names can't
+        independently reach this same bug via the tested paths -- only
+        vendor needed the new guard here. Gemini never enters the picture
+        in this test (empty key), proving the fix applies to results Gemini
+        was never even involved in producing."""
+        mock_extract_text.return_value = "Y\nBLUE LENS 290.00\nTOTAL 290.00\n"
+        png = _tiny_png()
+        result = process_receipt("receipt.jpg", len(png), png)
+        assert result["vendor_name"] is None
+        # The real item survives untouched -- only the implausible vendor
+        # name is corrected, nothing useful is dropped.
+        assert result["line_items"][0]["item_name"] == "BLUE LENS"
+        assert result["line_items"][0]["price"] == 290.00
+
 
 def _http_error(code: int, body: str = "") -> "urllib.error.HTTPError":
     import urllib.error
