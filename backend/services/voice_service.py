@@ -69,8 +69,18 @@ _CHINESE_KUAI_DECIMAL = re.compile(r"(\d+)块(\d{1,2})\b")
 # reproducing the exact 7.00-instead-of-7.90 bug this pattern exists to fix
 # in the first place -- the same class of mistake already made once this
 # session with the OCR side's "Incl . of GST" spacing.
+# The trailing "cent"/"sen" word is also allowed to be MISSING entirely --
+# confirmed on a real transcript where Whisper rendered the same spoken
+# phrase as "7 ringgit 95" (no cents word at all) rather than the
+# "7 ringgit, 90 cent" it produced the time before. Without this, the
+# trailing "95" isn't part of the amount, so the value comes out as 7.00 and
+# the orphaned "95" becomes the item's NAME.
+# The wordless form is accepted only at the very END of a segment, so a
+# trailing count that is genuinely a separate word ("5 ringgit 2 packets")
+# can't be swallowed as cents; the explicit cents-word form stays valid
+# mid-sentence as before ("7 ringgit 90 cent for lunch").
 _RINGGIT_AND_CENTS = re.compile(
-    r"(\d+)\s*(?:ringgit|rm|dollars?|bucks?)[\s,]+(\d{1,2})\s*(?:cents?|sen)\b",
+    r"(\d+)\s*(?:ringgit|rm|dollars?|bucks?)[\s,]+(\d{1,2})\s*(?:(?:cents?|sen)\b|$)",
     re.IGNORECASE,
 )
 
@@ -204,7 +214,41 @@ def _split_segments(text: str) -> list[str]:
             )
         else:
             segments.append(sentence)
-    return segments
+    return _merge_dangling_names(segments)
+
+
+def _merge_dangling_names(segments: list[str]) -> list[str]:
+    """Re-joins a segment carrying NO amount onto the one after it.
+
+    Splitting on punctuation cuts an expense in half whenever the speaker
+    pauses between the name and the price -- "Nando's for Dinner. 45
+    ringgit." splits into a nameless amount and an amount-less name, and
+    since _parse_segment drops any segment with no recognisable amount, the
+    vendor was silently thrown away entirely: the entry came back with no
+    merchant at all and "45 ringgit" as its own item description. Same shape
+    on a comma-separated multi-item recording ("McDonald's, 7 ringgit 95,
+    Ice Cream, 5 ringgit 45"), where every name was separated from its own
+    price and discarded.
+
+    A segment with no amount can only ever be dropped on its own, so
+    attaching it to the following segment is strictly better than losing
+    it -- and a genuine multi-expense recording is untouched, since each of
+    its segments carries its own amount already. A trailing amount-less
+    segment (nothing after it to attach to) is left alone for
+    _parse_segment to discard as before.
+    """
+    merged: list[str] = []
+    carry = ""
+    for segment in segments:
+        candidate = f"{carry} {segment}".strip() if carry else segment
+        if _extract_amount(segment)[0] is None:
+            carry = candidate
+            continue
+        merged.append(candidate)
+        carry = ""
+    if carry:
+        merged.append(carry)
+    return merged
 
 
 class VoiceParseError(Exception):

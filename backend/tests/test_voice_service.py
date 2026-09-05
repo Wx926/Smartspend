@@ -29,6 +29,46 @@ class TestSingleExpense:
         result = parse_voice_expense("roti canai 2 ringgit 90 sen")
         assert result["amount"] == 2.90
 
+    def test_spoken_cents_without_the_word_cent(self):
+        """Real transcript: Whisper rendered the same spoken phrase as
+        "7 ringgit 95" -- no "cent" word at all -- where the time before it
+        produced "7 ringgit, 90 cent". Without accepting the wordless form,
+        the amount came out as 7.00 and the orphaned "95" became the item's
+        NAME."""
+        result = parse_voice_expense("ice cream 7 ringgit 95")
+        assert result["amount"] == 7.95
+        assert "95" != result["line_items"][0]["item_name"]
+
+    def test_trailing_count_not_swallowed_as_cents(self):
+        """Guard for the fix above: the wordless cents form is only accepted
+        at the end of a segment, so a trailing number that is really a
+        separate count must not be read as cents."""
+        result = parse_voice_expense("5 ringgit 2 packets nasi lemak")
+        assert result["amount"] == 5.00
+
+    def test_vendor_not_lost_when_spoken_before_a_pause(self):
+        """Real bug: "Nando's for Dinner. 45 ringgit." split on the period
+        into an amount-less name and a nameless amount. _parse_segment drops
+        any segment with no amount, so the vendor was thrown away entirely --
+        the entry came back with no merchant and "45 ringgit" as its own
+        item description."""
+        result = parse_voice_expense("Nando's for Dinner. 45 ringgit.")
+        assert result["vendor_name"] == "Nando's"
+        assert result["amount"] == 45.00
+        assert "ringgit" not in result["line_items"][0]["item_name"].lower()
+
+    def test_comma_separated_names_keep_their_own_amounts(self):
+        """Same orphaning on a comma-separated multi-item recording: every
+        name was split away from its own price and discarded, leaving items
+        named after the leftover cents digits ("95", "45")."""
+        result = parse_voice_expense(
+            "McDonald's, 7 ringgit 95, Ice Cream, 5 ringgit 45."
+        )
+        assert result["vendor_name"] == "McDonald's"
+        assert len(result["line_items"]) == 2
+        assert sorted(i["price"] for i in result["line_items"]) == [5.45, 7.95]
+        assert any("ice cream" in i["item_name"].lower() for i in result["line_items"])
+
     def test_spoken_ringgit_and_cents_with_real_whisper_comma(self):
         """Real transcript, verified against the actual app screen: Whisper
         transcribed a natural speech pause as a comma ("7 ringgit, 90
