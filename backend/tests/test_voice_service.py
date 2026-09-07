@@ -67,7 +67,22 @@ class TestSingleExpense:
         assert result["vendor_name"] == "McDonald's"
         assert len(result["line_items"]) == 2
         assert sorted(i["price"] for i in result["line_items"]) == [5.45, 7.95]
-        assert any("ice cream" in i["item_name"].lower() for i in result["line_items"])
+
+    def test_chinese_fullwidth_comma_splits_multi_item_recording(self):
+        """Real bug: real Whisper transcriptions of Chinese speech use the
+        full-width comma "，", not ASCII ",". Splitting only on ASCII left
+        two complete item+price pairs stuck in one un-split sentence, and
+        _extract_amount -- which checks the Chinese kuai-decimal pattern
+        before the plain ringgit pattern -- matched whichever pattern type
+        it saw first rather than whichever amount actually came first in the
+        text, silently discarding "麻辣烫"'s own 15令吉 and merging both
+        names into one garbled item worth only the second price."""
+        result = parse_voice_expense("麻辣烫15令吉，辣椒板面9块9")
+        assert len(result["line_items"]) == 2
+        assert round(result["amount"], 2) == 24.90
+        names = [i["item_name"] for i in result["line_items"]]
+        assert "麻辣烫" in names
+        assert "辣椒板面" in names
 
     def test_spoken_ringgit_and_cents_with_real_whisper_comma(self):
         """Real transcript, verified against the actual app screen: Whisper

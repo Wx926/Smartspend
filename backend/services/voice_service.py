@@ -196,12 +196,22 @@ def _split_segments(text: str) -> list[str]:
     ambiguous: it can separate a description from its OWN amount within a
     single expense ("Bought groceries at Aeon, RM 68" — one amount total,
     must NOT split there), or it can join two complete item+amount pairs
-    spoken as one sentence (e.g. Chinese "鸡饭 9块9,炒饭 15令吉" — two
+    spoken as one sentence (e.g. Chinese "鸡饭 9块9，炒饭 15令吉" — two
     amounts, must split). Counting amounts first disambiguates the two.
+
+    Splits on the full-width Chinese comma "，" as well as the ASCII ",":
+    real Whisper transcriptions of Chinese speech use full-width punctuation
+    (confirmed on "麻辣烫15令吉，辣椒板面9块9" -- an ASCII-only split left
+    both items in one un-split sentence, which _extract_amount then matched
+    against as a whole: it checks the Chinese kuai-decimal pattern before
+    the plain ringgit pattern, so "辣椒板面9块9" (found second in the text)
+    won the match ahead of "麻辣烫15令吉" (found first) purely because of
+    THAT priority order, not text position -- silently discarding the first
+    item's own price and merging both names into one garbled item).
     """
     segments = []
     for sentence in _SENTENCE_SPLIT.split(text):
-        sentence = sentence.strip(" ,")
+        sentence = sentence.strip(" ,，")
         if not sentence:
             continue
         amount_count = (
@@ -210,7 +220,7 @@ def _split_segments(text: str) -> list[str]:
         )
         if amount_count >= 2:
             segments.extend(
-                part.strip(" ,") for part in sentence.split(",") if part.strip(" ,")
+                part.strip(" ,，") for part in re.split(r"[,，]", sentence) if part.strip(" ,，")
             )
         else:
             segments.append(sentence)
