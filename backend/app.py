@@ -32,7 +32,14 @@ app.register_blueprint(ocr_bp, url_prefix="/api")
 # registered on a machine where this import fails.
 try:
     from routes.voice_routes import voice_bp
+    from services.whisper_service import preload_model_async
     app.register_blueprint(voice_bp, url_prefix="/api")
+    # Start loading the Whisper model now instead of on the first real
+    # request -- see preload_model_async's own docstring for why this
+    # specifically matters on Render's free tier (a cold start already pays
+    # for container wake-up; without this, the first voice request ALSO
+    # pays for the entire model load on top, in the same request budget).
+    preload_model_async()
 except Exception as e:
     print(f"WARNING: voice routes disabled, failed to load: {e}")
 

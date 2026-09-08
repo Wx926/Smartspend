@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
 import '../models/ocr_result.dart';
@@ -47,17 +46,16 @@ class OcrApiService {
         // promises users ("first request is slow, not broken").
         timeout: const Duration(seconds: 150),
       );
+      final body = await streamed.stream.bytesToString();
+      final json = decodeJsonResponseBody(body);
+
+      if (streamed.statusCode != 200) {
+        throw OcrApiException(json['error'] as String? ?? 'Scan failed.');
+      }
+
+      return OcrResult.fromJson(json);
     } on BackendUnreachableException catch (e) {
       throw OcrApiException(e.message);
     }
-
-    final body = await streamed.stream.bytesToString();
-    final json = jsonDecode(body) as Map<String, dynamic>;
-
-    if (streamed.statusCode != 200) {
-      throw OcrApiException(json['error'] as String? ?? 'Scan failed.');
-    }
-
-    return OcrResult.fromJson(json);
   }
 }

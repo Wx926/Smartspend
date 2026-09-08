@@ -13,10 +13,12 @@ speed on machines without a GPU.
 import io
 import os
 import re
+import threading
 
 from faster_whisper import WhisperModel
 
 _model: WhisperModel | None = None
+_model_lock = threading.Lock()
 
 # Same RENDER-var check app.py already uses to distinguish the hosted free
 # tier from local dev. Only the hosted tier gets the memory-constrained
@@ -30,24 +32,70 @@ class WhisperTranscriptionError(Exception):
     pass
 
 
+def _load_model() -> WhisperModel:
+    size = os.environ.get("WHISPER_MODEL_SIZE", "small")
+    # int8 quantization keeps CPU inference fast with minimal accuracy loss.
+    # cpu_threads left at CTranslate2's own default (0 = auto-detect and
+    # use every available core) for local dev, but pinned to 1 on Render:
+    # a confirmed OOM crash (used over 512MB) happened 2 minutes after
+    # this model was deployed, and CTranslate2's default of spinning up
+    # a thread per detected core inflates per-thread working-memory
+    # overhead rather than actually speeding things up on a shared,
+    # already-thin vCPU -- it doesn't have the dedicated cores that
+    # default assumes.
+    cpu_threads = 1 if _IS_HOSTED else 0
+    return WhisperModel(
+        size, device="cpu", compute_type="int8", cpu_threads=cpu_threads
+    )
+
+
 def _get_model() -> WhisperModel:
     global _model
     if _model is None:
-        size = os.environ.get("WHISPER_MODEL_SIZE", "small")
-        # int8 quantization keeps CPU inference fast with minimal accuracy loss.
-        # cpu_threads left at CTranslate2's own default (0 = auto-detect and
-        # use every available core) for local dev, but pinned to 1 on Render:
-        # a confirmed OOM crash (used over 512MB) happened 2 minutes after
-        # this model was deployed, and CTranslate2's default of spinning up
-        # a thread per detected core inflates per-thread working-memory
-        # overhead rather than actually speeding things up on a shared,
-        # already-thin vCPU -- it doesn't have the dedicated cores that
-        # default assumes.
-        cpu_threads = 1 if _IS_HOSTED else 0
-        _model = WhisperModel(
-            size, device="cpu", compute_type="int8", cpu_threads=cpu_threads
-        )
+        # The lock matters here specifically because of preload_model_async
+        # below: without it, a real request landing WHILE the background
+        # thread is mid-load would start a SECOND, fully independent model
+        # load of its own (both racing to set the same global), doubling
+        # memory use on a machine that already OOM'd once at normal usage
+        # (see _load_model's own comment) -- rather than the second caller
+        # correctly waiting for the first load already in flight.
+        with _model_lock:
+            if _model is None:  # re-check: another thread may have finished
+                _model = _load_model()
     return _model
+
+
+def preload_model_async() -> None:
+    """Starts loading the Whisper model in a background thread immediately,
+    rather than waiting for the first real transcription request to trigger
+    it lazily.
+
+    Confirmed on a real device: the FIRST voice recording after Render's
+    free-tier instance goes idle failed outright with an empty/malformed
+    response (Dart's jsonDecode throwing "Unexpected end of input" -- Render's
+    own gateway timing out and cutting the connection with nothing in it),
+    even with a generous 150s client-side timeout. OCR never has this problem
+    on the very same cold instance, because Vision is a remote API call with
+    nothing local to load -- voice uniquely also pays for loading the entire
+    Whisper model from disk into memory, every time the container restarts
+    (the previous load doesn't survive Render's own idle shutdown), stacked
+    on top of the container's own cold-boot time, all inside one request's
+    budget.
+    Calling this at import time moves that load into the same window Render
+    is already spending waking the container up and running its own health
+    check -- by the time a real user request actually arrives, the model may
+    already be sitting in memory instead of adding its own load time on top.
+    Never raises: a failure here should surface on the actual request instead
+    (via the normal _get_model() path), not crash the server at import time.
+    """
+    def _run():
+        try:
+            _get_model()
+        except Exception as e:
+            print(f"WARNING: Whisper model preload failed (will retry on "
+                  f"first real request): {e}")
+
+    threading.Thread(target=_run, daemon=True).start()
 
 
 # Nudges the model's vocabulary toward the domain this app actually records —

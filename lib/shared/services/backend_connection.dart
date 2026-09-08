@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'package:http/http.dart' as http;
 import '../constants/app_constants.dart';
@@ -13,6 +14,35 @@ class BackendUnreachableException implements Exception {
 
   @override
   String toString() => message;
+}
+
+/// Decodes an HTTP response body as JSON, replacing a raw crash with a
+/// message the user can actually act on when the body is empty or isn't
+/// valid JSON at all — confirmed on a real device as `jsonDecode` throwing
+/// "FormatException: Unexpected end of input (at character 1)" straight
+/// through to the UI. That's what an EMPTY body decodes to, which is what
+/// happens when Render's own gateway (not this app's client-side timeout,
+/// which is deliberately generous — see scanReceipt/transcribeAudio's own
+/// comments) gives up on a slow cold start and cuts the connection with
+/// nothing in it. Every call site already wraps its `send()` call in
+/// `on BackendUnreachableException catch (e) => throw <ItsOwnException>`,
+/// so throwing that same type here lets this reuse that existing handling
+/// instead of every caller needing its own duplicate try/catch.
+Map<String, dynamic> decodeJsonResponseBody(String body) {
+  if (body.trim().isEmpty) {
+    throw const BackendUnreachableException(
+      "The server didn't respond in time — it may still be waking up "
+      '(the hosted backend sleeps when idle). Please wait a few seconds '
+      'and try again.',
+    );
+  }
+  try {
+    return jsonDecode(body) as Map<String, dynamic>;
+  } on FormatException {
+    throw const BackendUnreachableException(
+      'Got an unexpected response from the server. Please try again.',
+    );
+  }
 }
 
 /// The hosted backend (Render free tier) — reachable from any device on any

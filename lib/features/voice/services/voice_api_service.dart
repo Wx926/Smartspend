@@ -45,19 +45,18 @@ class VoiceApiService {
         // load AND cold start AND transcription, all inside one budget.
         timeout: const Duration(seconds: 150),
       );
+      final body = await streamed.stream.bytesToString();
+      final json = decodeJsonResponseBody(body);
+
+      if (streamed.statusCode != 200) {
+        throw VoiceApiException(
+            json['error'] as String? ?? 'Could not transcribe the recording.');
+      }
+
+      return json['transcript'] as String? ?? '';
     } on BackendUnreachableException catch (e) {
       throw VoiceApiException(e.message);
     }
-
-    final body = await streamed.stream.bytesToString();
-    final json = jsonDecode(body) as Map<String, dynamic>;
-
-    if (streamed.statusCode != 200) {
-      throw VoiceApiException(
-          json['error'] as String? ?? 'Could not transcribe the recording.');
-    }
-
-    return json['transcript'] as String? ?? '';
   }
 
   /// Stage 3/4 (FYP report Ch. 3.1.3): sends the transcript to the backend's
@@ -83,17 +82,16 @@ class VoiceApiService {
         // fail a genuine cold start rather than just run slow.
         timeout: const Duration(seconds: 90),
       );
+      final body = await streamed.stream.bytesToString();
+      final json = decodeJsonResponseBody(body);
+
+      if (streamed.statusCode != 200) {
+        throw VoiceApiException(json['error'] as String? ?? 'Could not understand that.');
+      }
+
+      return OcrResult.fromJson(json);
     } on BackendUnreachableException catch (e) {
       throw VoiceApiException(e.message);
     }
-
-    final body = await streamed.stream.bytesToString();
-    final json = jsonDecode(body) as Map<String, dynamic>;
-
-    if (streamed.statusCode != 200) {
-      throw VoiceApiException(json['error'] as String? ?? 'Could not understand that.');
-    }
-
-    return OcrResult.fromJson(json);
   }
 }
