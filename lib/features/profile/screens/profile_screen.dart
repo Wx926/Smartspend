@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import '../../../features/auth/providers/auth_provider.dart';
 import '../../../shared/services/supabase_service.dart';
 import '../../../shared/services/local_storage_service.dart';
+import '../../../shared/constants/app_constants.dart';
 import '../../../shared/theme/app_colors.dart';
 import '../../ocr/screens/warranty_records_screen.dart';
 import '../../ocr/screens/receipt_history_screen.dart';
@@ -27,6 +28,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
   String _voiceInputLanguage = 'auto';
   int _warrantyCount = 0;
   int _expiringCount = 0;
+  int _dwellTimeMinutes = AppConstants.dwellTimeMinutes;
+  double _alertCooldownHours = AppConstants.alertCooldownHours;
 
   // Malaysia's three predominant spoken languages, plus auto-detect — covers
   // "the system shall support multiple languages" (FR 5.3) without forcing
@@ -48,6 +51,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
     _pushNotifications = LocalStorageService.instance.mealRemindersEnabled;
     _aiCategorisation = LocalStorageService.instance.aiCategorisationEnabled;
     _voiceInputLanguage = LocalStorageService.instance.voiceInputLanguage;
+    _dwellTimeMinutes = LocalStorageService.instance.dwellTimeMinutes;
+    _alertCooldownHours = LocalStorageService.instance.alertCooldownHours;
   }
 
   Future<void> _showVoiceLanguagePicker(BuildContext context) async {
@@ -88,6 +93,108 @@ class _ProfileScreenState extends State<ProfileScreen> {
       setState(() => _voiceInputLanguage = selected);
       await LocalStorageService.instance.setVoiceInputLanguage(selected);
     }
+  }
+
+  /// Dwell time and alert cooldown, the two knobs behind Algorithm 1 (venue
+  /// confirmation) and Algorithm 3 (repeat-alert spacing). Clamped so a user
+  /// can't set dwell time to ~0 (any walk-past would count as a "visit") or
+  /// cooldown to ~0 (every poll re-fires the same venue's alert).
+  Future<void> _showAlertTimingSheet(BuildContext context) async {
+    var dwell = _dwellTimeMinutes;
+    var cooldown = _alertCooldownHours;
+    await showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (sheetContext) => StatefulBuilder(
+        builder: (sheetContext, setSheetState) => SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 20, 20, 12),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Alert timing',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 4),
+                const Text(
+                  'How long to stay before a spot counts as a visit, and how '
+                  'long to wait before repeating an alert there.',
+                  style: TextStyle(fontSize: 12, color: AppColors.textSecondary),
+                ),
+                const SizedBox(height: 20),
+                Text(
+                  'Dwell time: $dwell min',
+                  style: const TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                Slider(
+                  value: dwell.toDouble(),
+                  min: 1,
+                  max: 60,
+                  divisions: 59,
+                  activeColor: AppColors.primary,
+                  label: '$dwell min',
+                  onChanged: (v) => setSheetState(() => dwell = v.round()),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Alert cooldown: ${cooldown.toStringAsFixed(cooldown % 1 == 0 ? 0 : 1)}h',
+                  style: const TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                Slider(
+                  value: cooldown,
+                  min: 0.5,
+                  max: 24,
+                  divisions: 47,
+                  activeColor: AppColors.primary,
+                  label: '${cooldown.toStringAsFixed(cooldown % 1 == 0 ? 0 : 1)}h',
+                  onChanged: (v) => setSheetState(() => cooldown = v),
+                ),
+                const SizedBox(height: 12),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.primary,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                    ),
+                    onPressed: () async {
+                      await LocalStorageService.instance.setDwellTimeMinutes(
+                        dwell,
+                      );
+                      await LocalStorageService.instance
+                          .setAlertCooldownHours(cooldown);
+                      if (mounted) {
+                        setState(() {
+                          _dwellTimeMinutes = dwell;
+                          _alertCooldownHours = cooldown;
+                        });
+                      }
+                      if (sheetContext.mounted) Navigator.pop(sheetContext);
+                    },
+                    child: const Text('Save'),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   Future<void> _loadWarranties() async {
@@ -337,6 +444,17 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   MealReminderService.instance.cancelAll();
                 }
               },
+            ),
+            _divider(),
+            _tile(
+              icon: Icons.tune,
+              iconColor: const Color(0xFF14B8A6),
+              iconBg: const Color(0xFFECFDF5),
+              title: 'Alert timing',
+              subtitle:
+                  'Dwell: $_dwellTimeMinutes min · Cooldown: '
+                  '${_alertCooldownHours.toStringAsFixed(_alertCooldownHours % 1 == 0 ? 0 : 1)}h',
+              onTap: () => _showAlertTimingSheet(context),
             ),
             _divider(),
             _tile(

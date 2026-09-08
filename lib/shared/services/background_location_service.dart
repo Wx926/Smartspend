@@ -101,8 +101,13 @@ void onServiceStart(ServiceInstance service) async {
       'dwellMinutes': event.dwellMinutes,
     });
 
-    if (event.type == LocationEventType.entered ||
-        event.type == LocationEventType.dwell) {
+    // A forced refresh confirms the venue (and updates the radar/dwell UI)
+    // immediately, regardless of real dwell time — but alerts must still
+    // wait for the user's dwell-time setting to actually pass, otherwise
+    // tapping refresh right after arriving fires alerts early.
+    if ((event.type == LocationEventType.entered ||
+            event.type == LocationEventType.dwell) &&
+        event.dwellMinutes >= LocalStorageService.instance.dwellTimeMinutes) {
       final venue = event.location;
       if (venue != null) {
         await AlertService.instance.checkVenueAndAlert(userId, venue);

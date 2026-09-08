@@ -264,10 +264,11 @@ class AlertService {
     if (last != null) {
       final hoursSince =
           DateTime.now().difference(last.createdAt).inMinutes / 60.0;
-      if (hoursSince < AppConstants.alertCooldownHours) {
+      final cooldownNeeded = _store.alertCooldownHours;
+      if (hoursSince < cooldownNeeded) {
         debugPrint(
           '[SmartSpend/Alert] ${venue.name}: skipped — cooldown '
-          '(${hoursSince.toStringAsFixed(3)}h / ${AppConstants.alertCooldownHours}h needed)',
+          '(${hoursSince.toStringAsFixed(3)}h / ${cooldownNeeded}h needed)',
         );
         return;
       }

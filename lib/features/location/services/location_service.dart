@@ -51,7 +51,7 @@ class LocationService {
   /// Force an immediate poll outside the normal periodic interval. Unlike a
   /// regular background poll, a forced one confirms whatever location is
   /// currently matched right away instead of waiting for
-  /// [AppConstants.dwellTimeMinutes] to pass.
+  /// [LocalStorageService.dwellTimeMinutes] to pass.
   Future<void> forcePoll(String userId) => _poll(userId, forced: true);
 
   /// Public so the foreground UI (which has a live Activity to show the OS
@@ -74,7 +74,7 @@ class LocationService {
   ///
   /// Algorithm: a newly-matched location is tracked immediately, but only
   /// confirmed as the "now location" (surfaced via a LocationEvent) once the
-  /// user has dwelled there for [AppConstants.dwellTimeMinutes] — unless
+  /// user has dwelled there for [LocalStorageService.dwellTimeMinutes] — unless
   /// [forced] is true (a manual refresh), which confirms it right away.
   Future<void> _poll(String userId, {bool forced = false}) async {
     try {
@@ -153,11 +153,12 @@ class LocationService {
           }
         } else if (!_confirmed) {
           final dwell = DateTime.now().difference(_arrivedAt!).inMinutes;
+          final dwellNeeded = _store.dwellTimeMinutes;
           debugPrint(
             '[SmartSpend/Location] dwelling at ${matched.name}: '
-            '${dwell}m / ${AppConstants.dwellTimeMinutes}m needed',
+            '${dwell}m / ${dwellNeeded}m needed',
           );
-          if (forced || dwell >= AppConstants.dwellTimeMinutes) {
+          if (forced || dwell >= dwellNeeded) {
             _confirmed = true;
             debugPrint(
               '[SmartSpend/Location] CONFIRMED ${matched.name} — handing off to Algorithm 3',
