@@ -37,10 +37,12 @@ services:
         # badly ("thirty ringgit each" -> "Turing Gat Each"), especially
         # when a quantity is spoken first -- the exact case the app needs.
         #
-        # Back to 'base': ~80MB int8 (well within the cap), markedly better
-        # on number words and proper nouns, and fine for the SINGLE short
-        # phrases voice entry actually uses. The earlier timeout was a
-        # cold-start + model-load + long-audio pile-up -- so warm the
-        # instance with one throwaway recording before relying on it, and
-        # drop back to 'tiny' here if first-call latency is a problem.
-        value: base
+        # Now 'small': ~250MB int8. Closer to the 512MB cap than 'base' but
+        # still fits alongside Flask, and it is markedly more accurate on
+        # Mandarin (the demo is Chinese-heavy) as well as on number words and
+        # proper nouns. Only the SINGLE short phrases voice entry actually
+        # uses -- the historical timeout was a cold-start + model-load +
+        # long-audio pile-up, so warm the instance with one throwaway
+        # recording before relying on it. Drop to 'base' (then 'tiny') here
+        # if it OOMs or first-call latency is a problem.
+        value: small
