@@ -32,6 +32,8 @@ class LocalStorageService {
   static const _keyPasscodeHash = 'ss_passcode_hash';
   static const _keyPasscodeTimeoutMinutes = 'ss_passcode_timeout_minutes';
   static const _keyPasscodeLastUnlockedAt = 'ss_passcode_last_unlocked_at';
+  static const _keyDwellTimeMinutes = 'ss_dwell_time_minutes';
+  static const _keyAlertCooldownHours = 'ss_alert_cooldown_hours';
   static const _maxRecentReceipts = 12;
 
   // Legacy (pre-account-scoping) key names. Before this fix, every account
@@ -233,6 +235,26 @@ class LocalStorageService {
 
   Future<void> setPasscodeTimeoutMinutes(int minutes) async =>
       _prefs?.setInt(_keyPasscodeTimeoutMinutes, minutes);
+
+  // ── Algorithm 1/3 timing overrides ─────────────────────────────────────────
+  /// How long (minutes) the user must dwell at a saved location before it's
+  /// confirmed as their "now location" and eligible to trigger alerts.
+  /// Falls back to [AppConstants.dwellTimeMinutes] until the user sets their
+  /// own value from the Alert timing settings sheet.
+  int get dwellTimeMinutes =>
+      _prefs?.getInt(_keyDwellTimeMinutes) ?? AppConstants.dwellTimeMinutes;
+
+  Future<void> setDwellTimeMinutes(int minutes) async =>
+      _prefs?.setInt(_keyDwellTimeMinutes, minutes);
+
+  /// Minimum time (hours) between repeat alerts for the same venue. Falls
+  /// back to [AppConstants.alertCooldownHours] until overridden.
+  double get alertCooldownHours =>
+      _prefs?.getDouble(_keyAlertCooldownHours) ??
+      AppConstants.alertCooldownHours;
+
+  Future<void> setAlertCooldownHours(double hours) async =>
+      _prefs?.setDouble(_keyAlertCooldownHours, hours);
 
   DateTime? get passcodeLastUnlockedAt {
     final raw = _prefs?.getString(_keyPasscodeLastUnlockedAt);
