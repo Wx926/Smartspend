@@ -104,6 +104,83 @@ class TestSingleExpense:
         assert "cent" not in ice_cream["item_name"].lower()
 
 
+class TestSpokenQuantityWithPerUnitAmount:
+    """Demo-day bug: "2 Uniqlo T-shirt, thirty ringgit each" — a spoken
+    quantity in front of a spelled-out per-unit amount. The amount regexes
+    only see digits, so "thirty" has to be normalised first; "each" then
+    makes it a per-unit rate that scales by the quantity."""
+
+    def test_spelled_out_per_unit_amount_scales_by_quantity(self):
+        result = parse_voice_expense("2 Uniqlo T-shirt, thirty ringgit each")
+        assert result["vendor_name"] == "Uniqlo"
+        assert len(result["line_items"]) == 1
+        item = result["line_items"][0]
+        assert item["quantity"] == 2
+        assert item["price"] == 60.0          # 30 each x 2
+        assert result["amount"] == 60.0
+        assert "ringgit" not in item["item_name"].lower()
+
+    def test_digit_per_unit_amount_still_scales(self):
+        result = parse_voice_expense("3 notebooks at Popular, RM 12 each")
+        item = result["line_items"][0]
+        assert item["quantity"] == 3
+        assert item["price"] == 36.0
+        assert result["amount"] == 36.0
+
+    def test_compound_number_word_amount(self):
+        result = parse_voice_expense("lunch at KFC, twenty five ringgit")
+        assert result["amount"] == 25.0
+        assert result["vendor_name"] == "KFC"
+
+    def test_quantity_spoken_at_the_end_bare(self):
+        result = parse_voice_expense("Uniqlo T-shirt, RM 80 each, 5")
+        item = result["line_items"][0]
+        assert item["quantity"] == 5
+        assert item["price"] == 400.0
+        assert result["amount"] == 400.0
+        assert "5" not in item["item_name"]
+
+    def test_quantity_spoken_at_the_end_with_unit_word(self):
+        result = parse_voice_expense("Uniqlo T-shirt, RM 80 each, 5 pieces")
+        item = result["line_items"][0]
+        assert item["quantity"] == 5
+        assert item["price"] == 400.0
+        assert "piece" not in item["item_name"].lower()
+
+    def test_quantity_spoken_at_the_end_times_shorthand(self):
+        result = parse_voice_expense("nasi lemak 5 ringgit each x3")
+        item = result["line_items"][0]
+        assert item["quantity"] == 3
+        assert item["price"] == 15.0
+
+    def test_trailing_bare_number_without_qty_shape_is_not_a_quantity(self):
+        """A trailing number with no each/times/unit word must stay out of
+        the quantity slot — guards the cents-style "7 ringgit 95" shape."""
+        result = parse_voice_expense("ice cream 7 ringgit 95")
+        assert result["amount"] == 7.95
+        assert result["line_items"][0]["quantity"] == 1
+
+    def test_all_spelled_out_quantity_and_amount(self):
+        result = parse_voice_expense("five uniqlo t shirt eighty ringgit each")
+        item = result["line_items"][0]
+        assert item["quantity"] == 5
+        assert item["price"] == 400.0
+        assert result["vendor_name"] == "Uniqlo"
+
+    def test_spelled_out_leading_quantity_before_plain_noun(self):
+        result = parse_voice_expense("three nasi lemak, five ringgit each")
+        item = result["line_items"][0]
+        assert item["quantity"] == 3
+        assert item["price"] == 15.0
+
+    def test_lone_number_word_in_prose_is_not_a_quantity(self):
+        """Guard for the leading-count heuristic: "one" as an article-like
+        word must not become a quantity."""
+        result = parse_voice_expense("one of the coffees at Starbucks, RM 12")
+        assert result["amount"] == 12.0
+        assert result["line_items"][0]["quantity"] == 1
+
+
 class TestMultiExpenseSegmentation:
     def test_splits_on_sentence_boundaries(self):
         """Real transcript from testing: two distinct purchases spoken in

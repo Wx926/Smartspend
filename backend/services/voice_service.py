@@ -27,6 +27,7 @@ from services.categorisation_service import (
     majority_category,
 )
 from services.ocr_service import items_confidence
+from services.text_normalisation import words_to_digits
 
 # "RM 25", "RM25.00", or a bare number followed by a currency word. "dollars"/
 # "bucks" are accepted as colloquial stand-ins for ringgit, and so are the
@@ -116,6 +117,24 @@ _FILLER_WORDS = re.compile(
 # can't be misread as a quantity.
 _QUANTITY_PATTERN = re.compile(
     r"^\s*(?:i\s+)?(?:bought|got|purchased|ordered)?\s*(\d{1,3})\s+(?=[A-Za-z])",
+    re.IGNORECASE,
+)
+
+# The same purchase quantity spoken at the END instead ("Uniqlo T-shirt, RM 80
+# each, 5" / "... each 5 pieces" / "... x5" / "... qty 5"). Only tried when the
+# START-anchored pattern above found nothing, and only in these explicitly
+# quantity-shaped forms — a bare trailing number with no "each"/"times"/unit
+# word is left alone so a trailing cents figure ("7 ringgit 95") or an
+# incidental number is never mistaken for a count. Anchored to the end of the
+# segment. `n` is the count; `each` is set when the match ate the per-unit
+# marker word, so _parse_segment can re-assert it before scaling the amount.
+_TRAILING_QUANTITY_PATTERN = re.compile(
+    r"[,\s]*(?:"
+    r"(?:times|x|×|qty\.?|quantity)[\s,]*(?P<n1>\d{1,3})"
+    r"|(?P<each>each|per\s*(?:item|unit|piece)?|a\s*piece)[\s,]+(?P<n2>\d{1,3})"
+    r"|(?P<n3>\d{1,3})\s*"
+    r"(?:pcs?|pieces?|pairs?|units?|packets?|pax|sets?|bottles?|cups?|boxes?|servings?)"
+    r")\s*[.,]?\s*$",
     re.IGNORECASE,
 )
 
@@ -355,6 +374,17 @@ def _parse_segment(text: str) -> dict | None:
     if qty_match:
         quantity = int(qty_match.group(1))
         remainder = remainder[:qty_match.start(1)] + remainder[qty_match.end(1):]
+    else:
+        # No leading quantity — accept an explicitly quantity-shaped one at
+        # the END instead ("... RM 80 each, 5", "... x5", "... 5 pieces").
+        tail = _TRAILING_QUANTITY_PATTERN.search(remainder)
+        if tail:
+            quantity = int(tail.group("n1") or tail.group("n2") or tail.group("n3"))
+            remainder = (remainder[:tail.start()] + remainder[tail.end():]).strip()
+            # If the match consumed the per-unit marker ("each 5"), put it
+            # back so the amount still gets scaled below.
+            if tail.group("each"):
+                remainder += " each"
 
     # "RM 40 each" means 40 is a PER-UNIT rate, not the line's total — scale
     # it up to match how every other item in this app stores price (the
@@ -385,6 +415,13 @@ def parse_voice_expense(transcript: str) -> dict:
     text = transcript.strip()
     if not text:
         raise VoiceParseError("Empty transcript — nothing to parse.")
+
+    # Spoken number words -> digits ("thirty ringgit each" -> "30 ringgit
+    # each"). whisper_service already does this on the mic path, but the
+    # transcript box in the app is editable (and the no-mic fallback lets
+    # the user type an entry from scratch), so a hand-entered "thirty
+    # ringgit" must parse too — the amount regexes below only see digits.
+    text = words_to_digits(text)
 
     print(f"\n===== VOICE RAW TRANSCRIPT =====\n{text!r}\n=================================")
 

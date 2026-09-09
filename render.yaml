@@ -31,14 +31,16 @@ services:
       - key: GEMINI_API_KEY
         sync: false
       - key: WHISPER_MODEL_SIZE
-        # Started at 'base' (a size-down from the 'medium' used in local
-        # dev, since Render's free tier caps memory at 512MB), but even
-        # 'base' proved too slow on the free tier's limited/shared CPU --
-        # confirmed on a real multi-sentence recording that timed out
-        # entirely despite a 90s client timeout, with even a single short
-        # phrase noticeably slower than the same call locally. Sized down
-        # further to 'tiny' to prioritise the deployment actually
-        # responding in a reasonable time over maximum accuracy -- your
-        # local backend/.env is untouched and can keep 'medium' for your
-        # own testing.
-        value: tiny
+        # History: 'medium' locally -> 'base' on Render (512MB free-tier RAM
+        # cap) -> 'tiny' after a MULTI-SENTENCE recording timed out on the
+        # free tier's shared CPU. 'tiny', though, mishears spoken numbers
+        # badly ("thirty ringgit each" -> "Turing Gat Each"), especially
+        # when a quantity is spoken first -- the exact case the app needs.
+        #
+        # Back to 'base': ~80MB int8 (well within the cap), markedly better
+        # on number words and proper nouns, and fine for the SINGLE short
+        # phrases voice entry actually uses. The earlier timeout was a
+        # cold-start + model-load + long-audio pile-up -- so warm the
+        # instance with one throwaway recording before relying on it, and
+        # drop back to 'tiny' here if first-call latency is a problem.
+        value: base

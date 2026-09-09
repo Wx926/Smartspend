@@ -17,6 +17,8 @@ import threading
 
 from faster_whisper import WhisperModel
 
+from services.text_normalisation import words_to_digits
+
 _model: WhisperModel | None = None
 _model_lock = threading.Lock()
 
@@ -104,20 +106,63 @@ def preload_model_async() -> None:
 # empirically: without this prompt the same clip transcribes as "ringit").
 # Chinese currency terms are included too so a code-switched "40 kuai KFC" has
 # a chance of coming back with the correct characters.
+# The "N item(s), RM X each" examples are deliberate: on the hosted `tiny`
+# model a spoken quantity in front of the amount ("2 Uniqlo T-shirt, thirty
+# ringgit each") was derailing the decode of the number+currency that
+# followed, coming back as "Turing Gat Each" / "for Thierry and Each".
+# Seeding the prompt with that exact sentence shape (and with the amounts
+# written as DIGITS, so the model is biased to emit "30" not "thirty") gives
+# the decoder an anchor for it.
 _INITIAL_PROMPT = (
     "Malaysian expense note, amounts in ringgit (RM). "
     "Example: I spent RM 40 on lunch at KFC. Bought groceries at Aeon, RM 68. "
     "RM 80 shoes at Uniqlo. RM 15 for Bak Kut Teh. "
+    "2 Uniqlo T-shirts, RM 30 each. 3 Nasi Lemak, RM 5 each. "
+    "5 notebooks at Popular, RM 12 each. Bought 4 coffees, RM 8 each. "
     "Also: 令吉, 块, Grab, McDonald's, Nando's, Uniqlo, Shopee, Lazada, Mydin, "
-    "Watsons, Petronas, Tealive, Chagee, Bak Kut Teh, Char Kway Teow, Nasi Lemak, "
-    "Roti Canai, Teh Tarik."
+    "Watsons, Petronas, Tealive, Chagee, Popular, Bak Kut Teh, Char Kway Teow, "
+    "Nasi Lemak, Roti Canai, Teh Tarik."
 )
 
 # Belt-and-suspenders: fixes the common near-miss spellings of "ringgit" that
 # slip through even with the prompt above, so downstream amount parsing (which
 # matches the literal word "ringgit") still recognises it.
+#
+# The second half of the alternation covers the harder case seen on the demo
+# clips: with a quantity spoken first, "thirty ringgit each" came back with
+# "ringgit" collapsed into junk syllables ("gat", "gut", "got", "gart",
+# "and") — recognisable ONLY by their position, wedged between a number (word
+# or digit) and a per-unit marker ("each"/"per"/"a piece"). Anchored on both
+# sides so a stray "got"/"and" anywhere else in a sentence is left alone.
 _RINGGIT_MISHEARDS = re.compile(
-    r"\bring\s*g?it\b|\bring\s*g?ate\b|\bring\s*get\b|\bwring\s*g?ate\b",
+    r"\bring\s*g?it\b|\bring\s*g?ate\b|\bring\s*g?et\b|\bwring\s*g?ate\b"
+    r"|\bring\s*guard\b|\bring\s*gut\b|\brii?ng\s*g?i?t\b",
+    re.IGNORECASE,
+)
+
+# The positional recovery described above: "<number> <junk> each" -> insert a
+# literal "ringgit" so voice_service's amount parser (which keys off the word
+# "ringgit") can see it. The leading group is a digit run OR a spelled-out
+# number word, because this runs BEFORE words_to_digits (words_to_digits
+# would otherwise swallow a trailing "and" as run punctuation before this
+# pattern gets to see it).
+_MISHEARD_CURRENCY_BEFORE_EACH = re.compile(
+    r"\b(\d+(?:\.\d{1,2})?|zero|one|two|three|four|five|six|seven|eight|nine|"
+    r"ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|"
+    r"nineteen|twenty|thirty|forty|fourty|fifty|sixty|seventy|eighty|ninety)"
+    r"\s+(?:gat|gut|got|gart|gad|gaht|guard|and|had)\s+"
+    r"(?=each\b|per\b|a\s*piece\b|apiece\b)",
+    re.IGNORECASE,
+)
+
+# "thirty" spoken quickly in front of "ringgit each" is what actually broke on
+# the demo clips — the small model rendered it as "Turing", "Thierry",
+# "thereby", "dirty", "thurty". Only rewritten when a currency/per-unit
+# context word follows within a couple of tokens, so an unrelated proper noun
+# ("dinner with Thierry") isn't clobbered.
+_THIRTY_MISHEARDS = re.compile(
+    r"\b(?:turing|thierry|thereby|thurty|dirty|thirsty)\b"
+    r"(?=\s+(?:\w+\s+)?(?:ringgit|rm|gat|gut|got|gart|and|each|per)\b)",
     re.IGNORECASE,
 )
 
@@ -129,6 +174,30 @@ _BAK_KUT_TEH_MISHEARDS = re.compile(
     r"\b(?:bak|bag|back|bar)\s*kut\s*teh\b|\bbakuteh\b|\bgood\s*teh\b",
     re.IGNORECASE,
 )
+
+# Spoken whole-number words -> digits lives in text_normalisation.words_to_digits
+# (shared with voice_service). Needed because voice_service's amount parser
+# only matches `\d+` before a currency word — without this, even a PERFECTLY
+# transcribed "thirty ringgit each" parsed the amount as the quantity ("2").
+
+
+def _clean_transcript(text: str) -> str:
+    """All the domain-specific post-processing applied to Whisper's raw
+    output, in order. Split out from transcribe_audio so it can be unit
+    tested without loading the model.
+
+    Order matters: fix the mangled "thirty", then re-insert the dropped
+    "ringgit" while the sentence still has its number words and connective
+    "and", THEN collapse number words to digits, then mop up any remaining
+    near-miss "ringgit" spellings.
+    """
+    text = _THIRTY_MISHEARDS.sub("thirty", text)
+    text = _MISHEARD_CURRENCY_BEFORE_EACH.sub(r"\1 ringgit ", text)
+    text = words_to_digits(text)
+    text = _RINGGIT_MISHEARDS.sub("ringgit", text)
+    text = _BAK_KUT_TEH_MISHEARDS.sub("Bak Kut Teh", text)
+    # Collapse any doubled spaces the substitutions above may have left.
+    return re.sub(r"[ \t]{2,}", " ", text).strip()
 
 
 def transcribe_audio(
@@ -158,14 +227,26 @@ def transcribe_audio(
         segments, _info = model.transcribe(
             audio_io,
             # Beam search keeps this many candidate hypotheses in memory
-            # simultaneously -- a real multiplier against Render's 512MB
-            # cap, and part of what's suspected to have caused the OOM
-            # crash above. Dropped to greedy decoding (1) only when hosted;
-            # local dev keeps the original 5 since it isn't memory-bound.
-            # Also cuts inference time, which matters more here than the
-            # marginal accuracy loss, now that the model itself is already
-            # sized down to "tiny" for speed on this same free tier.
-            beam_size=1 if _IS_HOSTED else 5,
+            # simultaneously. It used to drop to greedy (1) when hosted to
+            # save memory, but that was the single biggest cause of the
+            # garbled number+currency transcriptions this pipeline was
+            # failing on ("thirty ringgit each" -> "Turing Gat Each"): on
+            # the `tiny` model, greedy decoding has no fallback hypothesis
+            # when the acoustics are ambiguous. 5 beams on `tiny`/`base`
+            # int8 is a few MB, nowhere near the earlier OOM (that was a
+            # much larger model plus a thread-per-core default) — accuracy
+            # here is worth far more than that.
+            beam_size=5,
+            # Greedy temperature only; no temperature-fallback ladder that
+            # can wander off into a hallucinated re-decode of a short clip.
+            temperature=0,
+            # THE fix for "it only breaks when I say the quantity first":
+            # with this on (faster-whisper's default), the words already
+            # decoded ("2 Uniqlo T-shirt") are fed back in as context and
+            # bias what comes next, derailing the number+currency that
+            # follows. Each short expense phrase is independent — there is
+            # no cross-sentence context worth keeping here.
+            condition_on_previous_text=False,
             initial_prompt=_INITIAL_PROMPT,
             language=language,
         )
@@ -177,5 +258,4 @@ def transcribe_audio(
         raise WhisperTranscriptionError(
             "No speech detected — please try recording again."
         )
-    text = _RINGGIT_MISHEARDS.sub("ringgit", text)
-    return _BAK_KUT_TEH_MISHEARDS.sub("Bak Kut Teh", text)
+    return _clean_transcript(text)
