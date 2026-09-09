@@ -96,3 +96,35 @@ class TestChineseQuantity:
         item = result["line_items"][0]
         assert item["quantity"] == 3
         assert item["price"] == 12.00
+
+
+class TestChineseMultiItem:
+    """Multiple dishes in one spoken sentence must become one row each —
+    confirmed broken on the real app screen: "麻辣烫2块2。冰淇淋5块2毛。" came
+    back as a SINGLE line item worth only RM 2.20, its name the whole rest of
+    the string ("麻辣烫。冰淇淋5块2毛"). _SENTENCE_SPLIT only knew the ASCII
+    ".!?", not the full-width "。！？" Whisper actually emits for Chinese."""
+
+    def test_fullwidth_period_separates_items(self):
+        result = parse_voice_expense(_clean_transcript("麻辣烫2块2。冰淇淋5块2毛。"))
+        assert len(result["line_items"]) == 2
+        by_name = {i["item_name"]: i["price"] for i in result["line_items"]}
+        assert by_name == {"麻辣烫": 2.20, "冰淇淋": 5.20}
+        assert result["amount"] == pytest.approx(7.40)
+
+    def test_fullwidth_period_with_chinese_numerals(self):
+        result = parse_voice_expense(_clean_transcript("麻辣烫二块二。冰淇淋五块二毛。"))
+        assert len(result["line_items"]) == 2
+        assert result["amount"] == pytest.approx(7.40)
+
+    def test_run_together_no_separator(self):
+        """Chinese speech is often transcribed with no separator at all."""
+        result = parse_voice_expense(_clean_transcript("麻辣烫2块2冰淇淋5块2毛"))
+        assert len(result["line_items"]) == 2
+        assert sorted(i["price"] for i in result["line_items"]) == [2.20, 5.20]
+
+    def test_three_items_enumeration_comma(self):
+        result = parse_voice_expense(_clean_transcript("炒饭九块、奶茶三块五、云吞面八块"))
+        assert len(result["line_items"]) == 3
+        assert result["amount"] == pytest.approx(20.50)
+        assert {i["item_name"] for i in result["line_items"]} == {"炒饭", "奶茶", "云吞面"}

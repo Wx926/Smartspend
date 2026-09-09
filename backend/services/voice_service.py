@@ -255,7 +255,16 @@ _YESTERDAY_PATTERN = re.compile(r"\byesterday\b", re.IGNORECASE)
 # A "." is only treated as a sentence end when NOT immediately followed by a
 # digit — otherwise it would also split the decimal point inside an amount
 # like "RM 12.50" into two fake segments ("RM 12" / "50 for Grab...").
-_SENTENCE_SPLIT = re.compile(r"\.(?!\d)|[!?]")
+# The full-width "。！？；" are the punctuation Whisper actually emits for
+# Chinese speech (confirmed on the real app screen: "麻辣烫2块2。冰淇淋5块2毛。"
+# came back as ONE line item worth only the first price because none of these
+# were treated as a break). No digit-guard on "。" — it is never a decimal
+# point.
+_SENTENCE_SPLIT = re.compile(r"\.(?!\d)|[!?;]|[。！？；]")
+
+# Sub-unit / measure characters that can trail an amount and must be peeled
+# off a segment edge (so "…5块2毛。" strips cleanly to "…5块2毛").
+_SEGMENT_EDGE_CHARS = " ,.，。、；;!?！？"
 
 
 def _split_segments(text: str) -> list[str]:
@@ -280,7 +289,7 @@ def _split_segments(text: str) -> list[str]:
     """
     segments = []
     for sentence in _SENTENCE_SPLIT.split(text):
-        sentence = sentence.strip(" ,，")
+        sentence = sentence.strip(_SEGMENT_EDGE_CHARS)
         if not sentence:
             continue
         # Count DISTINCT amount positions: _CHINESE_MONEY and _AMOUNT_PATTERN
@@ -290,12 +299,64 @@ def _split_segments(text: str) -> list[str]:
         starts |= {m.start() for m in _AMOUNT_PATTERN.finditer(sentence)}
         amount_count = len(starts)
         if amount_count >= 2:
-            segments.extend(
-                part.strip(" ,，") for part in re.split(r"[,，]", sentence) if part.strip(" ,，")
-            )
+            parts = [
+                p.strip(_SEGMENT_EDGE_CHARS)
+                for p in re.split(r"[,，]", sentence)
+                if p.strip(_SEGMENT_EDGE_CHARS)
+            ]
+            # Comma-splitting handles "鸡饭9块9，炒饭15令吉". But Chinese speech
+            # is often run together with NO separator at all
+            # ("麻辣烫2块2冰淇淋5块2毛") or only a full-width period that the
+            # sentence split already consumed — so any part that STILL holds
+            # two or more amounts is cut again, right after each amount, so
+            # each item's name+price stay together.
+            for part in parts:
+                segments.extend(_split_on_amount_boundaries(part))
         else:
             segments.append(sentence)
     return _merge_dangling_names(segments)
+
+
+# All amount shapes, tried left-to-right and de-overlapped, so a segment with
+# several prices can be cut into one piece per price.
+_ANY_AMOUNT = re.compile(
+    _CHINESE_MONEY.pattern
+    + r"|RM\s*\d+(?:\.\d{1,2})?"
+    + r"|\d+(?:\.\d{1,2})?\s*(?:ringgit|rm|dollars?|bucks?|块钱|块|令吉|零吉|元|圆)",
+    re.IGNORECASE,
+)
+
+
+_HAS_CJK = re.compile(r"[一-鿿]")
+
+
+def _split_on_amount_boundaries(segment: str) -> list[str]:
+    """"麻辣烫2块2冰淇淋5块2毛" -> ["麻辣烫2块2", "冰淇淋5块2毛"].
+
+    Cuts right after each amount's end, so the item name that follows a price
+    starts the next piece. A segment with 0 or 1 amount is returned unchanged.
+
+    Only applied to segments containing Chinese characters: Mandarin expense
+    speech is name-then-price ("麻辣烫2块2"), so cutting after the price keeps
+    each item whole. English is often price-then-name ("RM 30 shirt"), where
+    the same cut would tear the name off its price — and English multi-item
+    input is already handled by the sentence/comma split above.
+    """
+    if not _HAS_CJK.search(segment):
+        return [segment]
+    spans: list[tuple[int, int]] = []
+    for m in _ANY_AMOUNT.finditer(segment):
+        if spans and m.start() < spans[-1][1]:
+            continue  # overlaps the previous match — same amount, skip
+        spans.append((m.start(), m.end()))
+    if len(spans) < 2:
+        return [segment]
+    pieces, prev = [], 0
+    for start, end in spans[:-1]:
+        pieces.append(segment[prev:end])
+        prev = end
+    pieces.append(segment[prev:])
+    return [p.strip(_SEGMENT_EDGE_CHARS) for p in pieces if p.strip(_SEGMENT_EDGE_CHARS)]
 
 
 def _merge_dangling_names(segments: list[str]) -> list[str]:
@@ -393,10 +454,11 @@ def _extract_description(remainder: str, vendor: str | None) -> str | None:
     if vendor:
         text = re.sub(re.escape(vendor), "", text, flags=re.IGNORECASE)
     text = _FILLER_WORDS.sub("", text)
-    # Include the full-width comma/period/enumeration marks: real Whisper
-    # output for Chinese speech uses "，" "。" "、", not their ASCII forms,
-    # so an ASCII-only strip left them dangling on the item name.
-    text = re.sub(r"[,\s，、]+", " ", text).strip(" ,.，。、")
+    # Include the full-width comma/period/enumeration/semicolon marks: real
+    # Whisper output for Chinese speech uses "，" "。" "、" "；", not their
+    # ASCII forms, so an ASCII-only strip left them dangling on the item name
+    # ("麻辣烫。冰淇淋5块2毛").
+    text = re.sub(r"[,\s，、。；;]+", " ", text).strip(" ,.，。、；;")
     return text or None
 
 
