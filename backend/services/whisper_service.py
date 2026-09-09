@@ -17,7 +17,7 @@ import threading
 
 from faster_whisper import WhisperModel
 
-from services.text_normalisation import words_to_digits
+from services.text_normalisation import normalise_chinese_money, words_to_digits
 
 _model: WhisperModel | None = None
 _model_lock = threading.Lock()
@@ -124,6 +124,44 @@ _INITIAL_PROMPT = (
     "Nasi Lemak, Roti Canai, Teh Tarik."
 )
 
+# The Chinese counterpart. An initial_prompt works by being fed to the decoder
+# as "text that came just before" — so a prompt in the WRONG language actively
+# hurts, biasing a Mandarin clip toward English tokens. That is why Chinese
+# voice entry was so much worse than English: it was being decoded against an
+# English-only prompt. Written in simplified Chinese with the exact amount
+# shapes this app has to understand — whole 令吉/块, the 毛/角 (1/10) and
+# 仙/分 (1/100) sub-units, and the bare-trailing-digit shorthand ("两块二").
+_CHINESE_PROMPT = (
+    "马来西亚记账语音，金额用令吉、块、毛、仙。"
+    "例如：麻辣烫20令吉10仙。冰淇淋两块二。炒饭九块。"
+    "肉骨茶15令吉。奶茶三块五。杂菜饭10块一毛。椰浆饭5块。"
+    "两个冰淇淋，每个2令吉50仙。三杯奶茶，每杯4令吉。"
+    "常见词：麻辣烫、肉骨茶、椰浆饭、杂菜饭、板面、奶茶、咖啡、"
+    "冰淇淋、雪糕、炒饭、炒面、鸡饭、云吞面、罗惹、沙爹、"
+    "Grab、KFC、麦当劳、Uniqlo、Aeon、Shopee。"
+)
+
+# Short bilingual prompt for "Auto-detect" — the user hasn't told us which
+# language to expect, so neither monolingual prompt is safe to commit to.
+# Kept deliberately brief: a long prompt in the language NOT being spoken is
+# exactly the problem described above, so this only carries the currency
+# vocabulary both halves need.
+_BILINGUAL_PROMPT = (
+    "Malaysian expense note, amounts in ringgit (RM). "
+    "I spent RM 25 on lunch at KFC. 2 T-shirts, RM 30 each. "
+    "马来西亚记账语音：麻辣烫20令吉10仙。冰淇淋两块二。炒饭九块。"
+)
+
+
+def _prompt_for(language: str | None) -> str:
+    """Picks the initial_prompt that matches the language actually being
+    spoken — see _CHINESE_PROMPT's comment for why this matters so much."""
+    if language and language.lower().startswith("zh"):
+        return _CHINESE_PROMPT
+    if language:
+        return _INITIAL_PROMPT
+    return _BILINGUAL_PROMPT  # "Auto-detect" — commit to neither
+
 # Belt-and-suspenders: fixes the common near-miss spellings of "ringgit" that
 # slip through even with the prompt above, so downstream amount parsing (which
 # matches the literal word "ringgit") still recognises it.
@@ -196,6 +234,7 @@ def _clean_transcript(text: str) -> str:
     text = words_to_digits(text)
     text = _RINGGIT_MISHEARDS.sub("ringgit", text)
     text = _BAK_KUT_TEH_MISHEARDS.sub("Bak Kut Teh", text)
+    text = normalise_chinese_money(text)
     # Collapse any doubled spaces the substitutions above may have left.
     return re.sub(r"[ \t]{2,}", " ", text).strip()
 
@@ -247,7 +286,7 @@ def transcribe_audio(
             # follows. Each short expense phrase is independent — there is
             # no cross-sentence context worth keeping here.
             condition_on_previous_text=False,
-            initial_prompt=_INITIAL_PROMPT,
+            initial_prompt=_prompt_for(language),
             language=language,
         )
         text = " ".join(segment.text.strip() for segment in segments).strip()

@@ -121,3 +121,116 @@ def words_to_digits(text: str) -> str:
         return f"{value}{trailing}"
 
     return _NUM_WORD_RUN.sub(_convert, text)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Chinese (Mandarin) spoken money
+# ══════════════════════════════════════════════════════════════════════════
+#
+# Malaysian-Chinese speakers say amounts as "麻辣烫二十令吉十仙",
+# "冰淇淋两块二", "炒饭九块" — Chinese NUMERALS plus a currency unit, with the
+# jiao/fen (毛/角 = 0.1, 分/仙 = 0.01) sub-units spoken as bare trailing
+# numbers. voice_service's amount regexes only ever see ASCII digits, so
+# every one of those parsed as "no amount found" before this existed.
+
+# Traditional -> Simplified, restricted to the characters that carry MEANING
+# for amount parsing (plus the common measure words). Deliberately NOT a
+# general T2S conversion — no opencc dependency, and an item's name stays
+# exactly as Whisper wrote it; only the number/currency characters the parser
+# keys off are folded, so 塊/兩/圓 parse identically to 块/两/圆.
+_T2S = str.maketrans({
+    "塊": "块", "兩": "两", "圓": "圆", "錢": "钱", "萬": "万",
+    "個": "个", "隻": "只", "條": "条", "張": "张", "雙": "双",
+    "盤": "盘", "貳": "二", "參": "三", "陸": "六", "拾": "十",
+    "佰": "百", "仟": "千",
+})
+
+# Whisper's near-misses for 令吉 (the Chinese transliteration of "ringgit").
+# All are the same "lìng jí" sound with a wrong first character — confirmed
+# shapes seen in real transcripts plus their obvious phonetic neighbours.
+_CJK_RINGGIT_MISHEARDS = re.compile(r"(?:零|灵|伶|苓|铃|凌|领|龄|玲)吉")
+
+_CJK_DIGITS = {
+    "〇": 0, "零": 0, "一": 1, "壹": 1, "二": 2, "两": 2, "贰": 2,
+    "三": 3, "叁": 3, "四": 4, "肆": 4, "五": 5, "伍": 5,
+    "六": 6, "七": 7, "柒": 7, "八": 8, "捌": 8, "九": 9, "玖": 9,
+}
+_CJK_MULTIPLIERS = {"十": 10, "百": 100, "千": 1000}
+_CJK_NUM_CHARS = "".join(_CJK_DIGITS) + "".join(_CJK_MULTIPLIERS) + "万"
+
+# Whole-currency units (a number in front of one of these is the ringgit/yuan
+# figure) vs the sub-units 毛/角 (jiao, 1/10) and 分/仙 (fen/sen, 1/100).
+_CJK_WHOLE_UNIT = "块钱|块|令吉|元|圆"
+_CJK_SUB_UNIT = "毛|角|分|仙"
+# Chinese measure words — "两个冰淇淋" is a QUANTITY of 2, so a numeral in
+# front of one of these must become a digit too for the quantity rules.
+_CJK_MEASURE = "个|杯|份|件|双|瓶|包|碗|盘|碟|只|条|张|支|片|粒|串|盒|袋|罐|碗"
+
+
+def _cjk_number_to_int(s: str) -> int | None:
+    """"九" -> 9, "十五" -> 15, "二十" -> 20, "两百" -> 200. Returns None if
+    the run contains anything that isn't a Chinese numeral character."""
+    total = section = number = 0
+    seen = False
+    for ch in s:
+        if ch in _CJK_DIGITS:
+            number = _CJK_DIGITS[ch]
+            seen = True
+        elif ch in _CJK_MULTIPLIERS:
+            # "十五" (no leading digit) is 15, not 5 — a bare multiplier
+            # implies a leading 1.
+            section += (number or 1) * _CJK_MULTIPLIERS[ch]
+            number = 0
+            seen = True
+        elif ch == "万":
+            section = (section + number) * 10000
+            total += section
+            section = number = 0
+            seen = True
+        else:
+            return None
+    return (total + section + number) if seen else None
+
+
+# A Chinese numeral run is only converted when it sits directly in front of a
+# currency unit or measure word ("九块", "十仙", "两个"), or directly AFTER a
+# whole-currency unit ("两块二" — the trailing 二 is 2 jiao). Anywhere else it
+# is left alone, so ordinary words that happen to contain a numeral character
+# (三明治 "sandwich", 一起 "together") are never mangled.
+_CJK_NUM_BEFORE_UNIT = re.compile(
+    rf"([{_CJK_NUM_CHARS}]{{1,4}})(?=\s*(?:{_CJK_WHOLE_UNIT}|{_CJK_SUB_UNIT}|{_CJK_MEASURE}))"
+)
+_CJK_NUM_AFTER_UNIT = re.compile(
+    rf"(?P<unit>{_CJK_WHOLE_UNIT})\s*(?P<num>[{_CJK_NUM_CHARS}]{{1,2}})"
+    rf"(?!\s*(?:{_CJK_WHOLE_UNIT}))"
+)
+
+
+def _sub_cjk_number(match: re.Match) -> str:
+    value = _cjk_number_to_int(match.group(1))
+    return match.group(1) if value is None else str(value)
+
+
+def _sub_cjk_number_after_unit(match: re.Match) -> str:
+    value = _cjk_number_to_int(match.group("num"))
+    if value is None:
+        return match.group(0)
+    return f"{match.group('unit')}{value}"
+
+
+def normalise_chinese_money(text: str) -> str:
+    """Folds traditional characters, repairs Whisper's 令吉 near-misses, and
+    turns Chinese numerals adjacent to a currency/measure word into digits:
+
+      "炒饭九块"           -> "炒饭9块"
+      "冰淇淋两块二"        -> "冰淇淋2块2"
+      "麻辣烫二十令吉十仙"   -> "麻辣烫20令吉10仙"
+      "10块一毛"           -> "10块1毛"
+      "两个冰淇淋"          -> "2个冰淇淋"
+
+    Leaves everything else untouched — "三明治" stays "三明治".
+    """
+    text = text.translate(_T2S)
+    text = _CJK_RINGGIT_MISHEARDS.sub("令吉", text)
+    text = _CJK_NUM_BEFORE_UNIT.sub(_sub_cjk_number, text)
+    return _CJK_NUM_AFTER_UNIT.sub(_sub_cjk_number_after_unit, text)

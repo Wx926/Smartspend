@@ -27,7 +27,7 @@ from services.categorisation_service import (
     majority_category,
 )
 from services.ocr_service import items_confidence
-from services.text_normalisation import words_to_digits
+from services.text_normalisation import normalise_chinese_money, words_to_digits
 
 # "RM 25", "RM25.00", or a bare number followed by a currency word. "dollars"/
 # "bucks" are accepted as colloquial stand-ins for ringgit, and so are the
@@ -36,21 +36,57 @@ from services.text_normalisation import words_to_digits
 # it's a plausible speech-to-text mishearing of the same word) — this is a
 # Malaysian-Ringgit-only app, so any spoken currency word is treated as RM
 # rather than actually converting currencies.
+# The CJK units are a SEPARATE alternative with `(?!\d)` instead of `\b`,
+# because `\b` is broken for them: Python treats CJK characters as word
+# characters, so in "20令吉10仙" there is no word boundary between 吉 and 1
+# and the whole match failed — a perfectly transcribed Chinese amount parsed
+# as "no amount found". The ASCII words keep `\b` (safer there: it stops
+# "5 rm" matching inside a longer token).
 _AMOUNT_PATTERN = re.compile(
     r"RM\s*(\d+(?:\.\d{1,2})?)"
-    r"|(\d+(?:\.\d{1,2})?)\s*(?:ringgit|rm|dollars?|bucks?|块|令吉|零吉)\b",
+    r"|(\d+(?:\.\d{1,2})?)\s*(?:ringgit|rm|dollars?|bucks?)\b"
+    r"|(\d+(?:\.\d{1,2})?)\s*(?:块钱|块|令吉|零吉|元|圆)(?!\d)",
     re.IGNORECASE,
 )
 
-# Chinese colloquial money shorthand: "9块9" spoken aloud means "9 kuai 9"
-# (9 yuan/dollars + 9 jiao/10-cent units) = RM 9.90 — a trailing 1-2 digit
-# number directly after "块" is a decimal shorthand, not a separate whole
-# number, and is a completely different meaning from a bare "9块" alone
-# (just "9 dollars", handled by _AMOUNT_PATTERN above). Checked first in
-# _extract_amount since _AMOUNT_PATTERN's plain "number + currency word"
-# alternative can't parse this shape at all — the trailing digit breaks its
-# required word boundary immediately after "块".
-_CHINESE_KUAI_DECIMAL = re.compile(r"(\d+)块(\d{1,2})\b")
+# Full Chinese spoken-money shape, in one pattern:
+#     <whole><块|元|令吉> [<jiao>毛|角] [<fen>分|仙] [<bare>]
+#
+#   "10令吉"        -> 10.00
+#   "10块"          -> 10.00
+#   "麻辣烫20令吉10仙" -> 20.10   (仙/分 = 1/100)
+#   "10块1毛"       -> 10.10     (毛/角 = 1/10)
+#   "10块1"         -> 10.10     (bare 1 digit = jiao)
+#   "冰淇淋2块 2"    -> 2.20      (Whisper inserts a space at the pause)
+#   "9块95"         -> 9.95      (bare 2 digits = fen/cents)
+#
+# `\s*` throughout because real Whisper output puts spaces and the pause
+# comma in unpredictable places. The bare group deliberately does NOT allow a
+# full-width comma before it, so "麻辣烫15令吉，辣椒板面9块9" can't have the
+# NEXT item's number swallowed as the first item's jiao. It also refuses a
+# number followed by a measure word ("10块一个" = 10 kuai, one of them —
+# a quantity, not 10.10).
+_CHINESE_MONEY = re.compile(
+    r"(?P<yuan>\d+(?:\.\d{1,2})?)\s*(?:块钱|块|令吉|零吉|元|圆)"
+    r"(?:\s*(?P<jiao>\d{1,2})\s*[毛角])?"
+    r"(?:\s*(?P<fen>\d{1,2})\s*[分仙])?"
+    r"(?:\s*(?P<bare>\d{1,2})(?![\d.])(?!\s*(?:个|杯|份|件|双|瓶|包|碗|盘|碟|只|条|张|支|片|粒|串|盒|袋|罐)))?"
+)
+
+
+def _chinese_money_value(m: re.Match) -> float:
+    """Sums the whole/jiao/fen parts of a _CHINESE_MONEY match."""
+    total = float(m.group("yuan"))
+    if m.group("jiao"):
+        total += int(m.group("jiao")) / 10
+    if m.group("fen"):
+        total += int(m.group("fen")) / 100
+    bare = m.group("bare")
+    if bare and not (m.group("jiao") or m.group("fen")):
+        # One digit is jiao ("9块9" = 9.90); two is cents ("9块95" = 9.95) —
+        # matching how the money is actually spoken aloud.
+        total += int(bare) / 10 if len(bare) == 1 else int(bare) / 100
+    return round(total, 2)
 
 # Spoken whole-ringgit-and-cents, e.g. "7 ringgit 90 cent" / "2 ringgit 90
 # sen" -- a real gap found close to submission: _AMOUNT_PATTERN alone only
@@ -120,6 +156,15 @@ _QUANTITY_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+# The Chinese equivalent: a number followed by a MEASURE WORD is the count
+# ("两个冰淇淋" -> 2 ice creams, "三杯奶茶" -> 3 milk teas). Chinese is written
+# without spaces, so the ASCII pattern above (which needs `\s+` after the
+# digits) can never match it. The measure word is consumed along with the
+# number so it doesn't linger in the item name.
+_CJK_QUANTITY_PATTERN = re.compile(
+    r"^[\s,，、]*(\d{1,3})\s*(?:个|杯|份|件|双|瓶|包|碗|盘|碟|只|条|张|支|片|粒|串|盒|袋|罐)"
+)
+
 # The same purchase quantity spoken at the END instead ("Uniqlo T-shirt, RM 80
 # each, 5" / "... each 5 pieces" / "... x5" / "... qty 5"). Only tried when the
 # START-anchored pattern above found nothing, and only in these explicitly
@@ -143,8 +188,13 @@ _TRAILING_QUANTITY_PATTERN = re.compile(
 # everywhere else in this app, e.g. OCR's "2 pc @ 2.50" storing price 5.00,
 # not 2.50) is amount x quantity, computed once a quantity is known rather
 # than leaving a misleadingly-small per-unit figure as the line's price.
+# The Chinese "每"/"每个"/"每件"/"每杯" means exactly the same thing and needs
+# its own alternative: Chinese is written without spaces, so the `\b` anchors
+# on the English forms can never match it.
 _PER_UNIT_MARKER = re.compile(
-    r"\b(?:each|per\s*(?:item|unit|piece)?|a\s*piece)\b", re.IGNORECASE
+    r"\b(?:each|per\s*(?:item|unit|piece)?|a\s*piece)\b"
+    r"|每(?:个|件|杯|份|双|瓶|包|碗|只|条|张|支|片|粒|盒|袋|罐)?",
+    re.IGNORECASE,
 )
 
 # Known merchant/brand names — the fallback for phrasings with no "at X" or
@@ -233,10 +283,12 @@ def _split_segments(text: str) -> list[str]:
         sentence = sentence.strip(" ,，")
         if not sentence:
             continue
-        amount_count = (
-            len(_CHINESE_KUAI_DECIMAL.findall(sentence))
-            + len(_AMOUNT_PATTERN.findall(sentence))
-        )
+        # Count DISTINCT amount positions: _CHINESE_MONEY and _AMOUNT_PATTERN
+        # both match a plain "15令吉", so counting them separately would
+        # double-count one amount and wrongly split a single-expense sentence.
+        starts = {m.start() for m in _CHINESE_MONEY.finditer(sentence)}
+        starts |= {m.start() for m in _AMOUNT_PATTERN.finditer(sentence)}
+        amount_count = len(starts)
         if amount_count >= 2:
             segments.extend(
                 part.strip(" ,，") for part in re.split(r"[,，]", sentence) if part.strip(" ,，")
@@ -288,12 +340,9 @@ class VoiceParseError(Exception):
 def _extract_amount(text: str) -> tuple[float | None, tuple[int, int] | None]:
     """Returns (amount, span) so the caller can strip the matched words
     (number + currency) out of the text before deriving a description."""
-    m = _CHINESE_KUAI_DECIMAL.search(text)
+    m = _CHINESE_MONEY.search(text)
     if m:
-        whole, cents = m.group(1), m.group(2)
-        if len(cents) == 1:
-            cents += "0"
-        return float(f"{whole}.{cents}"), m.span()
+        return _chinese_money_value(m), m.span()
     m = _RINGGIT_AND_CENTS.search(text)
     if m:
         whole, cents = m.group(1), m.group(2)
@@ -302,7 +351,7 @@ def _extract_amount(text: str) -> tuple[float | None, tuple[int, int] | None]:
         return float(f"{whole}.{cents}"), m.span()
     m = _AMOUNT_PATTERN.search(text)
     if m:
-        raw = m.group(1) or m.group(2)
+        raw = m.group(1) or m.group(2) or m.group(3)
         return float(raw), m.span()
     m = _BARE_NUMBER_PATTERN.search(text)
     if m:
@@ -344,7 +393,10 @@ def _extract_description(remainder: str, vendor: str | None) -> str | None:
     if vendor:
         text = re.sub(re.escape(vendor), "", text, flags=re.IGNORECASE)
     text = _FILLER_WORDS.sub("", text)
-    text = re.sub(r"[,\s]+", " ", text).strip(" ,.")
+    # Include the full-width comma/period/enumeration marks: real Whisper
+    # output for Chinese speech uses "，" "。" "、", not their ASCII forms,
+    # so an ASCII-only strip left them dangling on the item name.
+    text = re.sub(r"[,\s，、]+", " ", text).strip(" ,.，。、")
     return text or None
 
 
@@ -374,6 +426,9 @@ def _parse_segment(text: str) -> dict | None:
     if qty_match:
         quantity = int(qty_match.group(1))
         remainder = remainder[:qty_match.start(1)] + remainder[qty_match.end(1):]
+    elif (cjk_qty := _CJK_QUANTITY_PATTERN.match(remainder)) is not None:
+        quantity = int(cjk_qty.group(1))
+        remainder = remainder[:cjk_qty.start()] + remainder[cjk_qty.end():]
     else:
         # No leading quantity — accept an explicitly quantity-shaped one at
         # the END instead ("... RM 80 each, 5", "... x5", "... 5 pieces").
@@ -422,6 +477,10 @@ def parse_voice_expense(transcript: str) -> dict:
     # the user type an entry from scratch), so a hand-entered "thirty
     # ringgit" must parse too — the amount regexes below only see digits.
     text = words_to_digits(text)
+    # Chinese numerals -> digits, traditional -> simplified, 令吉 near-misses
+    # repaired. Same reason as above: the amount regexes only see digits, so
+    # "炒饭九块" / "冰淇淋两块二" found no amount at all before this.
+    text = normalise_chinese_money(text)
 
     print(f"\n===== VOICE RAW TRANSCRIPT =====\n{text!r}\n=================================")
 

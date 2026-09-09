@@ -32,6 +32,23 @@ CATEGORY_KEYWORDS: dict[str, list[str]] = {
         "鸡蛋", "老鼠粉", "冬菇", "餐厅", "茶餐厅", "小炒", "煮炒", "海鲜",
         "点心", "鸡饭", "炒饭", "炒面", "叉烧", "云吞", "烧腊", "粥",
         "水饺", "包子", "豆浆",
+        # Spoken Chinese dish/drink names — the OCR keywords above came from
+        # printed receipts, but voice entry is where someone says the dish
+        # out loud, so the everyday spoken vocabulary has to be here too
+        # (without these, every Chinese voice entry fell through to "Others"
+        # with a LOW-confidence badge, which reads as the app not working).
+        "麻辣烫", "肉骨茶", "椰浆饭", "杂菜饭", "板面", "面线", "米粉",
+        "肉丸", "火锅", "烧烤", "沙爹", "咖喱", "罗惹", "煎饼", "薄饼",
+        "拉面", "汤面", "干捞面", "福建面", "咖喱面", "亚参叻沙",
+        # Drinks
+        "奶茶", "咖啡", "美禄", "豆奶", "果汁", "汽水", "凉茶", "茶餐",
+        "珍珠奶茶", "拉茶", "白咖啡", "薏米水", "酸柑水",
+        # Desserts / snacks
+        "冰淇淋", "雪糕", "冰激凌", "蛋糕", "面包", "饼干", "巧克力",
+        "煎蕊", "红豆冰", "糖水", "豆腐花", "蛋挞",
+        # Generic meal words
+        "早餐", "午餐", "晚餐", "宵夜", "快餐", "外卖", "打包", "食物",
+        "饮料", "零食", "水果", "蔬菜",
         # Japanese-cuisine menu terms (e.g. "Salmon Teriyaki Don")
         "salmon", "teriyaki", "teryaki", "sashimi", "tempura", "udon",
         "ramen", "bento", "katsu", "yakitori", "onigiri",
@@ -64,6 +81,9 @@ CATEGORY_KEYWORDS: dict[str, list[str]] = {
         "grab", "petrol", "shell", "petronas", "caltex", "parking",
         "toll", "lrt", "mrt", "touch n go", "touch and go", "taxi",
         "bus fare", "train", "ride",
+        # Spoken Chinese (see the same note in Food & Dining above).
+        "汽油", "油钱", "加油", "停车", "过路费", "打车", "地铁", "巴士",
+        "火车", "车费", "德士", "抓车",
     ],
     "Shopping": [
         # Clothing, accessories, and general retail/apparel — NOT grocery
@@ -85,15 +105,20 @@ CATEGORY_KEYWORDS: dict[str, list[str]] = {
         "accessories", "jersey", "shirt", "t-shirt", "tshirt", "jeans",
         "pants", "trousers", "jacket", "shorts", "hoodie",
         "brief", "briefs", "underwear", "lingerie", "bra",
+        # Spoken Chinese (see the same note in Food & Dining above).
+        "衣服", "裤子", "鞋子", "袜子", "帽子", "外套", "裙子", "恤衫",
+        "书包", "包包", "钱包", "手表", "眼镜", "首饰",
     ],
     "Entertainment": [
         "cinema", "gsc", "tgv", "netflix", "spotify", "movie",
         "concert", "game", "steam", "karaoke", "arcade",
+        "电影", "戏票", "游戏", "唱歌", "演唱会",
     ],
     "Health": [
         "pharmacy", "clinic", "hospital", "medicine", "doctor",
         "dental", "checkup", "vitamin", "watson", "guardian",
         "protein", "whey", "creatine", "supplement", "multivitamin", "bcaa",
+        "药房", "诊所", "医院", "看医生", "维他命", "药材", "牙医",
     ],
     "Utilities": [
         "tnb", "water bill", "unifi", "maxis", "celcom", "digi",
