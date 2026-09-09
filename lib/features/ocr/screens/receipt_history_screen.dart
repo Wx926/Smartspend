@@ -81,6 +81,16 @@ class _ReceiptHistoryScreenState extends State<ReceiptHistoryScreen> {
   final _searchCtrl = TextEditingController();
   String _search = '';
   String _filter = 'All';
+  String _range = 'All time';
+
+  // Rolling windows (not calendar months) so "Last month" is always exactly
+  // the last 30 days regardless of which day of the month it is.
+  static const _ranges = <String, Duration?>{
+    'All time': null,
+    'Last week': Duration(days: 7),
+    'Last month': Duration(days: 30),
+    'Last year': Duration(days: 365),
+  };
 
   @override
   void dispose() {
@@ -124,6 +134,11 @@ class _ReceiptHistoryScreenState extends State<ReceiptHistoryScreen> {
           .where((r) => categoryById[r.categoryId]?.name == _filter)
           .toList();
     }
+    final rangeWindow = _ranges[_range];
+    if (rangeWindow != null) {
+      final cutoff = DateTime.now().subtract(rangeWindow);
+      filtered = filtered.where((r) => r.date.isAfter(cutoff)).toList();
+    }
     if (_search.trim().isNotEmpty) {
       final q = _search.trim().toLowerCase();
       filtered = filtered
@@ -155,7 +170,11 @@ class _ReceiptHistoryScreenState extends State<ReceiptHistoryScreen> {
           _statsRow(receipts.length, totalAmount, thisMonthCount),
           Expanded(
             child: filtered.isEmpty
-                ? _emptyState()
+                ? _emptyState(
+                    filtersActive: _filter != 'All' ||
+                        _range != 'All time' ||
+                        _search.trim().isNotEmpty,
+                  )
                 : ListView(
                     padding: const EdgeInsets.only(bottom: 24),
                     children: [
@@ -229,24 +248,42 @@ class _ReceiptHistoryScreenState extends State<ReceiptHistoryScreen> {
                   ],
                 ),
                 const SizedBox(height: 8),
+                // Solid white field with dark text — the old translucent
+                // background rendered near-white on some devices, leaving the
+                // white input text invisible.
                 Container(
                   decoration: BoxDecoration(
-                    color: Colors.white.withValues(alpha: 0.15),
+                    color: Colors.white,
                     borderRadius: BorderRadius.circular(24),
                   ),
                   child: TextField(
                     controller: _searchCtrl,
-                    style: const TextStyle(color: Colors.white),
+                    style: const TextStyle(
+                      color: AppColors.textPrimary,
+                      fontSize: 14,
+                    ),
+                    cursorColor: AppColors.primary,
                     onChanged: (v) => setState(() => _search = v),
                     decoration: InputDecoration(
                       hintText: 'Search receipts',
-                      hintStyle: TextStyle(
-                        color: Colors.white.withValues(alpha: 0.7),
-                      ),
-                      prefixIcon: Icon(
+                      hintStyle: const TextStyle(color: AppColors.textSecondary),
+                      prefixIcon: const Icon(
                         Icons.search,
-                        color: Colors.white.withValues(alpha: 0.7),
+                        color: AppColors.textSecondary,
                       ),
+                      suffixIcon: _search.isNotEmpty
+                          ? IconButton(
+                              icon: const Icon(
+                                Icons.close,
+                                size: 18,
+                                color: AppColors.textSecondary,
+                              ),
+                              onPressed: () {
+                                _searchCtrl.clear();
+                                setState(() => _search = '');
+                              },
+                            )
+                          : null,
                       border: InputBorder.none,
                       contentPadding: const EdgeInsets.symmetric(vertical: 12),
                     ),
@@ -262,6 +299,18 @@ class _ReceiptHistoryScreenState extends State<ReceiptHistoryScreen> {
                       _filterChip('Scanned', icon: Icons.receipt_long),
                       _filterChip('Voice', icon: Icons.mic),
                       for (final name in categoryFilters) _filterChip(name),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 8),
+                // Time-range filter — combines (AND) with the source/category
+                // chip above, so e.g. "Voice" + "Last month" is possible.
+                SizedBox(
+                  height: 30,
+                  child: ListView(
+                    scrollDirection: Axis.horizontal,
+                    children: [
+                      for (final label in _ranges.keys) _rangeChip(label),
                     ],
                   ),
                 ),
@@ -304,6 +353,39 @@ class _ReceiptHistoryScreenState extends State<ReceiptHistoryScreen> {
                 ),
               ),
             ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Smaller, outline-style chip for the time-range row so it reads as a
+  /// secondary control, distinct from the solid source/category chips above.
+  Widget _rangeChip(String label) {
+    final selected = _range == label;
+    return Padding(
+      padding: const EdgeInsets.only(right: 8),
+      child: GestureDetector(
+        onTap: () => setState(() => _range = label),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: selected
+                ? Colors.white
+                : Colors.white.withValues(alpha: 0.12),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: Colors.white.withValues(alpha: selected ? 1 : 0.4),
+            ),
+          ),
+          child: Text(
+            label,
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+              color: selected ? AppColors.primaryDark : Colors.white,
+            ),
           ),
         ),
       ),
@@ -500,24 +582,28 @@ class _ReceiptHistoryScreenState extends State<ReceiptHistoryScreen> {
     ),
   );
 
-  Widget _emptyState() => Center(
+  Widget _emptyState({bool filtersActive = false}) => Center(
     child: Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        const Icon(
-          Icons.receipt_long_outlined,
+        Icon(
+          filtersActive
+              ? Icons.filter_alt_off_outlined
+              : Icons.receipt_long_outlined,
           size: 56,
           color: AppColors.textSecondary,
         ),
         const SizedBox(height: 12),
-        const Text(
-          'No receipts found',
-          style: TextStyle(fontWeight: FontWeight.w600, fontSize: 15),
+        Text(
+          filtersActive ? 'No receipts match your filters' : 'No receipts found',
+          style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15),
         ),
         const SizedBox(height: 4),
-        const Text(
-          'Scan a receipt to see it here',
-          style: TextStyle(fontSize: 12, color: AppColors.textSecondary),
+        Text(
+          filtersActive
+              ? 'Try a wider date range or clear the search'
+              : 'Scan a receipt to see it here',
+          style: const TextStyle(fontSize: 12, color: AppColors.textSecondary),
         ),
       ],
     ),
