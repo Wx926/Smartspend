@@ -325,8 +325,11 @@ def _malay_number_to_int(tokens: list[str]) -> int | None:
 
 def _malay_run_value(raw: str) -> int | None:
     expanded: list[str] = []
-    for tok in raw.strip().lower().split():
-        expanded.extend(_MALAY_SE_FORMS.get(tok, tok).split())
+    # Split on punctuation too: pass 3's regex can hand us "dua." with the
+    # sentence-ending period glued on, and "dua." is not a recognised token.
+    for tok in re.split(r"[\s,.]+", raw.strip().lower()):
+        if tok:
+            expanded.extend(_MALAY_SE_FORMS.get(tok, tok).split())
     return _malay_number_to_int(expanded)
 
 
@@ -351,7 +354,9 @@ def normalise_malay_money(text: str) -> str:
         value = _malay_run_value(raw)
         if value is None:
             return raw
-        trailing = raw[len(raw.rstrip()):] or " "
+        # Keep any trailing space/period so the next token isn't glued on and
+        # a sentence boundary the caller relies on isn't lost.
+        trailing = raw[len(raw.rstrip(" .,\t\n")):] or " "
         return f"{value}{trailing}"
 
     # Pass 1: runs sitting directly in front of a currency or measure word.

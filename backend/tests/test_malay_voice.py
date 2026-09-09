@@ -153,3 +153,27 @@ class TestBareAmountGuard:
         assert result["amount"] == pytest.approx(
             sum(li["price"] for li in result["line_items"])
         )
+
+
+class TestMalayTrailingPunctuation:
+    """Whisper ends the sentence with a period and puts a comma at the pause
+    before the count: "Maggi Goreng Double 5 ringgit 50 sen, dua." The count
+    word arrived glued to the period ("dua.") and stopped being recognised."""
+
+    def test_count_after_price_with_comma_and_period(self):
+        result = parse_voice_expense(
+            _clean_transcript("Maggi Goreng Double 5 ringgit 50 sen, dua.")
+        )
+        item = result["line_items"][0]
+        assert item["quantity"] == 2
+        assert item["price"] == 11.00
+        assert item["item_name"] == "Maggi Goreng Double"
+
+    def test_word_form_count_after_price_with_punctuation(self):
+        result = parse_voice_expense(
+            _clean_transcript(
+                "Maggi Goreng Double lima ringgit lima puluh sen, dua."
+            )
+        )
+        assert result["line_items"][0]["quantity"] == 2
+        assert result["line_items"][0]["price"] == 11.00
