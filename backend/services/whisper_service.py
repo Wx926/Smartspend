@@ -17,7 +17,12 @@ import threading
 
 from faster_whisper import WhisperModel
 
-from services.text_normalisation import normalise_chinese_money, words_to_digits
+from services.text_normalisation import (
+    normalise_chinese_money,
+    normalise_decimal_comma,
+    normalise_malay_money,
+    words_to_digits,
+)
 
 _model: WhisperModel | None = None
 _model_lock = threading.Lock()
@@ -141,14 +146,30 @@ _CHINESE_PROMPT = (
     "Grab、KFC、麦当劳、Uniqlo、Aeon、Shopee。"
 )
 
-# Short bilingual prompt for "Auto-detect" — the user hasn't told us which
-# language to expect, so neither monolingual prompt is safe to commit to.
-# Kept deliberately brief: a long prompt in the language NOT being spoken is
+# The Malay counterpart, for the same reason. Seeded with the spoken-number
+# shapes Malay actually uses — "tujuh ringgit lima puluh sen" (7.50), the
+# "se-" contractions (sepuluh = 10), and a trailing count ("..., dua") — since
+# a general model transcribes those as loose words with no numeric anchor.
+_MALAY_PROMPT = (
+    "Nota perbelanjaan Malaysia, harga dalam ringgit (RM) dan sen. "
+    "Contoh: Nasi Goreng tujuh ringgit lima puluh sen. "
+    "Nasi Lemak Ayam Rendang sepuluh ringgit. "
+    "Maggi Goreng Double lima ringgit lima puluh sen, dua. "
+    "Tiga bungkus nasi lemak, RM 5 setiap satu. Teh Tarik dua ringgit lima puluh sen. "
+    "Perkataan biasa: nasi lemak, nasi goreng, mee goreng, maggi goreng, "
+    "roti canai, teh tarik, kopi, mamak, ayam rendang, char kuey teow, "
+    "laksa, satay, murtabak, cendol, Grab, KFC, McDonald's, Uniqlo, Aeon, Shopee."
+)
+
+# Short multilingual prompt for "Auto-detect" — the user hasn't told us which
+# language to expect, so no monolingual prompt is safe to commit to. Kept
+# deliberately brief: a long prompt in the language NOT being spoken is
 # exactly the problem described above, so this only carries the currency
-# vocabulary both halves need.
+# vocabulary each half needs.
 _BILINGUAL_PROMPT = (
     "Malaysian expense note, amounts in ringgit (RM). "
     "I spent RM 25 on lunch at KFC. 2 T-shirts, RM 30 each. "
+    "Nasi Goreng tujuh ringgit lima puluh sen. Nasi Lemak sepuluh ringgit. "
     "马来西亚记账语音：麻辣烫20令吉10仙。冰淇淋两块二。炒饭九块。"
 )
 
@@ -156,11 +177,14 @@ _BILINGUAL_PROMPT = (
 def _prompt_for(language: str | None) -> str:
     """Picks the initial_prompt that matches the language actually being
     spoken — see _CHINESE_PROMPT's comment for why this matters so much."""
-    if language and language.lower().startswith("zh"):
+    code = (language or "").lower()
+    if code.startswith("zh"):
         return _CHINESE_PROMPT
-    if language:
+    if code.startswith("ms") or code.startswith("my") or code.startswith("id"):
+        return _MALAY_PROMPT
+    if code:
         return _INITIAL_PROMPT
-    return _BILINGUAL_PROMPT  # "Auto-detect" — commit to neither
+    return _BILINGUAL_PROMPT  # "Auto-detect" — commit to none of them
 
 # Belt-and-suspenders: fixes the common near-miss spellings of "ringgit" that
 # slip through even with the prompt above, so downstream amount parsing (which
@@ -235,6 +259,8 @@ def _clean_transcript(text: str) -> str:
     text = _RINGGIT_MISHEARDS.sub("ringgit", text)
     text = _BAK_KUT_TEH_MISHEARDS.sub("Bak Kut Teh", text)
     text = normalise_chinese_money(text)
+    text = normalise_malay_money(text)
+    text = normalise_decimal_comma(text)
     # Collapse any doubled spaces the substitutions above may have left.
     return re.sub(r"[ \t]{2,}", " ", text).strip()
 

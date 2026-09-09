@@ -27,7 +27,12 @@ from services.categorisation_service import (
     majority_category,
 )
 from services.ocr_service import items_confidence
-from services.text_normalisation import normalise_chinese_money, words_to_digits
+from services.text_normalisation import (
+    normalise_chinese_money,
+    normalise_decimal_comma,
+    normalise_malay_money,
+    words_to_digits,
+)
 
 # "RM 25", "RM25.00", or a bare number followed by a currency word. "dollars"/
 # "bucks" are accepted as colloquial stand-ins for ringgit, and so are the
@@ -161,6 +166,16 @@ _QUANTITY_PATTERN = re.compile(
 # without spaces, so the ASCII pattern above (which needs `\s+` after the
 # digits) can never match it. The measure word is consumed along with the
 # number so it doesn't linger in the item name.
+# The Malay equivalent: a number followed by a measure word is the count
+# ("tiga bungkus nasi lemak" = 3 packets). _QUANTITY_PATTERN alone would strip
+# only the digit and leave "bungkus" stuck on the front of the item name.
+_MALAY_QUANTITY_PATTERN = re.compile(
+    r"^[\s,]*(\d{1,3})\s*"
+    r"(?:biji|bungkus|keping|cawan|mangkuk|ekor|helai|batang|botol|bekas"
+    r"|pinggan|ketul|potong|kotak|tin|paket|buah)\b",
+    re.IGNORECASE,
+)
+
 _CJK_QUANTITY_PATTERN = re.compile(
     r"^[\s,，、]*(\d{1,3})\s*(?:个|杯|份|件|双|瓶|包|碗|盘|碟|只|条|张|支|片|粒|串|盒|袋|罐)"
 )
@@ -178,10 +193,20 @@ _TRAILING_QUANTITY_PATTERN = re.compile(
     r"(?:times|x|×|qty\.?|quantity)[\s,]*(?P<n1>\d{1,3})"
     r"|(?P<each>each|per\s*(?:item|unit|piece)?|a\s*piece)[\s,]+(?P<n2>\d{1,3})"
     r"|(?P<n3>\d{1,3})\s*"
-    r"(?:pcs?|pieces?|pairs?|units?|packets?|pax|sets?|bottles?|cups?|boxes?|servings?)"
+    r"(?:pcs?|pieces?|pairs?|units?|packets?|pax|sets?|bottles?|cups?|boxes?|servings?"
+    # Malay measure words — "dua bungkus", "tiga biji", "lima keping".
+    r"|biji|bungkus|keping|cawan|mangkuk|ekor|helai|batang|botol|bekas"
+    r"|pinggan|ketul|potong|kotak|tin|paket|buah)"
     r")\s*[.,]?\s*$",
     re.IGNORECASE,
 )
+
+# A plain number at the very end, with nothing marking it as a count. Only
+# trusted when a currency word was actually spoken (see _parse_segment), and
+# it then means the price was PER UNIT: Malay "Maggi Goreng Double lima
+# ringgit lima puluh sen dua" = 2 x RM 5.50 = RM 11.00. Requires whitespace or
+# a comma in front so it can never bite off the tail of a longer number.
+_TRAILING_BARE_COUNT = re.compile(r"[,\s]+(\d{1,2})\s*[.,]?\s*$")
 
 # "RM 40 each"/"RM 40 per item"/"RM 40 a piece" all mean the spoken amount is
 # a PER-UNIT rate, not the total charged — the total (what "price" represents
@@ -193,7 +218,11 @@ _TRAILING_QUANTITY_PATTERN = re.compile(
 # on the English forms can never match it.
 _PER_UNIT_MARKER = re.compile(
     r"\b(?:each|per\s*(?:item|unit|piece)?|a\s*piece)\b"
-    r"|每(?:个|件|杯|份|双|瓶|包|碗|只|条|张|支|片|粒|盒|袋|罐)?",
+    r"|每(?:个|件|杯|份|双|瓶|包|碗|只|条|张|支|片|粒|盒|袋|罐)?"
+    # Malay: "setiap satu" / "sebiji" / "seorang" all mean "each".
+    # Only "satu" may be swallowed after "setiap" — a bare \w+ there
+    # would eat the first word of the item name instead.
+    r"|\bsetiap(?:\s+(?:satu|1))?\b|\bsebiji\b|\bseorang\b",
     re.IGNORECASE,
 )
 
@@ -398,26 +427,34 @@ class VoiceParseError(Exception):
     pass
 
 
-def _extract_amount(text: str) -> tuple[float | None, tuple[int, int] | None]:
-    """Returns (amount, span) so the caller can strip the matched words
-    (number + currency) out of the text before deriving a description."""
+def _extract_amount(
+    text: str,
+) -> tuple[float | None, tuple[int, int] | None, bool]:
+    """Returns (amount, span, explicit) so the caller can strip the matched
+    words (number + currency) out of the text before deriving a description.
+
+    `explicit` is True when a currency word/symbol was actually spoken, and
+    False for the last-resort bare-number guess. Callers use it to decide how
+    much to trust the match — a bare number is just as likely to be a count or
+    a date as a price.
+    """
     m = _CHINESE_MONEY.search(text)
     if m:
-        return _chinese_money_value(m), m.span()
+        return _chinese_money_value(m), m.span(), True
     m = _RINGGIT_AND_CENTS.search(text)
     if m:
         whole, cents = m.group(1), m.group(2)
         if len(cents) == 1:
             cents += "0"
-        return float(f"{whole}.{cents}"), m.span()
+        return float(f"{whole}.{cents}"), m.span(), True
     m = _AMOUNT_PATTERN.search(text)
     if m:
         raw = m.group(1) or m.group(2) or m.group(3)
-        return float(raw), m.span()
+        return float(raw), m.span(), True
     m = _BARE_NUMBER_PATTERN.search(text)
     if m:
-        return float(m.group(1)), m.span()
-    return None, None
+        return float(m.group(1)), m.span(), False
+    return None, None, False
 
 
 def _extract_vendor(text: str) -> tuple[str, str] | None:
@@ -475,7 +512,7 @@ def _parse_segment(text: str) -> dict | None:
     its line-item fields. Returns None if it carries no recognisable amount
     at all, so a stray filler segment (e.g. an empty string left behind by
     the sentence split) doesn't turn into a bogus zero-price item."""
-    amount, amount_span = _extract_amount(text)
+    amount, amount_span, explicit_amount = _extract_amount(text)
     if amount is None:
         return None
     remainder = text[:amount_span[0]] + text[amount_span[1]:]
@@ -484,30 +521,44 @@ def _parse_segment(text: str) -> dict | None:
     # the quantity — pull it out before vendor/description extraction so it
     # can't be mistaken for part of the item name.
     quantity = 1
-    qty_match = _QUANTITY_PATTERN.match(remainder)
-    if qty_match:
+    # A count spoken AFTER a complete price ("... 5 ringgit 50 sen, dua")
+    # means that price was per unit, so the line total is price x count.
+    price_is_per_unit = False
+    if (my_qty := _MALAY_QUANTITY_PATTERN.match(remainder)) is not None:
+        # Checked before the generic pattern so the measure word is consumed
+        # along with the number instead of lingering in the item name.
+        quantity = int(my_qty.group(1))
+        remainder = remainder[:my_qty.start()] + remainder[my_qty.end():]
+    elif (qty_match := _QUANTITY_PATTERN.match(remainder)) is not None:
         quantity = int(qty_match.group(1))
         remainder = remainder[:qty_match.start(1)] + remainder[qty_match.end(1):]
     elif (cjk_qty := _CJK_QUANTITY_PATTERN.match(remainder)) is not None:
         quantity = int(cjk_qty.group(1))
         remainder = remainder[:cjk_qty.start()] + remainder[cjk_qty.end():]
-    else:
+    elif (tail := _TRAILING_QUANTITY_PATTERN.search(remainder)) is not None:
         # No leading quantity — accept an explicitly quantity-shaped one at
         # the END instead ("... RM 80 each, 5", "... x5", "... 5 pieces").
-        tail = _TRAILING_QUANTITY_PATTERN.search(remainder)
-        if tail:
-            quantity = int(tail.group("n1") or tail.group("n2") or tail.group("n3"))
-            remainder = (remainder[:tail.start()] + remainder[tail.end():]).strip()
-            # If the match consumed the per-unit marker ("each 5"), put it
-            # back so the amount still gets scaled below.
-            if tail.group("each"):
-                remainder += " each"
+        quantity = int(tail.group("n1") or tail.group("n2") or tail.group("n3"))
+        remainder = (remainder[:tail.start()] + remainder[tail.end():]).strip()
+        # If the match consumed the per-unit marker ("each 5"), put it
+        # back so the amount still gets scaled below.
+        if tail.group("each"):
+            remainder += " each"
+    elif explicit_amount and (bare := _TRAILING_BARE_COUNT.search(remainder)):
+        # A plain trailing number, e.g. Malay "Maggi Goreng Double lima
+        # ringgit lima puluh sen DUA" = 2 of them at RM 5.50 = RM 11.00.
+        # Only when a currency word was actually spoken: after the
+        # bare-number fallback ("GSC Cinema 2350 Family Mark 8") a stray
+        # trailing digit is far more likely to be part of the name.
+        quantity = int(bare.group(1))
+        remainder = remainder[:bare.start()] + remainder[bare.end():]
+        price_is_per_unit = True
 
     # "RM 40 each" means 40 is a PER-UNIT rate, not the line's total — scale
     # it up to match how every other item in this app stores price (the
     # charged total, not a per-unit figure), and drop the marker word so it
     # doesn't linger in the item name.
-    if _PER_UNIT_MARKER.search(remainder):
+    if price_is_per_unit or _PER_UNIT_MARKER.search(remainder):
         amount = round(amount * quantity, 2)
         remainder = _PER_UNIT_MARKER.sub("", remainder)
 
@@ -543,6 +594,11 @@ def parse_voice_expense(transcript: str) -> dict:
     # repaired. Same reason as above: the amount regexes only see digits, so
     # "炒饭九块" / "冰淇淋两块二" found no amount at all before this.
     text = normalise_chinese_money(text)
+    # Malay number words -> digits, and Whisper's European decimal comma
+    # ("RM 7,50") -> a real decimal point. Same reason as the two above: every
+    # amount regex below only ever sees ASCII digits.
+    text = normalise_malay_money(text)
+    text = normalise_decimal_comma(text)
 
     print(f"\n===== VOICE RAW TRANSCRIPT =====\n{text!r}\n=================================")
 

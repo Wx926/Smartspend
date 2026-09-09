@@ -234,3 +234,165 @@ def normalise_chinese_money(text: str) -> str:
     text = _CJK_RINGGIT_MISHEARDS.sub("令吉", text)
     text = _CJK_NUM_BEFORE_UNIT.sub(_sub_cjk_number, text)
     return _CJK_NUM_AFTER_UNIT.sub(_sub_cjk_number_after_unit, text)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Malay (Bahasa Malaysia) spoken money
+# ══════════════════════════════════════════════════════════════════════════
+#
+# "Nasi Goreng tujuh ringgit lima puluh sen" = RM 7.50, "Nasi Lemak sepuluh
+# ringgit" = RM 10. Like Chinese, none of these contain an ASCII digit, so the
+# amount regexes found nothing at all and the whole entry came back empty.
+
+_MALAY_DIGITS = {
+    "kosong": 0, "sifar": 0,
+    "satu": 1, "dua": 2, "tiga": 3, "empat": 4, "ampat": 4, "lima": 5,
+    "enam": 6, "tujuh": 7, "lapan": 8, "delapan": 8,
+    "sembilan": 9, "sambilan": 9,   # "sambilan" is a common Whisper slip
+}
+# belas = teens ("dua belas" 12), puluh = tens ("lima puluh" 50),
+# ratus = hundreds, ribu = thousands.
+_MALAY_MULTIPLIERS = {"belas", "puluh", "ratus", "ribu"}
+
+# The "se-" contractions mean "one <multiplier>". Expanding them to the long
+# form first lets one parser handle every shape ("sepuluh" -> "satu puluh").
+# Whisper's spelling slips are folded in here too ("sepuloh", "sapuluh").
+_MALAY_SE_FORMS = {
+    "sepuluh": "satu puluh", "sepuloh": "satu puluh", "sapuluh": "satu puluh",
+    "sebelas": "satu belas", "sebeles": "satu belas",
+    "seratus": "satu ratus", "seribu": "satu ribu",
+}
+
+_MALAY_NUM_TOKENS = set(_MALAY_DIGITS) | _MALAY_MULTIPLIERS | set(_MALAY_SE_FORMS)
+
+# Currency words that mark the run before them as an AMOUNT. Only whitespace
+# is allowed in between (not a comma) — "Sembilan, RM 50" is a mangled
+# transcript, not "9 ringgit", and must not be rewritten.
+_MALAY_MONEY_WORD = r"ringgit|ringit|rm|sen|duit|dolar|dollars?"
+# Malay measure words — a number in front of one is a QUANTITY
+# ("dua bungkus nasi lemak" = 2 packets).
+_MALAY_MEASURE = (
+    r"biji|bungkus|keping|cawan|mangkuk|ekor|helai|batang|botol|bekas|"
+    r"pinggan|ketul|potong|kotak|tin|paket|set|buah|orang"
+)
+
+_MALAY_NUM_RUN = re.compile(
+    r"\b(?:(?:" + "|".join(sorted(_MALAY_NUM_TOKENS, key=len, reverse=True)) + r")\b\s*)+",
+    re.IGNORECASE,
+)
+
+# "Negeri Sembilan" is a Malaysian state, not the number nine.
+_MALAY_NUM_BLOCKED_PREFIX = re.compile(r"negeri\s*$", re.IGNORECASE)
+
+# Time/duration words: a leading number in front of one of these is prose
+# ("satu hari nanti" = "one day later"), not a purchase count.
+_MALAY_TIME_WORDS = re.compile(
+    r"(?:hari|minggu|bulan|tahun|jam|minit|saat|kali|malam|pagi|petang|"
+    r"tengahari|masa|lagi|nanti|tadi|sahaja|saja)\b",
+    re.IGNORECASE,
+)
+
+
+def _malay_number_to_int(tokens: list[str]) -> int | None:
+    """["tujuh"] -> 7, ["lima","puluh"] -> 50, ["dua","puluh","lima"] -> 25,
+    ["satu","ratus","lima","puluh"] -> 150. None if a token isn't numeric."""
+    total = current = 0
+    seen = False
+    for tok in tokens:
+        if tok in _MALAY_DIGITS:
+            current += _MALAY_DIGITS[tok]
+            seen = True
+        elif tok == "belas":
+            total += (current or 1) + 10
+            current = 0
+            seen = True
+        elif tok == "puluh":
+            total += (current or 1) * 10
+            current = 0
+            seen = True
+        elif tok == "ratus":
+            total += (current or 1) * 100
+            current = 0
+            seen = True
+        elif tok == "ribu":
+            total = (total + (current or 1)) * 1000
+            current = 0
+            seen = True
+        else:
+            return None
+    return (total + current) if seen else None
+
+
+def _malay_run_value(raw: str) -> int | None:
+    expanded: list[str] = []
+    for tok in raw.strip().lower().split():
+        expanded.extend(_MALAY_SE_FORMS.get(tok, tok).split())
+    return _malay_number_to_int(expanded)
+
+
+def normalise_malay_money(text: str) -> str:
+    """Turns Malay number words into digits, but only where they can only be
+    a number — directly before a currency or measure word, opening the phrase
+    as a count, or trailing a phrase that already carries an amount:
+
+      "Nasi Goreng tujuh ringgit lima puluh sen" -> "... 7 ringgit 50 sen"
+      "Nasi Lemak sepuluh ringgit"               -> "Nasi Lemak 10 ringgit"
+      "dua bungkus nasi lemak"                   -> "2 bungkus nasi lemak"
+      "... lima ringgit lima puluh sen dua"      -> "... 5 ringgit 50 sen 2"
+
+    Anywhere else the words are left alone, so an item or place name that
+    happens to contain one ("Negeri Sembilan") is never mangled.
+    """
+
+    def _convert(match: re.Match) -> str:
+        raw = match.group(0)
+        if _MALAY_NUM_BLOCKED_PREFIX.search(match.string[:match.start()]):
+            return raw
+        value = _malay_run_value(raw)
+        if value is None:
+            return raw
+        trailing = raw[len(raw.rstrip()):] or " "
+        return f"{value}{trailing}"
+
+    # Pass 1: runs sitting directly in front of a currency or measure word.
+    text = re.sub(
+        _MALAY_NUM_RUN.pattern + rf"(?=(?:{_MALAY_MONEY_WORD}|{_MALAY_MEASURE})\b)",
+        _convert,
+        text,
+        flags=re.IGNORECASE,
+    )
+    # Pass 2: a run that OPENS the phrase in front of an item name is a count
+    # ("dua nasi lemak lima ringgit") — unless a time word follows it.
+    text = re.sub(
+        r"^\s*" + _MALAY_NUM_RUN.pattern + r"(?=[A-Za-z])",
+        lambda m: m.group(0)
+        if _MALAY_TIME_WORDS.match(m.string[m.end():])
+        else _convert(m),
+        text,
+        flags=re.IGNORECASE,
+    )
+    # Pass 3: a run at the very END of a phrase that already has a digit
+    # amount is the count ("... 5 ringgit 50 sen dua" -> "... 2").
+    # The amount can be written either way round: "5 ringgit" or "RM 5.50".
+    has_amount = re.search(
+        r"\d\s*(?:" + _MALAY_MONEY_WORD + r")\b|\b(?:rm|ringgit)\s*\d",
+        text,
+        re.IGNORECASE,
+    )
+    if has_amount:
+        text = re.sub(
+            _MALAY_NUM_RUN.pattern + r"[.\s]*$", _convert, text, flags=re.IGNORECASE
+        )
+    return text
+
+
+# A decimal comma, which Whisper produces for spoken "tujuh ringgit lima
+# puluh" as "RM 7,50" (confirmed on the real app screen — it parsed as RM 7.00
+# with a stranded "50" in the item name). Exactly two digits and no space, so
+# a thousands separator ("RM 1,500") and a genuine list ("RM 5, 10") are both
+# left alone.
+_DECIMAL_COMMA = re.compile(r"(?<=\d),(\d{2})(?!\d)")
+
+
+def normalise_decimal_comma(text: str) -> str:
+    return _DECIMAL_COMMA.sub(r".\1", text)

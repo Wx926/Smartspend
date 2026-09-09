@@ -76,6 +76,14 @@ CATEGORY_KEYWORDS: dict[str, list[str]] = {
         "coffee", "frap", "frappe", "frappuccino", "latte", "mocha",
         "cappuccino", "espresso", "juice", "soda", "beverage", "drink",
         "grocery", "groceries",
+        # Spoken Malay dish/drink names. Short words that are also common
+        # English substrings ("air" inside "chair"/"repair", "sup" already
+        # listed) are deliberately left out.
+        "goreng", "maggi", "megi", "murtabak", "capati", "chapati",
+        "thosai", "tosai", "kuetiau", "kuey teow", "kuih", "cendol",
+        "popiah", "keropok", "sambal", "belacan", "gulai", "masak",
+        "minum", "makanan", "minuman", "bihun goreng", "nasi kandar",
+        "pisang goreng", "kaya", "milo", "sirap", "limau",
     ],
     "Transport": [
         "grab", "petrol", "shell", "petronas", "caltex", "parking",
