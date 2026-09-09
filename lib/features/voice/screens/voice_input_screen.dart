@@ -48,9 +48,26 @@ class _VoiceInputScreenState extends State<VoiceInputScreen>
   int _demoIndex = 0;
   String? _error;
 
+  /// Per-recording Whisper language hint. Seeded from the Profile setting so
+  /// it stays consistent, but editable right here so a user logging an
+  /// expense in a different language than usual doesn't have to detour
+  /// through Profile first. Changing it also writes back to storage, so the
+  /// choice sticks and Profile shows the same value.
+  String _language = 'auto';
+
+  // Same list/labels as the Profile screen's picker (FR 5.3). Short labels so
+  // all four fit on one row without wrapping on a narrow phone.
+  static const _languages = <String, String>{
+    'auto': 'Auto',
+    'en': 'English',
+    'ms': 'Malay',
+    'zh': '中文',
+  };
+
   @override
   void initState() {
     super.initState();
+    _language = LocalStorageService.instance.voiceInputLanguage;
     _pulseCtrl = AnimationController(
       vsync: this,
       duration: const Duration(seconds: 2),
@@ -138,7 +155,7 @@ class _VoiceInputScreenState extends State<VoiceInputScreen>
     try {
       final transcript = await VoiceApiService.instance.transcribeAudio(
         File(path),
-        language: LocalStorageService.instance.voiceInputLanguage,
+        language: _language,
       );
       if (!mounted) return;
       setState(() => _transcriptCtrl.text = transcript);
@@ -286,6 +303,8 @@ class _VoiceInputScreenState extends State<VoiceInputScreen>
                 child: Column(
                   children: [
                     _tipCard(),
+                    const SizedBox(height: 10),
+                    _languageSelector(),
                     const SizedBox(height: 12),
                     if (_error != null) _errorBanner(),
                     const Spacer(),
@@ -327,6 +346,66 @@ class _VoiceInputScreenState extends State<VoiceInputScreen>
                 ),
               ),
             ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Inline language picker — mirrors the Profile setting but saves a detour
+  /// there when logging an expense in a different language than usual.
+  /// Disabled mid-recording/transcription so the hint can't change out from
+  /// under an in-flight request.
+  Widget _languageSelector() {
+    return Row(
+      children: [
+        const Icon(Icons.translate, size: 15, color: AppColors.textSecondary),
+        const SizedBox(width: 6),
+        const Text(
+          'Language',
+          style: TextStyle(fontSize: 12, color: AppColors.textSecondary),
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Wrap(
+            alignment: WrapAlignment.end,
+            spacing: 6,
+            runSpacing: 6,
+            children: [
+              for (final entry in _languages.entries)
+                _langChip(entry.key, entry.value),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _langChip(String code, String label) {
+    final selected = _language == code;
+    return GestureDetector(
+      onTap: _busy
+          ? null
+          : () {
+              setState(() => _language = code);
+              // Persist so the choice sticks and Profile reflects it too.
+              LocalStorageService.instance.setVoiceInputLanguage(code);
+            },
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+          color: selected ? AppColors.primary : Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: selected ? AppColors.primary : const Color(0xFFD0D5DD),
+          ),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+            color: selected ? Colors.white : AppColors.textSecondary,
           ),
         ),
       ),
